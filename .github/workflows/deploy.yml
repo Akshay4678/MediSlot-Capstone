@@ -1,6 +1,9 @@
 name: MediSlot AWS Deployment
 
 on:
+  push:
+    branches:
+      - milestone-2-branch
   workflow_dispatch:
     inputs:
       environment:

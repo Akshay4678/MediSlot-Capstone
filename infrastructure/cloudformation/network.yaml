@@ -9,10 +9,7 @@ Parameters:
   EnvironmentName:
     Type: String
     Default: dev
-    AllowedValues: 
-      -dev 
-      -test 
-      -prod
+    AllowedValues: [dev, test, prod]
   VpcCidr:
     Type: String
     Default: 10.20.0.0/16
@@ -307,4 +304,4 @@ Outputs:
   PrivateAppRouteTableId:
     Value: !Ref PrivateAppRouteTable
   PrivateDbRouteTableId:
-    Value: !Ref PrivateDbRouteTable
+    Value: !Ref PrivateDbRouteTable

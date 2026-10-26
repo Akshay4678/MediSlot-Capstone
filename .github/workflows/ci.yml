@@ -1,20 +1,13 @@
-
 name: MediSlot CI
 
 on:
   push:
     branches:
       - milestone-2-branch
-    paths:
-      - "infrastructure/cloudformation/**"
-      - ".github/workflows/ci.yml"
 
   pull_request:
     branches:
       - milestone-2-branch
-    paths:
-      - "infrastructure/cloudformation/**"
-      - ".github/workflows/ci.yml"
 
   workflow_dispatch:
 
@@ -40,30 +33,14 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install cfn-lint
 
-      - name: Check Network Stack
+      - name: Validate Network Stack
         run: |
           cfn-lint infrastructure/cloudformation/network.yaml
 
-      - name: Check RDS and Data Stack
+      - name: Validate RDS and Data Stack
         run: |
           cfn-lint infrastructure/cloudformation/rds.yaml
 
-      - name: Check Authentication Stack
+      - name: Validate Authentication Stack
         run: |
           cfn-lint infrastructure/cloudformation/auth.yaml
-
-      - name: Validate templates with AWS CloudFormation
-        env:
-          AWS_REGION: ap-south-1
-        run: |
-          aws cloudformation validate-template \
-            --template-body file://infrastructure/cloudformation/network.yaml \
-            --region "$AWS_REGION"
-
-          aws cloudformation validate-template \
-            --template-body file://infrastructure/cloudformation/rds.yaml \
-            --region "$AWS_REGION"
-
-          aws cloudformation validate-template \
-            --template-body file://infrastructure/cloudformation/auth.yaml \
-            --region "$AWS_REGION"

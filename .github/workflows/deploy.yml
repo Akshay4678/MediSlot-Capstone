@@ -1,1 +1,167 @@
+name: MediSlot AWS Deployment
 
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+        default: dev
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: medislot-deployment-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy MediSlot Infrastructure
+    runs-on: ubuntu-latest
+
+    # Only deploy from the milestone branch.
+    if: github.ref == 'refs/heads/milestone-2-branch'
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      PROJECT_NAME: medislot
+      ENVIRONMENT_NAME: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: |
+          aws sts get-caller-identity
+
+      - name: Validate CloudFormation templates
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install cfn-lint
+
+          cfn-lint infrastructure/cloudformation/network.yaml
+          cfn-lint infrastructure/cloudformation/rds.yaml
+          cfn-lint infrastructure/cloudformation/auth.yaml
+
+      # ----------------------------------------------------
+      # STACK 1: NETWORK
+      # ----------------------------------------------------
+      - name: Deploy Network Stack
+        run: |
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/network.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-network" \
+            --parameter-overrides \
+              ProjectName="${PROJECT_NAME}" \
+              EnvironmentName="${ENVIRONMENT_NAME}" \
+              EnableNatGateway=false \
+              EnableS3GatewayEndpoint=true \
+            --no-fail-on-empty-changeset
+
+      - name: Read Network Stack Outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-network"
+
+          get_output() {
+            aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" \
+              --output text
+          }
+
+          VPC_ID="$(get_output VpcId)"
+          DB_SUBNET_1="$(get_output PrivateDbSubnet1Id)"
+          DB_SUBNET_2="$(get_output PrivateDbSubnet2Id)"
+          DB_SECURITY_GROUP_ID="$(get_output DatabaseSecurityGroupId)"
+
+          for value in \
+            "$VPC_ID" \
+            "$DB_SUBNET_1" \
+            "$DB_SUBNET_2" \
+            "$DB_SECURITY_GROUP_ID"
+          do
+            if [[ -z "$value" || "$value" == "None" ]]; then
+              echo "ERROR: A required Network Stack output is missing."
+              exit 1
+            fi
+          done
+
+          {
+            echo "VPC_ID=$VPC_ID"
+            echo "DB_SUBNET_1=$DB_SUBNET_1"
+            echo "DB_SUBNET_2=$DB_SUBNET_2"
+            echo "DB_SECURITY_GROUP_ID=$DB_SECURITY_GROUP_ID"
+          } >> "$GITHUB_ENV"
+
+      # ----------------------------------------------------
+      # STACK 2: RDS AND DATA
+      # ----------------------------------------------------
+      - name: Deploy RDS and Data Stack
+        env:
+          DB_PASSWORD: ${{ secrets.MEDISLOT_DB_PASSWORD }}
+          DB_USERNAME: ${{ vars.MEDISLOT_DB_USERNAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DB_PASSWORD:-}" ]]; then
+            echo "ERROR: Add the MEDISLOT_DB_PASSWORD GitHub secret."
+            exit 1
+          fi
+
+          DB_USERNAME="${DB_USERNAME:-medislot_admin}"
+
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/rds.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-data" \
+            --parameter-overrides \
+              ProjectName="${PROJECT_NAME}" \
+              EnvironmentName="${ENVIRONMENT_NAME}" \
+              VpcId="${VPC_ID}" \
+              PrivateDbSubnet1Id="${DB_SUBNET_1}" \
+              PrivateDbSubnet2Id="${DB_SUBNET_2}" \
+              DatabaseSecurityGroupId="${DB_SECURITY_GROUP_ID}" \
+              DBUsername="${DB_USERNAME}" \
+              DBPassword="${DB_PASSWORD}" \
+              EnableDeletionProtection=false \
+            --no-fail-on-empty-changeset
+
+      # ----------------------------------------------------
+      # STACK 3: AUTHENTICATION
+      # ----------------------------------------------------
+      - name: Deploy Authentication Stack
+        run: |
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/auth.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              ProjectName="${PROJECT_NAME}" \
+              EnvironmentName="${ENVIRONMENT_NAME}" \
+            --no-fail-on-empty-changeset
+
+      - name: Deployment Summary
+        run: |
+          echo "MediSlot infrastructure deployment completed."
+          echo "Environment: ${ENVIRONMENT_NAME}"
+          echo "Region: ${AWS_REGION}"
+          echo "Network Stack: ${PROJECT_NAME}-${ENVIRONMENT_NAME}-network"
+          echo "Data Stack: ${PROJECT_NAME}-${ENVIRONMENT_NAME}-data"
+          echo "Authentication Stack: ${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth"

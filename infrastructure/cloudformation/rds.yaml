@@ -98,7 +98,6 @@ Resources:
   DatabaseSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub '${ProjectName}/${EnvironmentName}/database'
       Description: !Sub 'MediSlot ${EnvironmentName} RDS credentials'
       GenerateSecretString:
         SecretStringTemplate: !Sub '{"username":"${DBUsername}"}'
@@ -140,11 +139,7 @@ Resources:
     UpdateReplacePolicy: Snapshot
 
     Properties:
-      DBInstanceIdentifier: !Sub '${ProjectName}-${EnvironmentName}-mysql'
-
       Engine: mysql
-      EngineVersion: '8.4.9'
-
       DBInstanceClass: !Ref DBInstanceClass
       AllocatedStorage: !Ref DBAllocatedStorage
       StorageType: gp3
@@ -205,7 +200,6 @@ Resources:
     UpdateReplacePolicy: Retain
 
     Properties:
-      TableName: !Sub '${ProjectName}-${EnvironmentName}-idempotency'
       BillingMode: PAY_PER_REQUEST
 
       AttributeDefinitions:
@@ -245,7 +239,6 @@ Resources:
     UpdateReplacePolicy: Retain
 
     Properties:
-      TableName: !Sub '${ProjectName}-${EnvironmentName}-slot-capacity'
       BillingMode: PAY_PER_REQUEST
 
       AttributeDefinitions:
@@ -281,7 +274,6 @@ Resources:
     UpdateReplacePolicy: Retain
 
     Properties:
-      TableName: !Sub '${ProjectName}-${EnvironmentName}-waitlist'
       BillingMode: PAY_PER_REQUEST
 
       AttributeDefinitions:
@@ -321,7 +313,6 @@ Resources:
     UpdateReplacePolicy: Retain
 
     Properties:
-      TableName: !Sub '${ProjectName}-${EnvironmentName}-notification-dispatch'
       BillingMode: PAY_PER_REQUEST
 
       AttributeDefinitions:
@@ -361,8 +352,6 @@ Resources:
     UpdateReplacePolicy: Retain
 
     Properties:
-      BucketName: !Sub '${ProjectName}-${EnvironmentName}-${AWS::AccountId}-${AWS::Region}-artifacts'
-
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -393,8 +382,6 @@ Resources:
     UpdateReplacePolicy: Retain
 
     Properties:
-      BucketName: !Sub '${ProjectName}-${EnvironmentName}-${AWS::AccountId}-${AWS::Region}-reports'
-
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true

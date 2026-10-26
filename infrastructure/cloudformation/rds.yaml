@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 
 Description: >
   MediSlot data foundation - private RDS MySQL, DynamoDB tables,
-  Secrets Manager, and private S3 artifacts bucket.
+  Secrets Manager, and private S3 artifacts and reports buckets.
 
 # ============================================================
 # PARAMETERS
@@ -383,9 +383,6 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
-
-
-
   # ----------------------------------------------------------
   # S3: PRIVATE REPORTS BUCKET
   # ----------------------------------------------------------
@@ -417,7 +414,6 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
-          
 
 # ============================================================
 # OUTPUTS
@@ -474,3 +470,9 @@ Outputs:
     Value: !Ref ArtifactsBucket
     Export:
       Name: !Sub '${ProjectName}-${EnvironmentName}-ArtifactsBucketName'
+
+  ReportsBucketName:
+    Description: Private S3 bucket for generated reports.
+    Value: !Ref ReportsBucket
+    Export:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-ReportsBucketName'

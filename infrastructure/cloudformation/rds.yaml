@@ -383,6 +383,42 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
+
+
+
+  # ----------------------------------------------------------
+  # S3: PRIVATE REPORTS BUCKET
+  # ----------------------------------------------------------
+
+  ReportsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+    Properties:
+      BucketName: !Sub '${ProjectName}-${EnvironmentName}-${AWS::AccountId}-${AWS::Region}-reports'
+
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+      VersioningConfiguration:
+        Status: Enabled
+
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+          
+
 # ============================================================
 # OUTPUTS
 # ============================================================

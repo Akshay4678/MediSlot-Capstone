@@ -26,7 +26,7 @@ jobs:
     name: Deploy MediSlot Infrastructure
     runs-on: ubuntu-latest
 
-    # Allow deployments only from milestone-2-branch.
+    # Deployments are permitted only from milestone-2-branch.
     if: github.ref == 'refs/heads/milestone-2-branch'
 
     env:
@@ -42,35 +42,50 @@ jobs:
         uses: actions/checkout@v4
 
       # --------------------------------------------------
-      # STEP 2: VALIDATE REQUIRED CONFIGURATION
+      # STEP 2: CHECK REQUIRED CONFIGURATION
       # --------------------------------------------------
       - name: Check deployment configuration
         shell: bash
+        env:
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
         run: |
           set -euo pipefail
 
-          if [[ -z "${AWS_REGION:-}" || "$AWS_REGION" == "None" ]]; then
-            echo "ERROR: Configure the AWS_REGION repository variable."
+          if [[ -z "${AWS_REGION:-}" || "${AWS_REGION}" == "None" ]]; then
+            echo "::error::Configure the AWS_REGION repository variable."
             exit 1
           fi
+
+          if [[ -z "${AWS_ROLE_ARN:-}" ]]; then
+            echo "::error::Configure the AWS_ROLE_ARN repository secret."
+            exit 1
+          fi
+
+          for template in \
+            infrastructure/cloudformation/network.yaml \
+            infrastructure/cloudformation/rds.yaml \
+            infrastructure/cloudformation/auth.yaml
+          do
+            if [[ ! -f "${template}" ]]; then
+              echo "::error::CloudFormation template not found: ${template}"
+              exit 1
+            fi
+          done
 
           echo "Project: ${PROJECT_NAME}"
           echo "Environment: ${ENVIRONMENT_NAME}"
           echo "Region: ${AWS_REGION}"
           echo "Branch: ${GITHUB_REF_NAME}"
 
-          test -f infrastructure/cloudformation/network.yaml
-          test -f infrastructure/cloudformation/rds.yaml
-          test -f infrastructure/cloudformation/auth.yaml
-
       # --------------------------------------------------
-      # STEP 3: AUTHENTICATE TO AWS USING OIDC
+      # STEP 3: AUTHENTICATE TO AWS USING GITHUB OIDC
       # --------------------------------------------------
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: MediSlotGitHubActions
 
       - name: Verify AWS identity
         shell: bash
@@ -97,9 +112,11 @@ jobs:
               --template-body "file://${template}" \
               --region "${AWS_REGION}" \
               > /dev/null
+
+            echo "Validation passed: ${template}"
           done
 
-          echo "All CloudFormation templates passed AWS template validation."
+          echo "All CloudFormation templates passed validation."
 
       # --------------------------------------------------
       # STEP 5: DEPLOY NETWORK STACK
@@ -109,15 +126,22 @@ jobs:
         run: |
           set -euo pipefail
 
+          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-network"
+
+          echo "Deploying ${STACK_NAME}"
+
           aws cloudformation deploy \
             --template-file infrastructure/cloudformation/network.yaml \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-network" \
+            --stack-name "${STACK_NAME}" \
             --parameter-overrides \
               "ProjectName=${PROJECT_NAME}" \
               "EnvironmentName=${ENVIRONMENT_NAME}" \
               "EnableNatGateway=false" \
               "EnableS3GatewayEndpoint=true" \
-            --no-fail-on-empty-changeset
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
+
+          echo "Network stack deployment completed."
 
       # --------------------------------------------------
       # STEP 6: READ NETWORK STACK OUTPUTS
@@ -149,7 +173,7 @@ jobs:
             "${DB_SECURITY_GROUP_ID}"
           do
             if [[ -z "${value}" || "${value}" == "None" ]]; then
-              echo "ERROR: A required Network stack output is missing."
+              echo "::error::A required Network stack output is missing."
               exit 1
             fi
           done
@@ -169,32 +193,37 @@ jobs:
       - name: Deploy RDS and Data Stack
         shell: bash
         env:
-          DB_PASSWORD: ${{ secrets.MEDISLOT_DB_PASSWORD }}
           DB_USERNAME: ${{ vars.MEDISLOT_DB_USERNAME }}
         run: |
           set -euo pipefail
 
-          if [[ -z "${DB_PASSWORD:-}" ]]; then
-            echo "ERROR: Add the MEDISLOT_DB_PASSWORD GitHub Actions secret."
-            exit 1
-          fi
-
+          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-data"
           DB_USERNAME="${DB_USERNAME:-medislot_admin}"
 
+          if [[ "${ENVIRONMENT_NAME}" == "prod" ]]; then
+            DELETION_PROTECTION=true
+          else
+            DELETION_PROTECTION=false
+          fi
+
+          echo "Deploying ${STACK_NAME}"
+
+          # rds.yaml generates the database password in Secrets Manager.
+          # Do not pass DBPassword or VpcId; they are not parameters
+          # declared by the current rds.yaml template.
           aws cloudformation deploy \
             --template-file infrastructure/cloudformation/rds.yaml \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-data" \
+            --stack-name "${STACK_NAME}" \
             --parameter-overrides \
               "ProjectName=${PROJECT_NAME}" \
               "EnvironmentName=${ENVIRONMENT_NAME}" \
-              "VpcId=${VPC_ID}" \
               "PrivateDbSubnet1Id=${DB_SUBNET_1}" \
               "PrivateDbSubnet2Id=${DB_SUBNET_2}" \
               "DatabaseSecurityGroupId=${DB_SECURITY_GROUP_ID}" \
               "DBUsername=${DB_USERNAME}" \
-              "DBPassword=${DB_PASSWORD}" \
-              "EnableDeletionProtection=false" \
-            --no-fail-on-empty-changeset
+              "EnableDeletionProtection=${DELETION_PROTECTION}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
 
           echo "RDS and Data stack deployment completed."
 
@@ -206,14 +235,19 @@ jobs:
         run: |
           set -euo pipefail
 
+          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth"
+
+          echo "Deploying ${STACK_NAME}"
+
           aws cloudformation deploy \
             --template-file infrastructure/cloudformation/auth.yaml \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth" \
+            --stack-name "${STACK_NAME}" \
             --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               "ProjectName=${PROJECT_NAME}" \
               "EnvironmentName=${ENVIRONMENT_NAME}" \
-            --no-fail-on-empty-changeset
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
 
           echo "Authentication stack deployment completed."
 
@@ -221,32 +255,25 @@ jobs:
       # STEP 9: DISPLAY DEPLOYMENT RESULTS
       # --------------------------------------------------
       - name: Deployment Summary
+        if: always()
         shell: bash
         run: |
-          set -euo pipefail
-
           echo "========================================"
-          echo "MediSlot infrastructure deployment"
+          echo "MediSlot CloudFormation deployment"
           echo "========================================"
           echo "Environment: ${ENVIRONMENT_NAME}"
           echo "Region: ${AWS_REGION}"
-          echo ""
-          echo "Network stack:"
-          aws cloudformation describe-stacks \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-network" \
-            --query "Stacks[0].StackStatus" \
-            --output text
 
-          echo ""
-          echo "Data stack:"
-          aws cloudformation describe-stacks \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-data" \
-            --query "Stacks[0].StackStatus" \
-            --output text
+          for STACK in network data auth; do
+            STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-${STACK}"
 
-          echo ""
-          echo "Authentication stack:"
-          aws cloudformation describe-stacks \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth" \
-            --query "Stacks[0].StackStatus" \
-            --output text
+            echo ""
+            echo "Stack: ${STACK_NAME}"
+
+            aws cloudformation describe-stacks \
+              --stack-name "${STACK_NAME}" \
+              --query "Stacks[0].StackStatus" \
+              --output text \
+              --region "${AWS_REGION}" 2>/dev/null \
+              || echo "Stack does not exist or could not be described."
+          done

@@ -74,7 +74,7 @@ Resources:
     Properties:
       DBInstanceIdentifier: !Sub '${ProjectName}-${EnvironmentName}-mysql'
       Engine: mysql
-      EngineVersion: '8.0'
+      EngineVersion: '8.0.40'
       DBInstanceClass: !Ref DBInstanceClass
       AllocatedStorage: !Ref DBAllocatedStorage
       StorageType: gp3

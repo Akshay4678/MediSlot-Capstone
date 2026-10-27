@@ -367,12 +367,20 @@ jobs:
           rm -rf "${PACKAGE_DIR}"
           mkdir -p "${PACKAGE_DIR}"
 
-          # Install Python dependencies when requirements.txt exists.
+          # Install existing project dependencies (keeps requirements for all current Lambdas).
           if [[ -f "requirements.txt" ]]; then
             python -m pip install \
               --requirement requirements.txt \
               --target "${PACKAGE_DIR}"
           fi
+
+          # Ensure authentication dependencies are included if absent from requirements.txt.
+          python -m pip install \
+            --upgrade \
+            "PyJWT>=2.8,<3" \
+            "bcrypt>=4.1,<6" \
+            "PyMySQL>=1.1,<2" \
+            --target "${PACKAGE_DIR}"
 
           # Copy the application directory into the ZIP root.
           cp -R application "${PACKAGE_DIR}/application"
@@ -488,14 +496,8 @@ jobs:
           echo "Environment: ${ENVIRONMENT_NAME}"
           echo "API endpoint: ${API_ENDPOINT}"
           echo ""
-          echo "Configured routes include:"
-          echo "POST ${API_ENDPOINT}/auth"
-          echo "GET  ${API_ENDPOINT}/doctors/search"
-          echo "GET  ${API_ENDPOINT}/availability"
-          echo "POST ${API_ENDPOINT}/bookings"
-          echo "GET  ${API_ENDPOINT}/appointments"
-          echo "GET  ${API_ENDPOINT}/waitlist"
-          echo "GET  ${API_ENDPOINT}/reports"
+          echo "Base API endpoint: ${API_ENDPOINT}"
+          echo "Exact routes are defined by infrastructure/cloudformation/api.yaml."
 
       # ==========================================
       # STEP 15: Display deployment status

@@ -1,7 +1,5 @@
-
 AWSTemplateFormatVersion: '2010-09-09'
-Description: MediSlot application API and Lambda entry point. Extend routes/functions to match the handlers in your repository.
-
+Description: MediSlot Milestone 2 authentication API only.
 Parameters:
   EnvironmentName:
     Type: String
@@ -9,66 +7,132 @@ Parameters:
     AllowedValues: [dev, prod]
   ArtifactBucket:
     Type: String
-    Description: Private S3 bucket containing the zipped Python Lambda deployment package.
+    Description: Private S3 bucket holding the zipped Lambda deployment package.
   ArtifactKey:
     Type: String
-    Description: S3 key for the Lambda deployment package, e.g. medislot/application.zip
-  ApplicationLambdaRoleArn:
+    Description: S3 key for the zipped Lambda deployment package.
+  AuthLambdaRoleArn:
     Type: String
-    Description: ARN output from the IAM stack.
   AuthorizerLambdaRoleArn:
     Type: String
-    Description: ARN output from the IAM stack.
-  WaitlistTableName:
+  RefreshTokenTableName:
     Type: String
-    Description: DynamoDB Waitlist table name output from the DynamoDB stack.
-  WaitlistHandler:
+  TokenDenylistTableName:
     Type: String
-    Default: application.handlers.waitlist_lambda.lambda_handler
-    Description: Python handler path. Change this to match the actual file in your package.
-  AuthorizerHandler:
-    Type: String
-    Default: application.handlers.authorizer_lambda.lambda_handler
-    Description: Python handler path. Change this to match the actual file in your package.
   JwtSecretParameterName:
     Type: String
     Default: /medislot/dev/jwt-secret
-    Description: SSM parameter name used by your authorizer; align with your code.
-
+  RegisterHandler:
+    Type: String
+    Default: application.auth.register.lambda_handler
+  LoginHandler:
+    Type: String
+    Default: application.auth.login.lambda_handler
+  RefreshHandler:
+    Type: String
+    Default: application.auth.refresh.lambda_handler
+  LogoutHandler:
+    Type: String
+    Default: application.auth.logout.lambda_handler
+  AuthorizerHandler:
+    Type: String
+    Default: application.auth.authorizer.lambda_handler
 Resources:
-  MediSlotRestApi:
+  MediSlotApi:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: !Sub '${EnvironmentName}-medislot-api'
-      EndpointConfiguration:
-        Types: [REGIONAL]
-
-  WaitlistResource:
+      EndpointConfiguration: {Types: [REGIONAL]}
+  AuthResource:
     Type: AWS::ApiGateway::Resource
     Properties:
-      RestApiId: !Ref MediSlotRestApi
-      ParentId: !GetAtt MediSlotRestApi.RootResourceId
-      PathPart: waitlist
-
-  WaitlistFunction:
+      RestApiId: !Ref MediSlotApi
+      ParentId: !GetAtt MediSlotApi.RootResourceId
+      PathPart: auth
+  RegisterResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MediSlotApi
+      ParentId: !Ref AuthResource
+      PathPart: register
+  LoginResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MediSlotApi
+      ParentId: !Ref AuthResource
+      PathPart: login
+  RefreshResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MediSlotApi
+      ParentId: !Ref AuthResource
+      PathPart: refresh
+  LogoutResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MediSlotApi
+      ParentId: !Ref AuthResource
+      PathPart: logout
+  RegisterFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub '${EnvironmentName}-medislot-waitlist'
+      FunctionName: !Sub '${EnvironmentName}-medislot-auth-register'
       Runtime: python3.12
-      Handler: !Ref WaitlistHandler
-      Role: !Ref ApplicationLambdaRoleArn
+      Handler: !Ref RegisterHandler
+      Role: !Ref AuthLambdaRoleArn
       Timeout: 15
       MemorySize: 256
-      Code:
-        S3Bucket: !Ref ArtifactBucket
-        S3Key: !Ref ArtifactKey
+      Code: {S3Bucket: !Ref ArtifactBucket, S3Key: !Ref ArtifactKey}
       Environment:
         Variables:
           ENVIRONMENT_NAME: !Ref EnvironmentName
-          WAITLIST_TABLE_NAME: !Ref WaitlistTableName
-          WAITLIST_GSI_NAME: user_id-index
-
-  WaitlistAuthorizerFunction:
+          JWT_SECRET_PARAMETER_NAME: !Ref JwtSecretParameterName
+          REFRESH_TOKEN_TABLE_NAME: !Ref RefreshTokenTableName
+          TOKEN_DENYLIST_TABLE_NAME: !Ref TokenDenylistTableName
+  LoginFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${EnvironmentName}-medislot-auth-login'
+      Runtime: python3.12
+      Handler: !Ref LoginHandler
+      Role: !Ref AuthLambdaRoleArn
+      Timeout: 15
+      MemorySize: 256
+      Code: {S3Bucket: !Ref ArtifactBucket, S3Key: !Ref ArtifactKey}
+      Environment:
+        Variables:
+          ENVIRONMENT_NAME: !Ref EnvironmentName
+          JWT_SECRET_PARAMETER_NAME: !Ref JwtSecretParameterName
+          REFRESH_TOKEN_TABLE_NAME: !Ref RefreshTokenTableName
+  RefreshFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${EnvironmentName}-medislot-auth-refresh'
+      Runtime: python3.12
+      Handler: !Ref RefreshHandler
+      Role: !Ref AuthLambdaRoleArn
+      Timeout: 15
+      MemorySize: 256
+      Code: {S3Bucket: !Ref ArtifactBucket, S3Key: !Ref ArtifactKey}
+      Environment:
+        Variables:
+          REFRESH_TOKEN_TABLE_NAME: !Ref RefreshTokenTableName
+          JWT_SECRET_PARAMETER_NAME: !Ref JwtSecretParameterName
+  LogoutFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${EnvironmentName}-medislot-auth-logout'
+      Runtime: python3.12
+      Handler: !Ref LogoutHandler
+      Role: !Ref AuthLambdaRoleArn
+      Timeout: 15
+      MemorySize: 256
+      Code: {S3Bucket: !Ref ArtifactBucket, S3Key: !Ref ArtifactKey}
+      Environment:
+        Variables:
+          REFRESH_TOKEN_TABLE_NAME: !Ref RefreshTokenTableName
+          TOKEN_DENYLIST_TABLE_NAME: !Ref TokenDenylistTableName
+  AuthorizerFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub '${EnvironmentName}-medislot-authorizer'
@@ -77,114 +141,133 @@ Resources:
       Role: !Ref AuthorizerLambdaRoleArn
       Timeout: 10
       MemorySize: 256
-      Code:
-        S3Bucket: !Ref ArtifactBucket
-        S3Key: !Ref ArtifactKey
+      Code: {S3Bucket: !Ref ArtifactBucket, S3Key: !Ref ArtifactKey}
       Environment:
         Variables:
-          ENVIRONMENT_NAME: !Ref EnvironmentName
           JWT_SECRET_PARAMETER_NAME: !Ref JwtSecretParameterName
-
-  WaitlistAuthorizer:
+          TOKEN_DENYLIST_TABLE_NAME: !Ref TokenDenylistTableName
+  MediSlotAuthorizer:
     Type: AWS::ApiGateway::Authorizer
     Properties:
       Name: !Sub '${EnvironmentName}-medislot-authorizer'
-      RestApiId: !Ref MediSlotRestApi
+      RestApiId: !Ref MediSlotApi
       Type: TOKEN
       IdentitySource: method.request.header.Authorization
       AuthorizerUri: !Sub
         - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
-        - FunctionArn: !GetAtt WaitlistAuthorizerFunction.Arn
+        - FunctionArn: !GetAtt AuthorizerFunction.Arn
       AuthorizerResultTtlInSeconds: 0
-
-  WaitlistPostMethod:
+  RegisterMethod:
     Type: AWS::ApiGateway::Method
     Properties:
-      RestApiId: !Ref MediSlotRestApi
-      ResourceId: !Ref WaitlistResource
+      RestApiId: !Ref MediSlotApi
+      ResourceId: !Ref RegisterResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
+          - FunctionArn: !GetAtt RegisterFunction.Arn
+  LoginMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotApi
+      ResourceId: !Ref LoginResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
+          - FunctionArn: !GetAtt LoginFunction.Arn
+  RefreshMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotApi
+      ResourceId: !Ref RefreshResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
+          - FunctionArn: !GetAtt RefreshFunction.Arn
+  LogoutMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotApi
+      ResourceId: !Ref LogoutResource
       HttpMethod: POST
       AuthorizationType: CUSTOM
-      AuthorizerId: !Ref WaitlistAuthorizer
+      AuthorizerId: !Ref MediSlotAuthorizer
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
         Uri: !Sub
           - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
-          - FunctionArn: !GetAtt WaitlistFunction.Arn
-      MethodResponses:
-        - StatusCode: '200'
-
-  WaitlistGetMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref MediSlotRestApi
-      ResourceId: !Ref WaitlistResource
-      HttpMethod: GET
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref WaitlistAuthorizer
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
-          - FunctionArn: !GetAtt WaitlistFunction.Arn
-
-  WaitlistDeleteMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref MediSlotRestApi
-      ResourceId: !Ref WaitlistResource
-      HttpMethod: DELETE
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref WaitlistAuthorizer
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
-          - FunctionArn: !GetAtt WaitlistFunction.Arn
-
-  WaitlistLambdaPermission:
+          - FunctionArn: !GetAtt LogoutFunction.Arn
+  RegisterPermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref WaitlistFunction
+      FunctionName: !Ref RegisterFunction
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotRestApi}/*/*/waitlist'
-
-  AuthorizerLambdaPermission:
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotApi}/*/POST/auth/register'
+  LoginPermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref WaitlistAuthorizerFunction
+      FunctionName: !Ref LoginFunction
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotRestApi}/authorizers/${WaitlistAuthorizer}'
-
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotApi}/*/POST/auth/login'
+  RefreshPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RefreshFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotApi}/*/POST/auth/refresh'
+  LogoutPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LogoutFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotApi}/*/POST/auth/logout'
+  AuthorizerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AuthorizerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotApi}/authorizers/${MediSlotAuthorizer}'
   ApiDeployment:
     Type: AWS::ApiGateway::Deployment
-    DependsOn:
-      - WaitlistPostMethod
-      - WaitlistGetMethod
-      - WaitlistDeleteMethod
+    DependsOn: [RegisterMethod, LoginMethod, RefreshMethod, LogoutMethod]
     Properties:
-      RestApiId: !Ref MediSlotRestApi
-      Description: !Sub 'MediSlot ${EnvironmentName} deployment'
-
+      RestApiId: !Ref MediSlotApi
+      Description: !Sub 'MediSlot Milestone 2 ${EnvironmentName} auth API'
   ApiStage:
     Type: AWS::ApiGateway::Stage
     Properties:
-      RestApiId: !Ref MediSlotRestApi
+      RestApiId: !Ref MediSlotApi
       DeploymentId: !Ref ApiDeployment
       StageName: !Ref EnvironmentName
-
 Outputs:
   ApiId:
-    Value: !Ref MediSlotRestApi
-    Export:
-      Name: !Sub '${EnvironmentName}-MediSlot-ApiId'
+    Value: !Ref MediSlotApi
+    Export: {Name: !Sub '${EnvironmentName}-MediSlot-ApiId'}
   ApiBaseUrl:
-    Value: !Sub 'https://${MediSlotRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${EnvironmentName}'
-  WaitlistFunctionName:
-    Value: !Ref WaitlistFunction
-  WaitlistFunctionArn:
-    Value: !GetAtt WaitlistFunction.Arn
+    Value: !Sub 'https://${MediSlotApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${EnvironmentName}'
+  RegisterEndpoint:
+    Value: !Sub 'https://${MediSlotApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${EnvironmentName}/auth/register'
+  LoginEndpoint:
+    Value: !Sub 'https://${MediSlotApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${EnvironmentName}/auth/login'
+  RefreshEndpoint:
+    Value: !Sub 'https://${MediSlotApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${EnvironmentName}/auth/refresh'
+  LogoutEndpoint:
+    Value: !Sub 'https://${MediSlotApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${EnvironmentName}/auth/logout'

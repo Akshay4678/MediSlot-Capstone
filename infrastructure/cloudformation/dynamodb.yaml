@@ -5,10 +5,7 @@ Parameters:
   EnvironmentName:
     Type: String
     Default: dev
-    AllowedValues:
-      - dev
-      - test
-      - prod
+    AllowedValues: [dev, test, prod]
 
 Resources:
   RefreshTokenTable:
@@ -59,19 +56,16 @@ Outputs:
     Value: !Ref RefreshTokenTable
     Export:
       Name: !Sub '${EnvironmentName}-MediSlot-RefreshTokenTableName'
-
   RefreshTokenTableArn:
     Description: DynamoDB refresh token table ARN
     Value: !GetAtt RefreshTokenTable.Arn
     Export:
       Name: !Sub '${EnvironmentName}-MediSlot-RefreshTokenTableArn'
-
   TokenDenylistTableName:
     Description: DynamoDB token denylist table name
     Value: !Ref TokenDenylistTable
     Export:
       Name: !Sub '${EnvironmentName}-MediSlot-TokenDenylistTableName'
-
   TokenDenylistTableArn:
     Description: DynamoDB token denylist table ARN
     Value: !GetAtt TokenDenylistTable.Arn

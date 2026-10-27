@@ -1,135 +1,47 @@
 AWSTemplateFormatVersion: '2010-09-09'
-
-Description: >
-  MediSlot API Stack. Creates API Gateway HTTP API, Lambda functions,
-  routes, integrations, IAM permissions, and deployment outputs.
-  Reuses existing Network and Data stack resources.
+Description: MediSlot Milestone 2 authentication API - registration, login, refresh, logout and JWT authorizer only.
 
 Parameters:
-
   ProjectName:
     Type: String
     Default: medislot
     AllowedPattern: '^[a-zA-Z0-9-]+$'
-
   EnvironmentName:
     Type: String
     Default: dev
-    AllowedValues:
-      - dev
-      - test
-      - prod
-
+    AllowedValues: [dev, test, prod]
   LambdaCodeS3Bucket:
     Type: String
     Description: Existing private S3 bucket containing the Lambda deployment ZIP.
-
   LambdaCodeS3Key:
     Type: String
     Description: S3 object key for the Lambda deployment ZIP.
-
   LambdaSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
     Description: Two existing private application subnet IDs.
-
   LambdaSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Existing application Lambda security group ID.
-
-  IdempotencyTableName:
-    Type: String
-
-  SlotCapacityTableName:
-    Type: String
-
-  WaitlistTableName:
-    Type: String
-
-  NotificationDispatchTableName:
-    Type: String
-
   DatabaseSecretArn:
     Type: String
     Description: ARN of the Secrets Manager secret containing RDS credentials.
-
   DatabaseHost:
     Type: String
     Description: Private RDS endpoint hostname.
-
   DatabaseName:
     Type: String
     Default: medislot
-
   JwtSecretParameterName:
     Type: String
-    Default: /medislot/dev/auth/jwt-secret
-    Description: SSM SecureString parameter name containing the JWT signing secret.
-
+    Description: SSM SecureString parameter containing the JWT signing secret.
   RefreshTokenTableName:
     Type: String
     Description: Existing refresh-token DynamoDB table name.
-
   TokenDenylistTableName:
     Type: String
     Description: Existing token-denylist DynamoDB table name.
 
-
 Resources:
-
-  # --------------------------------------------------
-  # IAM ROLE
-  # --------------------------------------------------
-
-  ApiLambdaExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${ProjectName}-${EnvironmentName}-api-lambda-role'
-
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-            Action:
-              - sts:AssumeRole
-
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-
-      Policies:
-        - PolicyName: MediSlotDynamoDBAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-
-              - Effect: Allow
-                Action:
-                  - dynamodb:GetItem
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                  - dynamodb:DeleteItem
-                  - dynamodb:Query
-                  - dynamodb:TransactWriteItems
-                Resource:
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${IdempotencyTableName}'
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${SlotCapacityTableName}'
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${WaitlistTableName}'
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NotificationDispatchTableName}'
-
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-
-  # --------------------------------------------------
-  # LAMBDA FUNCTIONS
-  # --------------------------------------------------
-
   AuthFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -141,7 +53,7 @@ Resources:
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
-      Timeout: 15
+      Timeout: 20
       MemorySize: 256
       Environment:
         Variables:
@@ -155,13 +67,10 @@ Resources:
           TOKEN_DENYLIST_TABLE: !Ref TokenDenylistTableName
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroupId
+        SecurityGroupIds: [!Ref LambdaSecurityGroupId]
       Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
+        Project: !Ref ProjectName
+        Environment: !Ref EnvironmentName
 
   AuthorizerFunction:
     Type: AWS::Lambda::Function
@@ -183,270 +92,8 @@ Resources:
           JWT_ISSUER: medislot
           TOKEN_DENYLIST_TABLE: !Ref TokenDenylistTableName
       Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  DoctorSearchFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-doctor-search'
-      Runtime: python3.12
-      Handler: application.doctor_search.handler.lambda_handler
-      Role: !GetAtt ApiLambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref LambdaCodeS3Key
-      Timeout: 15
-      MemorySize: 256
-      VpcConfig:
-        SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroupId
-      Environment:
-        Variables:
-          ENVIRONMENT_NAME: !Ref EnvironmentName
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  DoctorFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-doctor'
-      Runtime: python3.12
-      Handler: application.doctor.handler.lambda_handler
-      Role: !GetAtt ApiLambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref LambdaCodeS3Key
-      Timeout: 15
-      MemorySize: 256
-      VpcConfig:
-        SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroupId
-      Environment:
-        Variables:
-          ENVIRONMENT_NAME: !Ref EnvironmentName
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  PatientFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-patient'
-      Runtime: python3.12
-      Handler: application.patient.handler.lambda_handler
-      Role: !GetAtt ApiLambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref LambdaCodeS3Key
-      Timeout: 15
-      MemorySize: 256
-      VpcConfig:
-        SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroupId
-      Environment:
-        Variables:
-          ENVIRONMENT_NAME: !Ref EnvironmentName
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  AvailabilityFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-availability'
-      Runtime: python3.12
-      Handler: application.availability.handler.lambda_handler
-      Role: !GetAtt ApiLambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref LambdaCodeS3Key
-      Timeout: 15
-      MemorySize: 256
-      VpcConfig:
-        SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroupId
-      Environment:
-        Variables:
-          ENVIRONMENT_NAME: !Ref EnvironmentName
-          SLOT_CAPACITY_TABLE_NAME: !Ref SlotCapacityTableName
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  BookingFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-booking'
-      Runtime: python3.12
-      Handler: application.booking.handler.lambda_handler
-      Role: !GetAtt ApiLambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref LambdaCodeS3Key
-      Timeout: 15
-      MemorySize: 256
-      VpcConfig:
-        SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroupId
-      Environment:
-        Variables:
-          ENVIRONMENT_NAME: !Ref EnvironmentName
-          IDEMPOTENCY_TABLE_NAME: !Ref IdempotencyTableName
-          SLOT_CAPACITY_TABLE_NAME: !Ref SlotCapacityTableName
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  AppointmentFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-appointment'
-      Runtime: python3.12
-      Handler: application.appointment.handler.lambda_handler
-      Role: !GetAtt ApiLambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref LambdaCodeS3Key
-      Timeout: 15
-      MemorySize: 256
-      VpcConfig:
-        SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroupId
-      Environment:
-        Variables:
-          ENVIRONMENT_NAME: !Ref EnvironmentName
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  RescheduleFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-reschedule'
-      Runtime: python3.12
-      Handler: application.reschedule.handler.lambda_handler
-      Role: !GetAtt ApiLambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref LambdaCodeS3Key
-      Timeout: 15
-      MemorySize: 256
-      VpcConfig:
-        SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroupId
-      Environment:
-        Variables:
-          ENVIRONMENT_NAME: !Ref EnvironmentName
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  WaitlistFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-waitlist'
-      Runtime: python3.12
-      Handler: application.waitlist.handler.lambda_handler
-      Role: !GetAtt ApiLambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref LambdaCodeS3Key
-      Timeout: 15
-      MemorySize: 256
-      VpcConfig:
-        SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroupId
-      Environment:
-        Variables:
-          ENVIRONMENT_NAME: !Ref EnvironmentName
-          WAITLIST_TABLE_NAME: !Ref WaitlistTableName
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  NotificationFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-notification'
-      Runtime: python3.12
-      Handler: application.notification.handler.lambda_handler
-      Role: !GetAtt ApiLambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref LambdaCodeS3Key
-      Timeout: 15
-      MemorySize: 256
-      VpcConfig:
-        SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroupId
-      Environment:
-        Variables:
-          ENVIRONMENT_NAME: !Ref EnvironmentName
-          NOTIFICATION_DISPATCH_TABLE_NAME: !Ref NotificationDispatchTableName
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  ReportingFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-reporting'
-      Runtime: python3.12
-      Handler: application.reporting.handler.lambda_handler
-      Role: !GetAtt ApiLambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref LambdaCodeS3Bucket
-        S3Key: !Ref LambdaCodeS3Key
-      Timeout: 15
-      MemorySize: 256
-      VpcConfig:
-        SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroupId
-      Environment:
-        Variables:
-          ENVIRONMENT_NAME: !Ref EnvironmentName
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-
-  # --------------------------------------------------
-  # API GATEWAY HTTP API
-  # --------------------------------------------------
+        Project: !Ref ProjectName
+        Environment: !Ref EnvironmentName
 
   MediSlotHttpApi:
     Type: AWS::ApiGatewayV2::Api
@@ -454,23 +101,12 @@ Resources:
       Name: !Sub '${ProjectName}-${EnvironmentName}-api'
       ProtocolType: HTTP
       CorsConfiguration:
-        AllowOrigins:
-          - '*'
-        AllowMethods:
-          - GET
-          - POST
-          - PUT
-          - PATCH
-          - DELETE
-          - OPTIONS
-        AllowHeaders:
-          - authorization
-          - content-type
-          - idempotency-key
+        AllowOrigins: ['*']
+        AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+        AllowHeaders: [authorization, content-type]
       Tags:
         Project: !Ref ProjectName
         Environment: !Ref EnvironmentName
-
 
   MediSlotLambdaAuthorizer:
     Type: AWS::ApiGatewayV2::Authorizer
@@ -481,14 +117,9 @@ Resources:
       AuthorizerUri: !Sub
         - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerArn}/invocations'
         - AuthorizerArn: !GetAtt AuthorizerFunction.Arn
-      IdentitySource:
-        - '$request.header.Authorization'
+      IdentitySource: ['$request.header.Authorization']
       AuthorizerPayloadFormatVersion: '2.0'
       EnableSimpleResponses: true
-
-  # --------------------------------------------------
-  # LAMBDA INTEGRATIONS
-  # --------------------------------------------------
 
   AuthIntegration:
     Type: AWS::ApiGatewayV2::Integration
@@ -499,296 +130,34 @@ Resources:
       IntegrationUri: !GetAtt AuthFunction.Arn
       PayloadFormatVersion: '2.0'
 
-  DoctorSearchIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      IntegrationType: AWS_PROXY
-      IntegrationMethod: POST
-      IntegrationUri: !GetAtt DoctorSearchFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  DoctorIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      IntegrationType: AWS_PROXY
-      IntegrationMethod: POST
-      IntegrationUri: !GetAtt DoctorFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  PatientIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      IntegrationType: AWS_PROXY
-      IntegrationMethod: POST
-      IntegrationUri: !GetAtt PatientFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  AvailabilityIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      IntegrationType: AWS_PROXY
-      IntegrationMethod: POST
-      IntegrationUri: !GetAtt AvailabilityFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  BookingIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      IntegrationType: AWS_PROXY
-      IntegrationMethod: POST
-      IntegrationUri: !GetAtt BookingFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  AppointmentIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      IntegrationType: AWS_PROXY
-      IntegrationMethod: POST
-      IntegrationUri: !GetAtt AppointmentFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  RescheduleIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      IntegrationType: AWS_PROXY
-      IntegrationMethod: POST
-      IntegrationUri: !GetAtt RescheduleFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  WaitlistIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      IntegrationType: AWS_PROXY
-      IntegrationMethod: POST
-      IntegrationUri: !GetAtt WaitlistFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  NotificationIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      IntegrationType: AWS_PROXY
-      IntegrationMethod: POST
-      IntegrationUri: !GetAtt NotificationFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  ReportingIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      IntegrationType: AWS_PROXY
-      IntegrationMethod: POST
-      IntegrationUri: !GetAtt ReportingFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-
-  # --------------------------------------------------
-  # API ROUTES
-  # Explicit method/path routes. Several routes intentionally share a Lambda;
-  # handlers must dispatch using requestContext.http.method and rawPath.
-
   AuthRegisterRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'POST /auth/register'
       Target: !Sub 'integrations/${AuthIntegration}'
-
+      AuthorizationType: NONE
   AuthLoginRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'POST /auth/login'
       Target: !Sub 'integrations/${AuthIntegration}'
-
+      AuthorizationType: NONE
   AuthRefreshRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'POST /auth/refresh'
       Target: !Sub 'integrations/${AuthIntegration}'
-
+      AuthorizationType: NONE
   AuthLogoutRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'POST /auth/logout'
       Target: !Sub 'integrations/${AuthIntegration}'
-
-  DoctorSearchRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'GET /doctors/search'
-      Target: !Sub 'integrations/${DoctorSearchIntegration}'
-
-  DoctorsListRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'GET /doctors'
-      Target: !Sub 'integrations/${DoctorIntegration}'
-
-  DoctorByIdRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'GET /doctors/{doctor_id}'
-      Target: !Sub 'integrations/${DoctorIntegration}'
-
-  HospitalsRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'GET /hospitals'
-      Target: !Sub 'integrations/${DoctorIntegration}'
-
-  SpecialisationsRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'GET /specialisations'
-      Target: !Sub 'integrations/${DoctorIntegration}'
-
-  PatientRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'GET /patients'
-      Target: !Sub 'integrations/${PatientIntegration}'
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref MediSlotLambdaAuthorizer
-
-  PatientByIdRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'ANY /patients/{patient_id}'
-      Target: !Sub 'integrations/${PatientIntegration}'
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref MediSlotLambdaAuthorizer
-
-  AvailabilityRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'GET /availability'
-      Target: !Sub 'integrations/${AvailabilityIntegration}'
-
-  SlotsRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'GET /slots'
-      Target: !Sub 'integrations/${AvailabilityIntegration}'
-
-  AppointmentCreateRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'POST /appointments'
-      Target: !Sub 'integrations/${BookingIntegration}'
-
-  AppointmentListRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'GET /appointments'
-      Target: !Sub 'integrations/${AppointmentIntegration}'
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref MediSlotLambdaAuthorizer
-
-  AppointmentByIdGetRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'GET /appointments/{appointment_id}'
-      Target: !Sub 'integrations/${AppointmentIntegration}'
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref MediSlotLambdaAuthorizer
-
-  AppointmentByIdPatchRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'PATCH /appointments/{appointment_id}'
-      Target: !Sub 'integrations/${RescheduleIntegration}'
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref MediSlotLambdaAuthorizer
-
-  AppointmentByIdDeleteRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'DELETE /appointments/{appointment_id}'
-      Target: !Sub 'integrations/${AppointmentIntegration}'
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref MediSlotLambdaAuthorizer
-
-  RescheduleRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'POST /appointments/{appointment_id}/reschedule'
-      Target: !Sub 'integrations/${RescheduleIntegration}'
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref MediSlotLambdaAuthorizer
-
-  AppointmentWaitlistRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'POST /appointments/{appointment_id}/waitlist'
-      Target: !Sub 'integrations/${WaitlistIntegration}'
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref MediSlotLambdaAuthorizer
-
-  AppointmentRefundRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'GET /appointments/{appointment_id}/refund'
-      Target: !Sub 'integrations/${AppointmentIntegration}'
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref MediSlotLambdaAuthorizer
-
-  WaitlistRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'ANY /waitlist'
-      Target: !Sub 'integrations/${WaitlistIntegration}'
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref MediSlotLambdaAuthorizer
-
-  NotificationRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'ANY /notifications'
-      Target: !Sub 'integrations/${NotificationIntegration}'
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref MediSlotLambdaAuthorizer
-
-  ReportingRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'GET /reports'
-      Target: !Sub 'integrations/${ReportingIntegration}'
-      AuthorizationType: CUSTOM
-      AuthorizerId: !Ref MediSlotLambdaAuthorizer
-
-  # API STAGE
-  # --------------------------------------------------
+      AuthorizationType: NONE
 
   ApiStage:
     Type: AWS::ApiGatewayV2::Stage
@@ -799,11 +168,6 @@ Resources:
       Tags:
         Project: !Ref ProjectName
         Environment: !Ref EnvironmentName
-
-
-  # --------------------------------------------------
-  # API GATEWAY LAMBDA PERMISSIONS
-  # --------------------------------------------------
 
   AuthorizerInvokePermission:
     Type: AWS::Lambda::Permission
@@ -821,118 +185,18 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/*/*'
 
-  DoctorSearchInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref DoctorSearchFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/*/*'
-
-  DoctorInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref DoctorFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/*/*'
-
-  PatientInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref PatientFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/*/*'
-
-  AvailabilityInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref AvailabilityFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/*/*'
-
-  BookingInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref BookingFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/*/*'
-
-  AppointmentInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref AppointmentFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/*/*'
-
-  RescheduleInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref RescheduleFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/*/*'
-
-  WaitlistInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref WaitlistFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/*/*'
-
-  NotificationInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref NotificationFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/*/*'
-
-  ReportingInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref ReportingFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/*/*'
-
-
 Outputs:
-
   ApiId:
     Description: MediSlot HTTP API ID
     Value: !Ref MediSlotHttpApi
-
   ApiEndpoint:
     Description: Base URL of the MediSlot API
     Value: !GetAtt MediSlotHttpApi.ApiEndpoint
-
   AuthRegisterEndpoint:
     Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/auth/register'
-
   AuthLoginEndpoint:
     Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/auth/login'
-
-  DoctorsEndpoint:
-    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/doctors'
-
-  SlotsEndpoint:
-    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/slots'
-
-  AppointmentsEndpoint:
-    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/appointments'
-
-  WaitlistEndpoint:
-    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/waitlist'
-
-  ReportsEndpoint:
-    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/reports'
-
-  ApiLambdaExecutionRoleArn:
-    Description: IAM role used by API Lambda functions
-    Value: !GetAtt ApiLambdaExecutionRole.Arn
+  AuthRefreshEndpoint:
+    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/auth/refresh'
+  AuthLogoutEndpoint:
+    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/auth/logout'

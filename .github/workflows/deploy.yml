@@ -95,6 +95,11 @@ jobs:
             exit 1
           fi
 
+          if [[ ! -f "requirements-auth.txt" ]]; then
+            echo "::error::requirements-auth.txt was not found."
+            exit 1
+          fi
+
           echo "Project: ${PROJECT_NAME}"
           echo "Environment: ${ENVIRONMENT_NAME}"
           echo "Region: ${AWS_REGION}"
@@ -479,42 +484,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           PACKAGE_DIR="${RUNNER_TEMP}/lambda-package"
           ZIP_FILE="${RUNNER_TEMP}/medislot-lambda.zip"
-
           rm -rf "${PACKAGE_DIR}"
           mkdir -p "${PACKAGE_DIR}"
-
-          # Install existing project dependencies (keeps requirements for all current Lambdas).
-          if [[ -f "requirements.txt" ]]; then
-            python -m pip install \
-              --requirement requirements.txt \
-              --target "${PACKAGE_DIR}"
-          fi
-
-          # Ensure authentication dependencies are included if absent from requirements.txt.
-          python -m pip install \
-            --upgrade \
-            "PyJWT>=2.8,<3" \
-            "bcrypt>=4.1,<6" \
-            "PyMySQL>=1.1,<2" \
-            --target "${PACKAGE_DIR}"
-
-          # Copy the application directory into the ZIP root.
-          cp -R application "${PACKAGE_DIR}/application"
-
-          # Create the ZIP with application/ at its root.
-          (
-            cd "${PACKAGE_DIR}"
-            zip -qr "${ZIP_FILE}" .
-          )
-
-          if [[ ! -s "${ZIP_FILE}" ]]; then
-            echo "::error::Lambda ZIP package was not created."
-            exit 1
-          fi
-
+          python -m pip install --upgrade pip
+          python -m pip install --requirement requirements-auth.txt --target "${PACKAGE_DIR}"
+          mkdir -p "${PACKAGE_DIR}/application/auth" "${PACKAGE_DIR}/application/authorizer" "${PACKAGE_DIR}/application/common" "${PACKAGE_DIR}/application/database"
+          cp application/__init__.py "${PACKAGE_DIR}/application/__init__.py"
+          cp application/auth/__init__.py application/auth/handler.py application/auth/register.py application/auth/login.py application/auth/refresh.py application/auth/logout.py "${PACKAGE_DIR}/application/auth/"
+          cp application/authorizer/__init__.py application/authorizer/handler.py "${PACKAGE_DIR}/application/authorizer/"
+          cp application/common/__init__.py application/common/http.py "${PACKAGE_DIR}/application/common/"
+          cp application/database/__init__.py application/database/connection.py "${PACKAGE_DIR}/application/database/"
+          ( cd "${PACKAGE_DIR}" && zip -qr "${ZIP_FILE}" . )
+          test -s "${ZIP_FILE}"
           echo "Lambda package created successfully."
 
       # ==========================================
@@ -567,14 +550,12 @@ jobs:
               "LambdaCodeS3Key=${LAMBDA_CODE_S3_KEY}" \
               "LambdaSubnetIds=${LAMBDA_SUBNET_1_ID},${LAMBDA_SUBNET_2_ID}" \
               "LambdaSecurityGroupId=${LAMBDA_SECURITY_GROUP_ID}" \
-              "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
-              "SlotCapacityTableName=${SLOT_CAPACITY_TABLE_NAME}" \
-              "WaitlistTableName=${WAITLIST_TABLE_NAME}" \
-              "NotificationDispatchTableName=${NOTIFICATION_DISPATCH_TABLE_NAME}" \
               "TokenDenylistTableName=${TOKEN_DENYLIST_TABLE_NAME}" \
               "RefreshTokenTableName=${REFRESH_TOKEN_TABLE_NAME}" \
               "DatabaseHost=${DB_HOST}" \
+              "DatabaseName=${DB_NAME}" \
               "DatabaseSecretArn=${DB_SECRET_ARN}" \
+              "JwtSecretParameterName=/${PROJECT_NAME}/${ENVIRONMENT_NAME}/auth/jwt-secret" \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
 

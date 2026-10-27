@@ -48,6 +48,31 @@ Parameters:
   NotificationDispatchTableName:
     Type: String
 
+  DatabaseSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret containing RDS credentials.
+
+  DatabaseHost:
+    Type: String
+    Description: Private RDS endpoint hostname.
+
+  DatabaseName:
+    Type: String
+    Default: medislot
+
+  JwtSecretParameterName:
+    Type: String
+    Default: /medislot/dev/auth/jwt-secret
+    Description: SSM SecureString parameter name containing the JWT signing secret.
+
+  RefreshTokenTableName:
+    Type: String
+    Description: Existing refresh-token DynamoDB table name.
+
+  TokenDenylistTableName:
+    Type: String
+    Description: Existing token-denylist DynamoDB table name.
+
 
 Resources:
 
@@ -111,7 +136,8 @@ Resources:
       FunctionName: !Sub '${ProjectName}-${EnvironmentName}-auth'
       Runtime: python3.12
       Handler: application.auth.handler.lambda_handler
-      Role: !GetAtt ApiLambdaExecutionRole.Arn
+      Role:
+        Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-AuthLambdaExecutionRoleArn'
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
@@ -120,10 +146,42 @@ Resources:
       Environment:
         Variables:
           ENVIRONMENT_NAME: !Ref EnvironmentName
+          JWT_SECRET_PARAMETER_NAME: !Ref JwtSecretParameterName
+          JWT_ISSUER: medislot
+          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+          DB_HOST: !Ref DatabaseHost
+          DB_NAME: !Ref DatabaseName
+          REFRESH_TOKEN_TABLE: !Ref RefreshTokenTableName
+          TOKEN_DENYLIST_TABLE: !Ref TokenDenylistTableName
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds
         SecurityGroupIds:
           - !Ref LambdaSecurityGroupId
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AuthorizerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-authorizer'
+      Runtime: python3.12
+      Handler: application.authorizer.handler.lambda_handler
+      Role:
+        Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-AuthorizerLambdaExecutionRoleArn'
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Timeout: 10
+      MemorySize: 128
+      Environment:
+        Variables:
+          ENVIRONMENT_NAME: !Ref EnvironmentName
+          JWT_SECRET_PARAMETER_NAME: !Ref JwtSecretParameterName
+          JWT_ISSUER: medislot
+          TOKEN_DENYLIST_TABLE: !Ref TokenDenylistTableName
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -414,6 +472,20 @@ Resources:
         Environment: !Ref EnvironmentName
 
 
+  MediSlotLambdaAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      Name: !Sub '${ProjectName}-${EnvironmentName}-lambda-authorizer'
+      AuthorizerType: REQUEST
+      AuthorizerUri: !Sub
+        - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerArn}/invocations'
+        - AuthorizerArn: !GetAtt AuthorizerFunction.Arn
+      IdentitySource:
+        - '$request.header.Authorization'
+      AuthorizerPayloadFormatVersion: '2.0'
+      EnableSimpleResponses: true
+
   # --------------------------------------------------
   # LAMBDA INTEGRATIONS
   # --------------------------------------------------
@@ -592,6 +664,8 @@ Resources:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'GET /patients'
       Target: !Sub 'integrations/${PatientIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
   PatientByIdRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -599,6 +673,8 @@ Resources:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'ANY /patients/{patient_id}'
       Target: !Sub 'integrations/${PatientIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
   AvailabilityRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -627,6 +703,8 @@ Resources:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'GET /appointments'
       Target: !Sub 'integrations/${AppointmentIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
   AppointmentByIdGetRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -634,6 +712,8 @@ Resources:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'GET /appointments/{appointment_id}'
       Target: !Sub 'integrations/${AppointmentIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
   AppointmentByIdPatchRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -641,6 +721,8 @@ Resources:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'PATCH /appointments/{appointment_id}'
       Target: !Sub 'integrations/${RescheduleIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
   AppointmentByIdDeleteRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -648,6 +730,8 @@ Resources:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'DELETE /appointments/{appointment_id}'
       Target: !Sub 'integrations/${AppointmentIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
   RescheduleRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -655,6 +739,8 @@ Resources:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'POST /appointments/{appointment_id}/reschedule'
       Target: !Sub 'integrations/${RescheduleIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
   AppointmentWaitlistRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -662,6 +748,8 @@ Resources:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'POST /appointments/{appointment_id}/waitlist'
       Target: !Sub 'integrations/${WaitlistIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
   AppointmentRefundRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -669,6 +757,8 @@ Resources:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'GET /appointments/{appointment_id}/refund'
       Target: !Sub 'integrations/${AppointmentIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
   WaitlistRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -676,6 +766,8 @@ Resources:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'ANY /waitlist'
       Target: !Sub 'integrations/${WaitlistIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
   NotificationRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -683,6 +775,8 @@ Resources:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'ANY /notifications'
       Target: !Sub 'integrations/${NotificationIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
   ReportingRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -690,6 +784,8 @@ Resources:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'GET /reports'
       Target: !Sub 'integrations/${ReportingIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
   # API STAGE
   # --------------------------------------------------
@@ -708,6 +804,14 @@ Resources:
   # --------------------------------------------------
   # API GATEWAY LAMBDA PERMISSIONS
   # --------------------------------------------------
+
+  AuthorizerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AuthorizerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/authorizers/${MediSlotLambdaAuthorizer}'
 
   AuthInvokePermission:
     Type: AWS::Lambda::Permission

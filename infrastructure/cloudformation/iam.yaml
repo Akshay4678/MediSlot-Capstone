@@ -1,100 +1,129 @@
+```yaml
 AWSTemplateFormatVersion: '2010-09-09'
-Description: MediSlot Milestone 2 IAM roles for authentication and RDS connectivity testing.
+
+Description: >
+  MediSlot IAM Stack - least-privilege execution roles for
+  authentication and JWT authorization Lambda functions.
+
 Parameters:
+  ProjectName:
+    Type: String
+    Default: medislot
+    AllowedPattern: '^[a-zA-Z0-9-]+$'
+
   EnvironmentName:
     Type: String
     Default: dev
-    AllowedValues: [dev, prod]
-  JwtSecretParameterArn:
-    Type: String
-  RefreshTokenTableArn:
-    Type: String
-  TokenDenylistTableArn:
-    Type: String
-  DatabaseSecretArn:
-    Type: String
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
 Resources:
-  AuthLambdaRole:
+  AuthLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${EnvironmentName}-medislot-auth-role'
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-auth-lambda-role'
+
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: {Service: lambda.amazonaws.com}
+            Principal:
+              Service: lambda.amazonaws.com
             Action: sts:AssumeRole
+
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
       Policies:
-        - PolicyName: AuthMilestone2Access
+        - PolicyName: ReadJwtSecret
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
-                Action: ssm:GetParameter
-                Resource: !Ref JwtSecretParameterArn
-              - Effect: Allow
-                Action: secretsmanager:GetSecretValue
-                Resource: !Ref DatabaseSecretArn
-              - Effect: Allow
-                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query]
-                Resource: !Ref RefreshTokenTableArn
-              - Effect: Allow
-                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem]
-                Resource: !Ref TokenDenylistTableArn
-  AuthorizerLambdaRole:
+              - Sid: ReadJwtSecretParameter
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub
+                  - 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPath}'
+                  - ParameterPath: !Sub '/${ProjectName}/${EnvironmentName}/auth/jwt-secret'
+
+              - Sid: DecryptJwtSecret
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
+
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AuthorizerLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${EnvironmentName}-medislot-authorizer-role'
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-authorizer-lambda-role'
+
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: {Service: lambda.amazonaws.com}
+            Principal:
+              Service: lambda.amazonaws.com
             Action: sts:AssumeRole
+
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
       Policies:
-        - PolicyName: AuthorizerMilestone2Access
+        - PolicyName: ReadJwtSecret
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
-                Action: ssm:GetParameter
-                Resource: !Ref JwtSecretParameterArn
-              - Effect: Allow
-                Action: dynamodb:GetItem
-                Resource: !Ref TokenDenylistTableArn
-  RdsConnectivityTestRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${EnvironmentName}-medislot-rds-test-role'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: {Service: lambda.amazonaws.com}
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-      Policies:
-        - PolicyName: ReadDbCredentials
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: secretsmanager:GetSecretValue
-                Resource: !Ref DatabaseSecretArn
+              - Sid: ReadJwtSecretParameter
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub
+                  - 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPath}'
+                  - ParameterPath: !Sub '/${ProjectName}/${EnvironmentName}/auth/jwt-secret'
+
+              - Sid: DecryptJwtSecret
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
+
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
 Outputs:
-  AuthLambdaRoleArn:
-    Value: !GetAtt AuthLambdaRole.Arn
-    Export: {Name: !Sub '${EnvironmentName}-MediSlot-AuthLambdaRoleArn'}
-  AuthorizerLambdaRoleArn:
-    Value: !GetAtt AuthorizerLambdaRole.Arn
-    Export: {Name: !Sub '${EnvironmentName}-MediSlot-AuthorizerLambdaRoleArn'}
-  RdsConnectivityTestRoleArn:
-    Value: !GetAtt RdsConnectivityTestRole.Arn
-    Export: {Name: !Sub '${EnvironmentName}-MediSlot-RdsConnectivityTestRoleArn'}
+  JwtSecretParameterName:
+    Description: >
+      SSM SecureString parameter name. Create the parameter separately;
+      its secret value is never exposed through CloudFormation outputs.
+    Value: !Sub '/${ProjectName}/${EnvironmentName}/auth/jwt-secret'
+
+  AuthLambdaExecutionRoleArn:
+    Description: Execution role ARN for authentication Lambda functions.
+    Value: !GetAtt AuthLambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-AuthLambdaExecutionRoleArn'
+
+  AuthorizerLambdaExecutionRoleArn:
+    Description: Execution role ARN for the JWT authorizer Lambda.
+    Value: !GetAtt AuthorizerLambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-AuthorizerLambdaExecutionRoleArn'
+```

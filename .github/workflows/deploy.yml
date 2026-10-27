@@ -383,6 +383,69 @@ jobs:
           echo "Database connection outputs loaded from Data Stack."
 
       # ==========================================
+      # STEP 9A: Create/update SSM Parameter Store values
+      # ==========================================
+      - name: Configure Systems Manager Parameter Store
+        shell: bash
+        env:
+          JWT_SECRET_INPUT: ${{ secrets.MEDISLOT_JWT_SECRET }}
+        run: |
+          set -euo pipefail
+
+          JWT_PARAMETER="/${PROJECT_NAME}/${ENVIRONMENT_NAME}/auth/jwt-secret"
+          DB_HOST_PARAMETER="/${PROJECT_NAME}/${ENVIRONMENT_NAME}/database/host"
+          DB_SECRET_ARN_PARAMETER="/${PROJECT_NAME}/${ENVIRONMENT_NAME}/database/secret-arn"
+          DB_NAME_PARAMETER="/${PROJECT_NAME}/${ENVIRONMENT_NAME}/database/name"
+
+          echo "Configuring non-secret database parameters in SSM Parameter Store..."
+
+          aws ssm put-parameter \
+            --name "${DB_HOST_PARAMETER}" \
+            --type String \
+            --value "${DB_HOST}" \
+            --overwrite \
+            --region "${AWS_REGION}" >/dev/null
+
+          aws ssm put-parameter \
+            --name "${DB_SECRET_ARN_PARAMETER}" \
+            --type String \
+            --value "${DB_SECRET_ARN}" \
+            --overwrite \
+            --region "${AWS_REGION}" >/dev/null
+
+          aws ssm put-parameter \
+            --name "${DB_NAME_PARAMETER}" \
+            --type String \
+            --value "${DB_NAME}" \
+            --overwrite \
+            --region "${AWS_REGION}" >/dev/null
+
+          # Preserve an existing JWT secret so deployments do not invalidate
+          # tokens. Create it only when the parameter does not yet exist.
+          if aws ssm get-parameter \
+              --name "${JWT_PARAMETER}" \
+              --region "${AWS_REGION}" >/dev/null 2>&1; then
+            echo "JWT secret already exists; preserving the existing value."
+          else
+            if [[ -z "${JWT_SECRET_INPUT:-}" ]]; then
+              echo "::error::JWT parameter is missing. Add MEDISLOT_JWT_SECRET as a GitHub Actions environment secret for '${ENVIRONMENT_NAME}', then rerun."
+              exit 1
+            fi
+
+            aws ssm put-parameter \
+              --name "${JWT_PARAMETER}" \
+              --type SecureString \
+              --value "${JWT_SECRET_INPUT}" \
+              --description "MediSlot ${ENVIRONMENT_NAME} JWT signing secret" \
+              --region "${AWS_REGION}" >/dev/null
+
+            echo "Created JWT SecureString parameter."
+          fi
+
+          echo "SSM Parameter Store configuration completed."
+          echo "JWT secret value was not printed."
+
+      # ==========================================
       # STEP 10: Deploy Authentication Stack
       # ==========================================
       - name: Deploy Authentication Stack

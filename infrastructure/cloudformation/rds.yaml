@@ -428,6 +428,18 @@ Outputs:
     Export:
       Name: !Sub '${ProjectName}-${EnvironmentName}-DBSecretArn'
 
+  SSMDatabaseHostParameterName:
+    Description: SSM Parameter Store path populated by the deployment workflow with the RDS endpoint.
+    Value: !Sub '/${ProjectName}/${EnvironmentName}/database/host'
+
+  SSMDatabaseSecretArnParameterName:
+    Description: SSM Parameter Store path populated by the deployment workflow with the database secret ARN.
+    Value: !Sub '/${ProjectName}/${EnvironmentName}/database/secret-arn'
+
+  SSMDatabaseNameParameterName:
+    Description: SSM Parameter Store path populated by the deployment workflow with the database name.
+    Value: !Sub '/${ProjectName}/${EnvironmentName}/database/name'
+
   IdempotencyTableName:
     Description: DynamoDB idempotency table name.
     Value: !Ref IdempotencyTable

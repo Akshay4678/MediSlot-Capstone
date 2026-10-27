@@ -387,8 +387,6 @@ jobs:
       # ==========================================
       - name: Configure Systems Manager Parameter Store
         shell: bash
-        env:
-          JWT_SECRET_INPUT: ${{ secrets.MEDISLOT_JWT_SECRET }}
         run: |
           set -euo pipefail
 
@@ -427,19 +425,19 @@ jobs:
               --region "${AWS_REGION}" >/dev/null 2>&1; then
             echo "JWT secret already exists; preserving the existing value."
           else
-            if [[ -z "${JWT_SECRET_INPUT:-}" ]]; then
-              echo "::error::JWT parameter is missing. Add MEDISLOT_JWT_SECRET as a GitHub Actions environment secret for '${ENVIRONMENT_NAME}', then rerun."
-              exit 1
-            fi
+            # Generate a strong secret only on first deployment. The parameter
+            # is preserved on later deployments so existing JWTs remain valid.
+            JWT_SECRET_GENERATED="$(openssl rand -hex 32)"
 
             aws ssm put-parameter \
               --name "${JWT_PARAMETER}" \
               --type SecureString \
-              --value "${JWT_SECRET_INPUT}" \
+              --value "${JWT_SECRET_GENERATED}" \
               --description "MediSlot ${ENVIRONMENT_NAME} JWT signing secret" \
               --region "${AWS_REGION}" >/dev/null
 
-            echo "Created JWT SecureString parameter."
+            unset JWT_SECRET_GENERATED
+            echo "Created JWT SecureString parameter using a generated secret."
           fi
 
           echo "SSM Parameter Store configuration completed."

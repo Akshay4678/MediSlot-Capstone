@@ -493,8 +493,8 @@ jobs:
           mkdir -p "${PACKAGE_DIR}/application/auth" "${PACKAGE_DIR}/application/authorizer" "${PACKAGE_DIR}/application/common" "${PACKAGE_DIR}/application/database"
           cp application/__init__.py "${PACKAGE_DIR}/application/__init__.py"
           cp application/auth/__init__.py application/auth/handler.py application/auth/register.py application/auth/login.py application/auth/refresh.py application/auth/logout.py "${PACKAGE_DIR}/application/auth/"
-          cp application/authorizer/__init__.py application/authorizer/handler.py "${PACKAGE_DIR}/application/authorizer/"
-          cp application/common/__init__.py application/common/http.py "${PACKAGE_DIR}/application/common/"
+          cp application/authorizer/__init__.py application/authorizer/lambda_handlerhandler.py "${PACKAGE_DIR}/application/authorizer/"
+          cp application/common/__init__.py application/common/auth_utils.py application/common/http.py "${PACKAGE_DIR}/application/common/"
           cp application/database/__init__.py application/database/connection.py "${PACKAGE_DIR}/application/database/"
           ( cd "${PACKAGE_DIR}" && zip -qr "${ZIP_FILE}" . )
           test -s "${ZIP_FILE}"

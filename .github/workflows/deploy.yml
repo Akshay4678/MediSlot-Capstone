@@ -361,7 +361,34 @@ jobs:
               "EnvironmentName=${ENVIRONMENT_NAME}" \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
+      
+      
+      
+      
+      # ==========================================
+      # Deploy Authentication DynamoDB Tables
+      # ==========================================
+      - name: Deploy Authentication DynamoDB Tables
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-dynamodb"
+
+          echo "Deploying DynamoDB Stack: ${STACK_NAME}"
+
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/dynamodb.yaml \
+            --stack-name "${STACK_NAME}" \
+            --parameter-overrides \
+              "EnvironmentName=${ENVIRONMENT_NAME}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
+
+          echo "Authentication DynamoDB tables deployed."
+
+
+          
       # ==========================================
       # STEP 11: Package Python Lambda code
       # ==========================================

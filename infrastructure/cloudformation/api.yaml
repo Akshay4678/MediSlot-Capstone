@@ -69,8 +69,10 @@ Resources:
         SubnetIds: !Ref LambdaSubnetIds
         SecurityGroupIds: [!Ref LambdaSecurityGroupId]
       Tags:
-        Project: !Ref ProjectName
-        Environment: !Ref EnvironmentName
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
   AuthorizerFunction:
     Type: AWS::Lambda::Function
@@ -92,8 +94,10 @@ Resources:
           JWT_ISSUER: medislot
           TOKEN_DENYLIST_TABLE: !Ref TokenDenylistTableName
       Tags:
-        Project: !Ref ProjectName
-        Environment: !Ref EnvironmentName
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
   MediSlotHttpApi:
     Type: AWS::ApiGatewayV2::Api

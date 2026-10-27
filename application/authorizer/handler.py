@@ -1,78 +1,203 @@
-"""API Gateway HTTP API Lambda authorizer using HS256 JWTs.
-Configure JWT_SECRET_PARAMETER_NAME, TOKEN_DENYLIST_TABLE, JWT_ISSUER.
-Expected DynamoDB denylist partition key: jti (String).
 """
-import base64, hashlib, hmac, json, os, time
+MediSlot API Gateway Lambda Authorizer
+
+Verifies JWT access tokens and checks whether they have been revoked.
+
+Required environment variables:
+    JWT_SECRET_PARAMETER_NAME
+    TOKEN_DENYLIST_TABLE
+    JWT_ISSUER (optional; defaults to "medislot")
+
+DynamoDB:
+    Token denylist table partition key: jti (String)
+"""
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import time
+
 import boto3
 
+
+# AWS clients
 ssm = boto3.client("ssm")
-ddb = boto3.resource("dynamodb")
+dynamodb = boto3.resource("dynamodb")
 
-def _b64decode(value):
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
-def _secret():
-    name = os.environ["JWT_SECRET_PARAMETER_NAME"]
-    return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"].encode()
+def decode_base64(value):
+    """Decode a URL-safe Base64 string."""
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(value + padding)
 
-def _denylisted(jti):
+
+def get_jwt_secret():
+    """Read the JWT signing secret from AWS Systems Manager Parameter Store."""
+    parameter_name = os.environ["JWT_SECRET_PARAMETER_NAME"]
+
+    parameter = ssm.get_parameter(
+        Name=parameter_name,
+        WithDecryption=True
+    )
+
+    return parameter["Parameter"]["Value"].encode()
+
+
+def is_token_revoked(token_id):
+    """Check whether the token ID exists in the denylist and has not expired."""
     table_name = os.environ.get("TOKEN_DENYLIST_TABLE")
+
     if not table_name:
         raise RuntimeError("TOKEN_DENYLIST_TABLE is not configured")
-    item = ddb.Table(table_name).get_item(Key={"jti":jti}, ConsistentRead=True).get("Item")
-    return bool(item and int(item.get("expires_at",0)) > int(time.time()))
 
-def _verify(token):
-    parts = token.split(".")
-    if len(parts) != 3:
+    table = dynamodb.Table(table_name)
+
+    result = table.get_item(
+        Key={"jti": token_id},
+        ConsistentRead=True
+    )
+
+    item = result.get("Item")
+
+    if not item:
+        return False
+
+    expiry_time = int(item.get("expires_at", 0))
+    current_time = int(time.time())
+
+    return expiry_time > current_time
+
+
+def verify_access_token(token):
+    """Verify the JWT signature, expiry, issuer, and required claims."""
+
+    # A JWT must contain three parts.
+    token_parts = token.split(".")
+
+    if len(token_parts) != 3:
         raise ValueError("Malformed JWT")
-    signing = f"{parts[0]}.{parts[1]}".encode()
-    expected = hmac.new(_secret(), signing, hashlib.sha256).digest()
-    supplied = _b64decode(parts[2])
-    if not hmac.compare_digest(expected,supplied):
+
+    header_part, payload_part, signature_part = token_parts
+
+    # Re-create the signature using our stored secret.
+    message = f"{header_part}.{payload_part}".encode()
+
+    expected_signature = hmac.new(
+        get_jwt_secret(),
+        message,
+        hashlib.sha256
+    ).digest()
+
+    supplied_signature = decode_base64(signature_part)
+
+    if not hmac.compare_digest(expected_signature, supplied_signature):
         raise ValueError("Invalid signature")
-    header = json.loads(_b64decode(parts[0]))
-    claims = json.loads(_b64decode(parts[1]))
+
+    # Decode the JWT header and payload.
+    header = json.loads(decode_base64(header_part))
+    claims = json.loads(decode_base64(payload_part))
+
+    # Only HS256-signed tokens are accepted.
     if header.get("alg") != "HS256":
         raise ValueError("Unsupported JWT algorithm")
-    now = int(time.time())
-    if int(claims.get("exp",0)) <= now or int(claims.get("iat",0)) > now + 60:
+
+    # Check token timestamps.
+    current_time = int(time.time())
+    expiry_time = int(claims.get("exp", 0))
+    issued_time = int(claims.get("iat", 0))
+
+    if expiry_time <= current_time or issued_time > current_time + 60:
         raise ValueError("Expired or invalid token time")
-    if claims.get("iss") != os.environ.get("JWT_ISSUER","medislot"):
+
+    # Check who issued the token.
+    expected_issuer = os.environ.get("JWT_ISSUER", "medislot")
+
+    if claims.get("iss") != expected_issuer:
         raise ValueError("Invalid issuer")
-    if not claims.get("sub") or claims.get("role") not in ("patient","doctor","admin") or not claims.get("jti"):
+
+    # Check that all required claims are present and valid.
+    user_id = claims.get("sub")
+    user_role = claims.get("role")
+    token_id = claims.get("jti")
+
+    allowed_roles = ("patient", "doctor", "admin")
+
+    if not user_id or user_role not in allowed_roles or not token_id:
         raise ValueError("Required claims missing")
-    if _denylisted(claims["jti"]):
+
+    # Reject tokens that have been revoked.
+    if is_token_revoked(token_id):
         raise ValueError("Token revoked")
+
     return claims
 
+
 def lambda_handler(event, context):
+    """Entry point called by API Gateway."""
+
+    # Read the Authorization header.
     headers = event.get("headers") or {}
-    auth = headers.get("authorization") or headers.get("Authorization") or ""
-    if not auth.lower().startswith("bearer "):
+
+    authorization = (
+        headers.get("authorization")
+        or headers.get("Authorization")
+        or ""
+    )
+
+    # The request must contain a Bearer token.
+    if not authorization.lower().startswith("bearer "):
         raise Exception("Unauthorized")
+
+    access_token = authorization.split(None, 1)[1].strip()
+
+    # Validate the token.
     try:
-        claims = _verify(auth.split(None,1)[1].strip())
-    except Exception as exc:
-        print(f"Authorizer rejected token: {type(exc).__name__}")
+        claims = verify_access_token(access_token)
+
+    except Exception as error:
+        print(f"Authorizer rejected token: {type(error).__name__}")
         raise Exception("Unauthorized")
-    # HTTP API Lambda authorizer simple response format; enable simple responses in API config.
+
+    user_id = str(claims["sub"])
+    user_role = str(claims["role"])
+    token_id = str(claims["jti"])
+
+    # HTTP API using the simple Lambda authorizer response format.
     if event.get("version") == "2.0":
         return {
             "isAuthorized": True,
             "context": {
-                "userId": str(claims["sub"]),
-                "role": str(claims["role"]),
-                "jti": str(claims["jti"])
+                "userId": user_id,
+                "role": user_role,
+                "jti": token_id
             }
         }
-    # REST API / IAM-policy authorizer response format.
-    method_arn = event.get("methodArn") or event.get("routeArn","*")
-    resource_arn = method_arn.rsplit("/",2)[0] + "/*/*" if "/" in method_arn else "*"
+
+    # REST API or IAM-policy authorizer response format.
+    method_arn = event.get("methodArn") or event.get("routeArn", "*")
+
+    if "/" in method_arn:
+        resource_arn = method_arn.rsplit("/", 2)[0] + "/*/*"
+    else:
+        resource_arn = "*"
+
     return {
-        "principalId":str(claims["sub"]),
-        "policyDocument":{"Version":"2012-10-17","Statement":[{
-            "Action":"execute-api:Invoke","Effect":"Allow","Resource":resource_arn
-        }]},
-        "context":{"userId":str(claims["sub"]),"role":str(claims["role"]),"jti":str(claims["jti"])}
+        "principalId": user_id,
+        "policyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Action": "execute-api:Invoke",
+                    "Effect": "Allow",
+                    "Resource": resource_arn
+                }
+            ]
+        },
+        "context": {
+            "userId": user_id,
+            "role": user_role,
+            "jti": token_id
+        }
     }

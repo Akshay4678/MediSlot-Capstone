@@ -56,13 +56,6 @@ jobs:
         shell: bash
         env:
           AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-          LAMBDA_SUBNET_1_ID: ${{ vars.LAMBDA_SUBNET_1_ID }}
-          LAMBDA_SUBNET_2_ID: ${{ vars.LAMBDA_SUBNET_2_ID }}
-          LAMBDA_SECURITY_GROUP_ID: ${{ vars.LAMBDA_SECURITY_GROUP_ID }}
-          IDEMPOTENCY_TABLE_NAME: ${{ vars.IDEMPOTENCY_TABLE_NAME }}
-          SLOT_CAPACITY_TABLE_NAME: ${{ vars.SLOT_CAPACITY_TABLE_NAME }}
-          WAITLIST_TABLE_NAME: ${{ vars.WAITLIST_TABLE_NAME }}
-          NOTIFICATION_DISPATCH_TABLE_NAME: ${{ vars.NOTIFICATION_DISPATCH_TABLE_NAME }}
         run: |
           set -euo pipefail
 
@@ -100,35 +93,6 @@ jobs:
             echo "::error::The application/ directory was not found."
             exit 1
           fi
-
-          # Required Milestone 2 auth files. Other existing application folders are retained.
-          for source_file in \
-            application/auth/register.py \
-            application/auth/login.py \
-            application/auth/refresh.py \
-            application/auth/logout.py \
-            application/authorizer/lambda_handler.py
-          do
-            if [[ ! -f "${source_file}" ]]; then
-              echo "::error::Required authentication file not found: ${source_file}"
-              exit 1
-            fi
-          done
-
-          for name in \
-            LAMBDA_SUBNET_1_ID \
-            LAMBDA_SUBNET_2_ID \
-            LAMBDA_SECURITY_GROUP_ID \
-            IDEMPOTENCY_TABLE_NAME \
-            SLOT_CAPACITY_TABLE_NAME \
-            WAITLIST_TABLE_NAME \
-            NOTIFICATION_DISPATCH_TABLE_NAME
-          do
-            if [[ -z "${!name:-}" ]]; then
-              echo "::error::Set the GitHub Actions variable ${name}."
-              exit 1
-            fi
-          done
 
           echo "Project: ${PROJECT_NAME}"
           echo "Environment: ${ENVIRONMENT_NAME}"
@@ -218,12 +182,14 @@ jobs:
               --region "${AWS_REGION}"
           }
 
-          VPC_ID="$(get_output VpcId)"
           DB_SUBNET_1="$(get_output PrivateDbSubnet1Id)"
           DB_SUBNET_2="$(get_output PrivateDbSubnet2Id)"
           DB_SECURITY_GROUP_ID="$(get_output DatabaseSecurityGroupId)"
+          LAMBDA_SUBNET_1_ID="$(get_output PrivateAppSubnet1Id)"
+          LAMBDA_SUBNET_2_ID="$(get_output PrivateAppSubnet2Id)"
+          LAMBDA_SECURITY_GROUP_ID="$(get_output AppSecurityGroupId)"
 
-          for name in VPC_ID DB_SUBNET_1 DB_SUBNET_2 DB_SECURITY_GROUP_ID; do
+          for name in DB_SUBNET_1 DB_SUBNET_2 DB_SECURITY_GROUP_ID LAMBDA_SUBNET_1_ID LAMBDA_SUBNET_2_ID LAMBDA_SECURITY_GROUP_ID; do
             value="${!name}"
 
             if [[ -z "${value}" || "${value}" == "None" ]]; then
@@ -233,10 +199,12 @@ jobs:
           done
 
           {
-            echo "VPC_ID=${VPC_ID}"
             echo "DB_SUBNET_1=${DB_SUBNET_1}"
             echo "DB_SUBNET_2=${DB_SUBNET_2}"
             echo "DB_SECURITY_GROUP_ID=${DB_SECURITY_GROUP_ID}"
+            echo "LAMBDA_SUBNET_1_ID=${LAMBDA_SUBNET_1_ID}"
+            echo "LAMBDA_SUBNET_2_ID=${LAMBDA_SUBNET_2_ID}"
+            echo "LAMBDA_SECURITY_GROUP_ID=${LAMBDA_SECURITY_GROUP_ID}"
           } >> "${GITHUB_ENV}"
 
           echo "Database network configuration loaded."
@@ -248,7 +216,6 @@ jobs:
         shell: bash
         env:
           DB_USERNAME_INPUT: ${{ vars.MEDISLOT_DB_USERNAME }}
-          DB_PASSWORD_INPUT: ${{ secrets.MEDISLOT_DB_PASSWORD }}
         run: |
           set -euo pipefail
 
@@ -256,11 +223,6 @@ jobs:
 
           DB_USERNAME="${DB_USERNAME_INPUT:-medislot_admin}"
           DB_NAME="medislot"
-
-          if [[ -z "${DB_PASSWORD_INPUT:-}" ]]; then
-            echo "::error::Set the GitHub Actions secret MEDISLOT_DB_PASSWORD (minimum 16 characters)."
-            exit 1
-          fi
 
           if [[ "${ENVIRONMENT_NAME}" == "prod" ]]; then
             DELETION_PROTECTION=true
@@ -276,13 +238,11 @@ jobs:
             --parameter-overrides \
               "ProjectName=${PROJECT_NAME}" \
               "EnvironmentName=${ENVIRONMENT_NAME}" \
-              "VpcId=${VPC_ID}" \
               "PrivateDbSubnet1Id=${DB_SUBNET_1}" \
               "PrivateDbSubnet2Id=${DB_SUBNET_2}" \
               "DatabaseSecurityGroupId=${DB_SECURITY_GROUP_ID}" \
               "DBName=${DB_NAME}" \
               "DBUsername=${DB_USERNAME}" \
-              "DBPassword=${DB_PASSWORD_INPUT}" \
               "EnableDeletionProtection=${DELETION_PROTECTION}" \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
@@ -313,26 +273,21 @@ jobs:
             --bucket "${LAMBDA_ARTIFACTS_BUCKET}" \
             --region "${AWS_REGION}"
 
-          # Read database connection outputs required by api.yaml.
-          DB_HOST="$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
-            --query "Stacks[0].Outputs[?OutputKey=='DBEndpointAddress'].OutputValue | [0]" \
-            --output text \
-            --region "${AWS_REGION}")"
+          # Read the DynamoDB table names from the Data Stack outputs.
+          get_data_output() {
+            aws cloudformation describe-stacks \
+              --stack-name "${STACK_NAME}" \
+              --query "Stacks[0].Outputs[?OutputKey=='${1}'].OutputValue | [0]" \
+              --output text \
+              --region "${AWS_REGION}"
+          }
 
-          DB_NAME="$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
-            --query "Stacks[0].Outputs[?OutputKey=='DBName'].OutputValue | [0]" \
-            --output text \
-            --region "${AWS_REGION}")"
+          IDEMPOTENCY_TABLE_NAME="$(get_data_output IdempotencyTableName)"
+          SLOT_CAPACITY_TABLE_NAME="$(get_data_output SlotCapacityTableName)"
+          WAITLIST_TABLE_NAME="$(get_data_output WaitlistTableName)"
+          NOTIFICATION_DISPATCH_TABLE_NAME="$(get_data_output NotificationDispatchTableName)"
 
-          DB_SECRET_ARN="$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
-            --query "Stacks[0].Outputs[?OutputKey=='DBSecretArn'].OutputValue | [0]" \
-            --output text \
-            --region "${AWS_REGION}")"
-
-          for name in DB_HOST DB_NAME DB_SECRET_ARN; do
+          for name in IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME; do
             value="${!name}"
             if [[ -z "${value}" || "${value}" == "None" ]]; then
               echo "::error::Required Data Stack output '${name}' is missing from ${STACK_NAME}."
@@ -342,13 +297,14 @@ jobs:
 
           {
             echo "LAMBDA_ARTIFACTS_BUCKET=${LAMBDA_ARTIFACTS_BUCKET}"
-            echo "DB_HOST=${DB_HOST}"
-            echo "DB_NAME=${DB_NAME}"
-            echo "DB_SECRET_ARN=${DB_SECRET_ARN}"
+            echo "IDEMPOTENCY_TABLE_NAME=${IDEMPOTENCY_TABLE_NAME}"
+            echo "SLOT_CAPACITY_TABLE_NAME=${SLOT_CAPACITY_TABLE_NAME}"
+            echo "WAITLIST_TABLE_NAME=${WAITLIST_TABLE_NAME}"
+            echo "NOTIFICATION_DISPATCH_TABLE_NAME=${NOTIFICATION_DISPATCH_TABLE_NAME}"
           } >> "${GITHUB_ENV}"
 
           echo "Using artifacts bucket from Data Stack: ${LAMBDA_ARTIFACTS_BUCKET}"
-          echo "Database connection outputs loaded from Data Stack."
+          echo "DynamoDB table names loaded from Data Stack."
 
       # ==========================================
       # STEP 10: Deploy Authentication Stack
@@ -385,28 +341,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          sudo apt-get update
-          sudo apt-get install -y zip
-
           PACKAGE_DIR="${RUNNER_TEMP}/lambda-package"
           ZIP_FILE="${RUNNER_TEMP}/medislot-lambda.zip"
 
           rm -rf "${PACKAGE_DIR}"
           mkdir -p "${PACKAGE_DIR}"
 
-          # Install project dependencies and explicitly include the auth dependencies.
-          # Keep the existing requirements.txt so later-milestone handlers remain packaged.
+          # Install Python dependencies when requirements.txt exists.
           if [[ -f "requirements.txt" ]]; then
             python -m pip install \
               --requirement requirements.txt \
               --target "${PACKAGE_DIR}"
           fi
-
-          python -m pip install \
-            "PyJWT>=2.8,<3" \
-            "bcrypt>=4.1,<6" \
-            "PyMySQL>=1.1,<2" \
-            --target "${PACKAGE_DIR}"
 
           # Copy the application directory into the ZIP root.
           cp -R application "${PACKAGE_DIR}/application"
@@ -456,15 +402,6 @@ jobs:
       # ==========================================
       - name: Deploy API and Lambda Stack
         shell: bash
-        env:
-          LAMBDA_SUBNET_1_ID: ${{ vars.LAMBDA_SUBNET_1_ID }}
-          LAMBDA_SUBNET_2_ID: ${{ vars.LAMBDA_SUBNET_2_ID }}
-          LAMBDA_SECURITY_GROUP_ID: ${{ vars.LAMBDA_SECURITY_GROUP_ID }}
-
-          IDEMPOTENCY_TABLE_NAME: ${{ vars.IDEMPOTENCY_TABLE_NAME }}
-          SLOT_CAPACITY_TABLE_NAME: ${{ vars.SLOT_CAPACITY_TABLE_NAME }}
-          WAITLIST_TABLE_NAME: ${{ vars.WAITLIST_TABLE_NAME }}
-          NOTIFICATION_DISPATCH_TABLE_NAME: ${{ vars.NOTIFICATION_DISPATCH_TABLE_NAME }}
         run: |
           set -euo pipefail
 
@@ -483,9 +420,6 @@ jobs:
               "LambdaCodeS3Key=${LAMBDA_CODE_S3_KEY}" \
               "LambdaSubnetIds=${LAMBDA_SUBNET_1_ID},${LAMBDA_SUBNET_2_ID}" \
               "LambdaSecurityGroupId=${LAMBDA_SECURITY_GROUP_ID}" \
-              "DatabaseSecretArn=${DB_SECRET_ARN}" \
-              "DatabaseHost=${DB_HOST}" \
-              "DatabaseName=${DB_NAME}" \
               "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
               "SlotCapacityTableName=${SLOT_CAPACITY_TABLE_NAME}" \
               "WaitlistTableName=${WAITLIST_TABLE_NAME}" \
@@ -522,16 +456,24 @@ jobs:
           echo "Environment: ${ENVIRONMENT_NAME}"
           echo "API endpoint: ${API_ENDPOINT}"
           echo ""
-          echo "Configured routes include (confirm exact routes in api.yaml):"
-          echo "POST ${API_ENDPOINT}/auth"
+          echo "Configured routes include:"
           echo "POST ${API_ENDPOINT}/auth/register"
           echo "POST ${API_ENDPOINT}/auth/login"
           echo "POST ${API_ENDPOINT}/auth/refresh"
           echo "POST ${API_ENDPOINT}/auth/logout"
-          echo "GET  ${API_ENDPOINT}/doctors/search"
-          echo "GET  ${API_ENDPOINT}/availability"
-          echo "POST ${API_ENDPOINT}/bookings"
+          echo "GET  ${API_ENDPOINT}/doctors"
+          echo "GET  ${API_ENDPOINT}/doctors/{doctor_id}"
+          echo "GET  ${API_ENDPOINT}/hospitals"
+          echo "GET  ${API_ENDPOINT}/specialisations"
+          echo "GET  ${API_ENDPOINT}/slots"
+          echo "POST ${API_ENDPOINT}/appointments"
           echo "GET  ${API_ENDPOINT}/appointments"
+          echo "GET  ${API_ENDPOINT}/appointments/{appointment_id}"
+          echo "PATCH ${API_ENDPOINT}/appointments/{appointment_id}"
+          echo "DELETE ${API_ENDPOINT}/appointments/{appointment_id}"
+          echo "POST ${API_ENDPOINT}/appointments/{appointment_id}/reschedule"
+          echo "POST ${API_ENDPOINT}/appointments/{appointment_id}/waitlist"
+          echo "GET  ${API_ENDPOINT}/appointments/{appointment_id}/refund"
           echo "GET  ${API_ENDPOINT}/waitlist"
           echo "GET  ${API_ENDPOINT}/reports"
 

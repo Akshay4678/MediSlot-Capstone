@@ -1,1 +1,190 @@
 
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MediSlot application API and Lambda entry point. Extend routes/functions to match the handlers in your repository.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  ArtifactBucket:
+    Type: String
+    Description: Private S3 bucket containing the zipped Python Lambda deployment package.
+  ArtifactKey:
+    Type: String
+    Description: S3 key for the Lambda deployment package, e.g. medislot/application.zip
+  ApplicationLambdaRoleArn:
+    Type: String
+    Description: ARN output from the IAM stack.
+  AuthorizerLambdaRoleArn:
+    Type: String
+    Description: ARN output from the IAM stack.
+  WaitlistTableName:
+    Type: String
+    Description: DynamoDB Waitlist table name output from the DynamoDB stack.
+  WaitlistHandler:
+    Type: String
+    Default: application.handlers.waitlist_lambda.lambda_handler
+    Description: Python handler path. Change this to match the actual file in your package.
+  AuthorizerHandler:
+    Type: String
+    Default: application.handlers.authorizer_lambda.lambda_handler
+    Description: Python handler path. Change this to match the actual file in your package.
+  JwtSecretParameterName:
+    Type: String
+    Default: /medislot/dev/jwt-secret
+    Description: SSM parameter name used by your authorizer; align with your code.
+
+Resources:
+  MediSlotRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${EnvironmentName}-medislot-api'
+      EndpointConfiguration:
+        Types: [REGIONAL]
+
+  WaitlistResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ParentId: !GetAtt MediSlotRestApi.RootResourceId
+      PathPart: waitlist
+
+  WaitlistFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${EnvironmentName}-medislot-waitlist'
+      Runtime: python3.12
+      Handler: !Ref WaitlistHandler
+      Role: !Ref ApplicationLambdaRoleArn
+      Timeout: 15
+      MemorySize: 256
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref ArtifactKey
+      Environment:
+        Variables:
+          ENVIRONMENT_NAME: !Ref EnvironmentName
+          WAITLIST_TABLE_NAME: !Ref WaitlistTableName
+          WAITLIST_GSI_NAME: user_id-index
+
+  WaitlistAuthorizerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${EnvironmentName}-medislot-authorizer'
+      Runtime: python3.12
+      Handler: !Ref AuthorizerHandler
+      Role: !Ref AuthorizerLambdaRoleArn
+      Timeout: 10
+      MemorySize: 256
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref ArtifactKey
+      Environment:
+        Variables:
+          ENVIRONMENT_NAME: !Ref EnvironmentName
+          JWT_SECRET_PARAMETER_NAME: !Ref JwtSecretParameterName
+
+  WaitlistAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: !Sub '${EnvironmentName}-medislot-authorizer'
+      RestApiId: !Ref MediSlotRestApi
+      Type: TOKEN
+      IdentitySource: method.request.header.Authorization
+      AuthorizerUri: !Sub
+        - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
+        - FunctionArn: !GetAtt WaitlistAuthorizerFunction.Arn
+      AuthorizerResultTtlInSeconds: 0
+
+  WaitlistPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ResourceId: !Ref WaitlistResource
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref WaitlistAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
+          - FunctionArn: !GetAtt WaitlistFunction.Arn
+      MethodResponses:
+        - StatusCode: '200'
+
+  WaitlistGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ResourceId: !Ref WaitlistResource
+      HttpMethod: GET
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref WaitlistAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
+          - FunctionArn: !GetAtt WaitlistFunction.Arn
+
+  WaitlistDeleteMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ResourceId: !Ref WaitlistResource
+      HttpMethod: DELETE
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref WaitlistAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
+          - FunctionArn: !GetAtt WaitlistFunction.Arn
+
+  WaitlistLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WaitlistFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotRestApi}/*/*/waitlist'
+
+  AuthorizerLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WaitlistAuthorizerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotRestApi}/authorizers/${WaitlistAuthorizer}'
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - WaitlistPostMethod
+      - WaitlistGetMethod
+      - WaitlistDeleteMethod
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      Description: !Sub 'MediSlot ${EnvironmentName} deployment'
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: !Ref EnvironmentName
+
+Outputs:
+  ApiId:
+    Value: !Ref MediSlotRestApi
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-ApiId'
+  ApiBaseUrl:
+    Value: !Sub 'https://${MediSlotRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${EnvironmentName}'
+  WaitlistFunctionName:
+    Value: !Ref WaitlistFunction
+  WaitlistFunctionArn:
+    Value: !GetAtt WaitlistFunction.Arn

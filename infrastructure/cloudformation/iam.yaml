@@ -1,1 +1,184 @@
 
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MediSlot IAM roles for Lambda workloads. Deploy after the data resources exist.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  DynamoDBTableArnPrefix:
+    Type: String
+    Description: ARN prefix for this environment's MediSlot DynamoDB tables, e.g. arn:aws:dynamodb:ap-south-1:123456789012:table/dev-medislot-
+  DatabaseSecretArn:
+    Type: String
+    Default: ''
+    Description: Optional Secrets Manager ARN for the RDS credentials secret.
+  SSMParameterArnPrefix:
+    Type: String
+    Description: ARN prefix for MediSlot SSM parameters, e.g. arn:aws:ssm:ap-south-1:123456789012:parameter/medislot/dev/
+  ArtifactsBucketArn:
+    Type: String
+    Default: '*'
+    Description: Set to the ARN of the private artifacts bucket when Lambda code reads artifacts from S3; otherwise leave as *.
+
+Resources:
+  ApplicationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-medislot-application-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: MediSlotApplicationAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DynamoDBReadWrite
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:TransactGetItems
+                  - dynamodb:TransactWriteItems
+                Resource:
+                  - !Sub '${DynamoDBTableArnPrefix}*'
+                  - !Sub '${DynamoDBTableArnPrefix}*/index/*'
+              - Sid: ReadApplicationParameters
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub '${SSMParameterArnPrefix}*'
+              - Sid: ReadDatabaseSecret
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !If
+                  - HasDatabaseSecret
+                  - !Ref DatabaseSecretArn
+                  - !Ref AWS::NoValue
+              - Sid: PublishEvents
+                Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: '*'
+              - Sid: PublishNotifications
+                Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: '*'
+              - Sid: SendToQueues
+                Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:GetQueueUrl
+                  - sqs:GetQueueAttributes
+                Resource: '*'
+
+  AuthorizerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-medislot-authorizer-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: MediSlotAuthorizerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub '${SSMParameterArnPrefix}*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                Resource:
+                  - !Sub '${DynamoDBTableArnPrefix}*'
+                  - !Sub '${DynamoDBTableArnPrefix}*/index/*'
+
+  EventsJobsLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-medislot-events-jobs-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: MediSlotJobsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !Sub '${DynamoDBTableArnPrefix}*'
+                  - !Sub '${DynamoDBTableArnPrefix}*/index/*'
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:ChangeMessageVisibility
+                Resource: '*'
+
+Conditions:
+  HasDatabaseSecret: !Not [!Equals [!Ref DatabaseSecretArn, '']]
+
+Outputs:
+  ApplicationLambdaRoleArn:
+    Value: !GetAtt ApplicationLambdaRole.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-ApplicationLambdaRoleArn'
+  AuthorizerLambdaRoleArn:
+    Value: !GetAtt AuthorizerLambdaRole.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-AuthorizerLambdaRoleArn'
+  EventsJobsLambdaRoleArn:
+    Value: !GetAtt EventsJobsLambdaRole.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-EventsJobsLambdaRoleArn'

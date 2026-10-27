@@ -1,1 +1,203 @@
 
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MediSlot DynamoDB tables. Do not deploy duplicate tables if another stack already owns these resources.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+
+Resources:
+  IdempotencyTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${EnvironmentName}-medislot-idempotency'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: idempotency_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: idempotency_key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  SlotCapacityTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${EnvironmentName}-medislot-slot-capacity'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: slot_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: slot_id
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  WaitlistTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${EnvironmentName}-medislot-waitlist'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: slot_id
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: slot_id
+          KeyType: HASH
+        - AttributeName: created_at
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: user_id-index
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  RefreshTokenTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${EnvironmentName}-medislot-refresh-token'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: token_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: token_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  TokenDenylistTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${EnvironmentName}-medislot-token-denylist'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: token_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: token_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  HoldOffersTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${EnvironmentName}-medislot-hold-offers'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: hold_offer_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: hold_offer_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  NotificationDispatchTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${EnvironmentName}-medislot-notification-dispatch'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: dispatch_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dispatch_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+Outputs:
+  IdempotencyTableName:
+    Value: !Ref IdempotencyTable
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-IdempotencyTableName'
+  IdempotencyTableArn:
+    Value: !GetAtt IdempotencyTable.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-IdempotencyTableArn'
+  SlotCapacityTableName:
+    Value: !Ref SlotCapacityTable
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-SlotCapacityTableName'
+  SlotCapacityTableArn:
+    Value: !GetAtt SlotCapacityTable.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-SlotCapacityTableArn'
+  WaitlistTableName:
+    Value: !Ref WaitlistTable
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-WaitlistTableName'
+  WaitlistTableArn:
+    Value: !GetAtt WaitlistTable.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-WaitlistTableArn'
+  RefreshTokenTableName:
+    Value: !Ref RefreshTokenTable
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-RefreshTokenTableName'
+  TokenDenylistTableName:
+    Value: !Ref TokenDenylistTable
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-TokenDenylistTableName'
+  HoldOffersTableName:
+    Value: !Ref HoldOffersTable
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-HoldOffersTableName'
+  NotificationDispatchTableName:
+    Value: !Ref NotificationDispatchTable
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-NotificationDispatchTableName'

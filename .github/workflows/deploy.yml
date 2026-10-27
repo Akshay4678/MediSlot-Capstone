@@ -56,7 +56,6 @@ jobs:
         shell: bash
         env:
           AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-          LAMBDA_ARTIFACTS_BUCKET: ${{ vars.LAMBDA_ARTIFACTS_BUCKET }}
           LAMBDA_SUBNET_1_ID: ${{ vars.LAMBDA_SUBNET_1_ID }}
           LAMBDA_SUBNET_2_ID: ${{ vars.LAMBDA_SUBNET_2_ID }}
           LAMBDA_SECURITY_GROUP_ID: ${{ vars.LAMBDA_SECURITY_GROUP_ID }}
@@ -99,11 +98,6 @@ jobs:
 
           if [[ ! -d "application" ]]; then
             echo "::error::The application/ directory was not found."
-            exit 1
-          fi
-
-          if [[ -z "${LAMBDA_ARTIFACTS_BUCKET:-}" ]]; then
-            echo "::error::Set LAMBDA_ARTIFACTS_BUCKET."
             exit 1
           fi
 
@@ -243,7 +237,7 @@ jobs:
 
           STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-data"
 
-          DB_USERNAME="${DB_USERNAME_INPUT:-medislotadmin}"
+          DB_USERNAME="${DB_USERNAME_INPUT:-medislot_admin}"
           DB_NAME="medislot"
 
           if [[ "${ENVIRONMENT_NAME}" == "prod" ]]; then
@@ -270,7 +264,36 @@ jobs:
             --region "${AWS_REGION}"
 
       # ==========================================
-      # STEP 9: Deploy Authentication Stack
+      # STEP 9: Read deployment bucket from Data Stack
+      # ==========================================
+      - name: Read Lambda artifacts bucket from Data Stack
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-data"
+
+          LAMBDA_ARTIFACTS_BUCKET="$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_NAME}" \
+            --query "Stacks[0].Outputs[?OutputKey=='ArtifactsBucketName'].OutputValue | [0]" \
+            --output text \
+            --region "${AWS_REGION}")"
+
+          if [[ -z "${LAMBDA_ARTIFACTS_BUCKET}" || "${LAMBDA_ARTIFACTS_BUCKET}" == "None" ]]; then
+            echo "::error::ArtifactsBucketName output was not found in ${STACK_NAME}."
+            exit 1
+          fi
+
+          # Ensure the bucket exists and the current role can access it.
+          aws s3api head-bucket \
+            --bucket "${LAMBDA_ARTIFACTS_BUCKET}" \
+            --region "${AWS_REGION}"
+
+          echo "LAMBDA_ARTIFACTS_BUCKET=${LAMBDA_ARTIFACTS_BUCKET}" >> "${GITHUB_ENV}"
+          echo "Using artifacts bucket from Data Stack: ${LAMBDA_ARTIFACTS_BUCKET}"
+
+      # ==========================================
+      # STEP 10: Deploy Authentication Stack
       # ==========================================
       - name: Deploy Authentication Stack
         shell: bash
@@ -292,7 +315,7 @@ jobs:
             --region "${AWS_REGION}"
 
       # ==========================================
-      # STEP 10: Package Python Lambda code
+      # STEP 11: Package Python Lambda code
       # ==========================================
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -334,12 +357,10 @@ jobs:
           echo "Lambda package created successfully."
 
       # ==========================================
-      # STEP 11: Upload Lambda ZIP to S3
+      # STEP 12: Upload Lambda ZIP to S3
       # ==========================================
       - name: Upload Lambda package to S3
         shell: bash
-        env:
-          LAMBDA_ARTIFACTS_BUCKET: ${{ vars.LAMBDA_ARTIFACTS_BUCKET }}
         run: |
           set -euo pipefail
 
@@ -363,7 +384,7 @@ jobs:
           echo "S3 key: ${S3_KEY}"
 
       # ==========================================
-      # STEP 12: Deploy API Gateway and Lambda Stack
+      # STEP 13: Deploy API Gateway and Lambda Stack
       # ==========================================
       - name: Deploy API and Lambda Stack
         shell: bash
@@ -404,7 +425,7 @@ jobs:
           echo "API Stack deployed successfully."
 
       # ==========================================
-      # STEP 13: Display API endpoint
+      # STEP 14: Display API endpoint
       # ==========================================
       - name: Display API endpoint
         shell: bash
@@ -440,7 +461,7 @@ jobs:
           echo "GET  ${API_ENDPOINT}/reports"
 
       # ==========================================
-      # STEP 14: Display deployment status
+      # STEP 15: Display deployment status
       # ==========================================
       - name: Deployment Summary
         if: always()

@@ -520,13 +520,35 @@ Resources:
 
   # --------------------------------------------------
   # API ROUTES
-  # --------------------------------------------------
+  # Explicit method/path routes. Several routes intentionally share a Lambda;
+  # handlers must dispatch using requestContext.http.method and rawPath.
 
-  AuthRoute:
+  AuthRegisterRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'POST /auth'
+      RouteKey: 'POST /auth/register'
+      Target: !Sub 'integrations/${AuthIntegration}'
+
+  AuthLoginRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'POST /auth/login'
+      Target: !Sub 'integrations/${AuthIntegration}'
+
+  AuthRefreshRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'POST /auth/refresh'
+      Target: !Sub 'integrations/${AuthIntegration}'
+
+  AuthLogoutRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'POST /auth/logout'
       Target: !Sub 'integrations/${AuthIntegration}'
 
   DoctorSearchRoute:
@@ -536,32 +558,46 @@ Resources:
       RouteKey: 'GET /doctors/search'
       Target: !Sub 'integrations/${DoctorSearchIntegration}'
 
-  DoctorRoute:
+  DoctorsListRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'ANY /doctors'
+      RouteKey: 'GET /doctors'
       Target: !Sub 'integrations/${DoctorIntegration}'
 
   DoctorByIdRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'ANY /doctors/{id}'
+      RouteKey: 'GET /doctors/{doctor_id}'
+      Target: !Sub 'integrations/${DoctorIntegration}'
+
+  HospitalsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'GET /hospitals'
+      Target: !Sub 'integrations/${DoctorIntegration}'
+
+  SpecialisationsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'GET /specialisations'
       Target: !Sub 'integrations/${DoctorIntegration}'
 
   PatientRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'ANY /patients'
+      RouteKey: 'GET /patients'
       Target: !Sub 'integrations/${PatientIntegration}'
 
   PatientByIdRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'ANY /patients/{id}'
+      RouteKey: 'ANY /patients/{patient_id}'
       Target: !Sub 'integrations/${PatientIntegration}'
 
   AvailabilityRoute:
@@ -571,33 +607,68 @@ Resources:
       RouteKey: 'GET /availability'
       Target: !Sub 'integrations/${AvailabilityIntegration}'
 
-  BookingRoute:
+  SlotsRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'POST /bookings'
+      RouteKey: 'GET /slots'
+      Target: !Sub 'integrations/${AvailabilityIntegration}'
+
+  AppointmentCreateRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'POST /appointments'
       Target: !Sub 'integrations/${BookingIntegration}'
 
-  AppointmentRoute:
+  AppointmentListRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'ANY /appointments'
+      RouteKey: 'GET /appointments'
       Target: !Sub 'integrations/${AppointmentIntegration}'
 
-  AppointmentByIdRoute:
+  AppointmentByIdGetRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'ANY /appointments/{id}'
+      RouteKey: 'GET /appointments/{appointment_id}'
+      Target: !Sub 'integrations/${AppointmentIntegration}'
+
+  AppointmentByIdPatchRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'PATCH /appointments/{appointment_id}'
+      Target: !Sub 'integrations/${RescheduleIntegration}'
+
+  AppointmentByIdDeleteRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'DELETE /appointments/{appointment_id}'
       Target: !Sub 'integrations/${AppointmentIntegration}'
 
   RescheduleRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref MediSlotHttpApi
-      RouteKey: 'POST /appointments/{id}/reschedule'
+      RouteKey: 'POST /appointments/{appointment_id}/reschedule'
       Target: !Sub 'integrations/${RescheduleIntegration}'
+
+  AppointmentWaitlistRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'POST /appointments/{appointment_id}/waitlist'
+      Target: !Sub 'integrations/${WaitlistIntegration}'
+
+  AppointmentRefundRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'GET /appointments/{appointment_id}/refund'
+      Target: !Sub 'integrations/${AppointmentIntegration}'
 
   WaitlistRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -620,8 +691,6 @@ Resources:
       RouteKey: 'GET /reports'
       Target: !Sub 'integrations/${ReportingIntegration}'
 
-
-  # --------------------------------------------------
   # API STAGE
   # --------------------------------------------------
 
@@ -739,17 +808,17 @@ Outputs:
     Description: Base URL of the MediSlot API
     Value: !GetAtt MediSlotHttpApi.ApiEndpoint
 
-  AuthEndpoint:
-    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/auth'
+  AuthRegisterEndpoint:
+    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/auth/register'
 
-  DoctorSearchEndpoint:
-    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/doctors/search'
+  AuthLoginEndpoint:
+    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/auth/login'
 
-  AvailabilityEndpoint:
-    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/availability'
+  DoctorsEndpoint:
+    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/doctors'
 
-  BookingEndpoint:
-    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/bookings'
+  SlotsEndpoint:
+    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/slots'
 
   AppointmentsEndpoint:
     Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/appointments'

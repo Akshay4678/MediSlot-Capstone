@@ -185,6 +185,8 @@ jobs:
           DB_SUBNET_1="$(get_output PrivateDbSubnet1Id)"
           DB_SUBNET_2="$(get_output PrivateDbSubnet2Id)"
           DB_SECURITY_GROUP_ID="$(get_output DatabaseSecurityGroupId)"
+
+          # Lambda VPC settings come from CloudFormation, not GitHub variables.
           LAMBDA_SUBNET_1_ID="$(get_output PrivateAppSubnet1Id)"
           LAMBDA_SUBNET_2_ID="$(get_output PrivateAppSubnet2Id)"
           LAMBDA_SECURITY_GROUP_ID="$(get_output AppSecurityGroupId)"
@@ -207,7 +209,7 @@ jobs:
             echo "LAMBDA_SECURITY_GROUP_ID=${LAMBDA_SECURITY_GROUP_ID}"
           } >> "${GITHUB_ENV}"
 
-          echo "Database and Lambda network configuration loaded."
+          echo "Database network configuration loaded."
 
       # ==========================================
       # STEP 8: Deploy RDS and Data Stack

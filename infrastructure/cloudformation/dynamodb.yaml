@@ -1,10 +1,16 @@
+```yaml
 AWSTemplateFormatVersion: '2010-09-09'
-Description: MediSlot Milestone 2 authentication state tables only.
+Description: MediSlot Milestone 2 authentication state tables
+
 Parameters:
   EnvironmentName:
     Type: String
     Default: dev
-    AllowedValues: [dev, prod]
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
 Resources:
   RefreshTokenTable:
     Type: AWS::DynamoDB::Table
@@ -14,14 +20,19 @@ Resources:
       TableName: !Sub '${EnvironmentName}-medislot-refresh-tokens'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - {AttributeName: token_hash, AttributeType: S}
+        - AttributeName: token_hash
+          AttributeType: S
       KeySchema:
-        - {AttributeName: token_hash, KeyType: HASH}
+        - AttributeName: token_hash
+          KeyType: HASH
       TimeToLiveSpecification:
         AttributeName: expires_at
         Enabled: true
-      SSESpecification: {SSEEnabled: true}
-      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
   TokenDenylistTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
@@ -30,24 +41,41 @@ Resources:
       TableName: !Sub '${EnvironmentName}-medislot-token-denylist'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - {AttributeName: jti, AttributeType: S}
+        - AttributeName: jti
+          AttributeType: S
       KeySchema:
-        - {AttributeName: jti, KeyType: HASH}
+        - AttributeName: jti
+          KeyType: HASH
       TimeToLiveSpecification:
         AttributeName: expires_at
         Enabled: true
-      SSESpecification: {SSEEnabled: true}
-      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
 Outputs:
   RefreshTokenTableName:
+    Description: DynamoDB refresh token table name
     Value: !Ref RefreshTokenTable
-    Export: {Name: !Sub '${EnvironmentName}-MediSlot-RefreshTokenTableName'}
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-RefreshTokenTableName'
+
   RefreshTokenTableArn:
+    Description: DynamoDB refresh token table ARN
     Value: !GetAtt RefreshTokenTable.Arn
-    Export: {Name: !Sub '${EnvironmentName}-MediSlot-RefreshTokenTableArn'}
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-RefreshTokenTableArn'
+
   TokenDenylistTableName:
+    Description: DynamoDB token denylist table name
     Value: !Ref TokenDenylistTable
-    Export: {Name: !Sub '${EnvironmentName}-MediSlot-TokenDenylistTableName'}
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-TokenDenylistTableName'
+
   TokenDenylistTableArn:
+    Description: DynamoDB token denylist table ARN
     Value: !GetAtt TokenDenylistTable.Arn
-    Export: {Name: !Sub '${EnvironmentName}-MediSlot-TokenDenylistTableArn'}
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-TokenDenylistTableArn'
+```

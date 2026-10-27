@@ -56,13 +56,6 @@ jobs:
         shell: bash
         env:
           AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-          LAMBDA_SUBNET_1_ID: ${{ vars.LAMBDA_SUBNET_1_ID }}
-          LAMBDA_SUBNET_2_ID: ${{ vars.LAMBDA_SUBNET_2_ID }}
-          LAMBDA_SECURITY_GROUP_ID: ${{ vars.LAMBDA_SECURITY_GROUP_ID }}
-          IDEMPOTENCY_TABLE_NAME: ${{ vars.IDEMPOTENCY_TABLE_NAME }}
-          SLOT_CAPACITY_TABLE_NAME: ${{ vars.SLOT_CAPACITY_TABLE_NAME }}
-          WAITLIST_TABLE_NAME: ${{ vars.WAITLIST_TABLE_NAME }}
-          NOTIFICATION_DISPATCH_TABLE_NAME: ${{ vars.NOTIFICATION_DISPATCH_TABLE_NAME }}
         run: |
           set -euo pipefail
 
@@ -100,21 +93,6 @@ jobs:
             echo "::error::The application/ directory was not found."
             exit 1
           fi
-
-          for name in \
-            LAMBDA_SUBNET_1_ID \
-            LAMBDA_SUBNET_2_ID \
-            LAMBDA_SECURITY_GROUP_ID \
-            IDEMPOTENCY_TABLE_NAME \
-            SLOT_CAPACITY_TABLE_NAME \
-            WAITLIST_TABLE_NAME \
-            NOTIFICATION_DISPATCH_TABLE_NAME
-          do
-            if [[ -z "${!name:-}" ]]; then
-              echo "::error::Set the GitHub Actions variable ${name}."
-              exit 1
-            fi
-          done
 
           echo "Project: ${PROJECT_NAME}"
           echo "Environment: ${ENVIRONMENT_NAME}"
@@ -207,8 +185,11 @@ jobs:
           DB_SUBNET_1="$(get_output PrivateDbSubnet1Id)"
           DB_SUBNET_2="$(get_output PrivateDbSubnet2Id)"
           DB_SECURITY_GROUP_ID="$(get_output DatabaseSecurityGroupId)"
+          LAMBDA_SUBNET_1_ID="$(get_output PrivateAppSubnet1Id)"
+          LAMBDA_SUBNET_2_ID="$(get_output PrivateAppSubnet2Id)"
+          LAMBDA_SECURITY_GROUP_ID="$(get_output AppSecurityGroupId)"
 
-          for name in DB_SUBNET_1 DB_SUBNET_2 DB_SECURITY_GROUP_ID; do
+          for name in DB_SUBNET_1 DB_SUBNET_2 DB_SECURITY_GROUP_ID LAMBDA_SUBNET_1_ID LAMBDA_SUBNET_2_ID LAMBDA_SECURITY_GROUP_ID; do
             value="${!name}"
 
             if [[ -z "${value}" || "${value}" == "None" ]]; then
@@ -221,9 +202,12 @@ jobs:
             echo "DB_SUBNET_1=${DB_SUBNET_1}"
             echo "DB_SUBNET_2=${DB_SUBNET_2}"
             echo "DB_SECURITY_GROUP_ID=${DB_SECURITY_GROUP_ID}"
+            echo "LAMBDA_SUBNET_1_ID=${LAMBDA_SUBNET_1_ID}"
+            echo "LAMBDA_SUBNET_2_ID=${LAMBDA_SUBNET_2_ID}"
+            echo "LAMBDA_SECURITY_GROUP_ID=${LAMBDA_SECURITY_GROUP_ID}"
           } >> "${GITHUB_ENV}"
 
-          echo "Database network configuration loaded."
+          echo "Database and Lambda network configuration loaded."
 
       # ==========================================
       # STEP 8: Deploy RDS and Data Stack
@@ -308,7 +292,31 @@ jobs:
             --output text \
             --region "${AWS_REGION}")"
 
-          for name in DB_HOST DB_NAME DB_SECRET_ARN; do
+          IDEMPOTENCY_TABLE_NAME="$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_NAME}" \
+            --query "Stacks[0].Outputs[?OutputKey=='IdempotencyTableName'].OutputValue | [0]" \
+            --output text \
+            --region "${AWS_REGION}")"
+
+          SLOT_CAPACITY_TABLE_NAME="$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_NAME}" \
+            --query "Stacks[0].Outputs[?OutputKey=='SlotCapacityTableName'].OutputValue | [0]" \
+            --output text \
+            --region "${AWS_REGION}")"
+
+          WAITLIST_TABLE_NAME="$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_NAME}" \
+            --query "Stacks[0].Outputs[?OutputKey=='WaitlistTableName'].OutputValue | [0]" \
+            --output text \
+            --region "${AWS_REGION}")"
+
+          NOTIFICATION_DISPATCH_TABLE_NAME="$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_NAME}" \
+            --query "Stacks[0].Outputs[?OutputKey=='NotificationDispatchTableName'].OutputValue | [0]" \
+            --output text \
+            --region "${AWS_REGION}")"
+
+          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME; do
             value="${!name}"
             if [[ -z "${value}" || "${value}" == "None" ]]; then
               echo "::error::Required Data Stack output '${name}' is missing from ${STACK_NAME}."
@@ -321,6 +329,10 @@ jobs:
             echo "DB_HOST=${DB_HOST}"
             echo "DB_NAME=${DB_NAME}"
             echo "DB_SECRET_ARN=${DB_SECRET_ARN}"
+            echo "IDEMPOTENCY_TABLE_NAME=${IDEMPOTENCY_TABLE_NAME}"
+            echo "SLOT_CAPACITY_TABLE_NAME=${SLOT_CAPACITY_TABLE_NAME}"
+            echo "WAITLIST_TABLE_NAME=${WAITLIST_TABLE_NAME}"
+            echo "NOTIFICATION_DISPATCH_TABLE_NAME=${NOTIFICATION_DISPATCH_TABLE_NAME}"
           } >> "${GITHUB_ENV}"
 
           echo "Using artifacts bucket from Data Stack: ${LAMBDA_ARTIFACTS_BUCKET}"
@@ -430,15 +442,6 @@ jobs:
       # ==========================================
       - name: Deploy API and Lambda Stack
         shell: bash
-        env:
-          LAMBDA_SUBNET_1_ID: ${{ vars.LAMBDA_SUBNET_1_ID }}
-          LAMBDA_SUBNET_2_ID: ${{ vars.LAMBDA_SUBNET_2_ID }}
-          LAMBDA_SECURITY_GROUP_ID: ${{ vars.LAMBDA_SECURITY_GROUP_ID }}
-
-          IDEMPOTENCY_TABLE_NAME: ${{ vars.IDEMPOTENCY_TABLE_NAME }}
-          SLOT_CAPACITY_TABLE_NAME: ${{ vars.SLOT_CAPACITY_TABLE_NAME }}
-          WAITLIST_TABLE_NAME: ${{ vars.WAITLIST_TABLE_NAME }}
-          NOTIFICATION_DISPATCH_TABLE_NAME: ${{ vars.NOTIFICATION_DISPATCH_TABLE_NAME }}
         run: |
           set -euo pipefail
 
@@ -457,9 +460,6 @@ jobs:
               "LambdaCodeS3Key=${LAMBDA_CODE_S3_KEY}" \
               "LambdaSubnetIds=${LAMBDA_SUBNET_1_ID},${LAMBDA_SUBNET_2_ID}" \
               "LambdaSecurityGroupId=${LAMBDA_SECURITY_GROUP_ID}" \
-              "DatabaseSecretArn=${DB_SECRET_ARN}" \
-              "DatabaseHost=${DB_HOST}" \
-              "DatabaseName=${DB_NAME}" \
               "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
               "SlotCapacityTableName=${SLOT_CAPACITY_TABLE_NAME}" \
               "WaitlistTableName=${WAITLIST_TABLE_NAME}" \

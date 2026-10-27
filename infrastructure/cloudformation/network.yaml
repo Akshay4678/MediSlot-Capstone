@@ -343,6 +343,24 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
+  # DynamoDB Gateway Endpoint: allows private Lambda subnets to call DynamoDB
+  # without requiring a NAT Gateway. This is separate from IAM permissions.
+  DynamoDBGatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.dynamodb'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateAppRouteTable
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-dynamodb-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
   # Application security group. No inbound rules by default.
   AppSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -460,6 +478,10 @@ Outputs:
     Condition: CreateNatGateway
     Description: NAT Gateway ID, if NAT is enabled.
     Value: !Ref NatGateway
+
+  DynamoDBGatewayEndpointId:
+    Description: DynamoDB Gateway VPC Endpoint ID.
+    Value: !Ref DynamoDBGatewayEndpoint
 
   S3GatewayEndpointId:
     Condition: CreateS3Endpoint

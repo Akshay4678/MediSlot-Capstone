@@ -18,13 +18,16 @@ import hmac
 import json
 import os
 import time
+from functools import lru_cache
 
 import boto3
+from botocore.config import Config
 
 
 # AWS clients
-ssm = boto3.client("ssm")
-dynamodb = boto3.resource("dynamodb")
+_cfg = Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 2})
+ssm = boto3.client("ssm", config=_cfg)
+dynamodb = boto3.resource("dynamodb", config=_cfg)
 
 
 def decode_base64(value):
@@ -33,6 +36,7 @@ def decode_base64(value):
     return base64.urlsafe_b64decode(value + padding)
 
 
+@lru_cache(maxsize=1)
 def get_jwt_secret():
     """Read the JWT signing secret from AWS Systems Manager Parameter Store."""
     parameter_name = os.environ["JWT_SECRET_PARAMETER_NAME"]
@@ -134,6 +138,18 @@ def verify_access_token(token):
     return claims
 
 
+def _deny(event):
+    """Reject the request in the format the API type expects.
+
+    HTTP API (payload 2.0, simple responses): raising an exception makes API
+    Gateway return 500, so return isAuthorized=False instead.
+    REST API: raising "Unauthorized" is the documented way to return 401.
+    """
+    if event.get("version") == "2.0":
+        return {"isAuthorized": False}
+    raise Exception("Unauthorized")
+
+
 def lambda_handler(event, context):
     """Entry point called by API Gateway."""
 
@@ -148,7 +164,7 @@ def lambda_handler(event, context):
 
     # The request must contain a Bearer token.
     if not authorization.lower().startswith("bearer "):
-        raise Exception("Unauthorized")
+        return _deny(event)
 
     access_token = authorization.split(None, 1)[1].strip()
 
@@ -157,8 +173,8 @@ def lambda_handler(event, context):
         claims = verify_access_token(access_token)
 
     except Exception as error:
-        print(f"Authorizer rejected token: {type(error).__name__}")
-        raise Exception("Unauthorized")
+        print(f"Authorizer rejected token: {type(error).__name__}: {error}")
+        return _deny(event)
 
     user_id = str(claims["sub"])
     user_role = str(claims["role"])

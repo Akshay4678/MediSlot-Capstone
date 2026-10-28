@@ -1,4 +1,3 @@
-```python
 import os
 import json
 import boto3
@@ -112,4 +111,3 @@ def lambda_handler(event, context):
         405,
         {"error": "METHOD_NOT_ALLOWED"},
     )
-```

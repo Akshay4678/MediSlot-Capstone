@@ -4,16 +4,19 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
 import time
 import uuid
 
-from datetime import datetime, timezone
+from functools import lru_cache
 
 import boto3
 import bcrypt
+from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from application.common.http import (
     response,
@@ -24,8 +27,14 @@ from application.common.http import (
 from application.database.connection import get_connection
 
 
-ssm = boto3.client("ssm")
-ddb = boto3.resource("dynamodb")
+log = logging.getLogger()
+log.setLevel(logging.INFO)
+
+# Fail fast (seconds, not the Lambda timeout) if a VPC endpoint/route is missing,
+# so the real error shows up in CloudWatch instead of an opaque 500 timeout.
+_AWS_CFG = Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 2})
+ssm = boto3.client("ssm", config=_AWS_CFG)
+ddb = boto3.resource("dynamodb", config=_AWS_CFG)
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+[.][^@\s]+$")
 
@@ -33,8 +42,9 @@ ACCESS_TTL = 900
 REFRESH_TTL = 7 * 24 * 60 * 60
 
 
+@lru_cache(maxsize=1)
 def _secret():
-    """Retrieve the JWT signing secret from SSM Parameter Store."""
+    """Retrieve the JWT signing secret from SSM Parameter Store (cached per cold start)."""
     parameter_name = os.environ["JWT_SECRET_PARAMETER_NAME"]
 
     parameter = ssm.get_parameter(
@@ -138,6 +148,7 @@ def _register(body):
     if (
         not isinstance(password, str)
         or len(password) < 10
+        or len(password.encode()) > 72
         or not re.search(r"[A-Za-z]", password)
         or not re.search(r"\d", password)
     ):
@@ -432,12 +443,17 @@ def _logout(event, body):
             "refresh_token is required.",
         )
 
-    _table("REFRESH_TOKEN_TABLE").update_item(
-        Key={"token_hash": _hash_token(refresh_token)},
-        UpdateExpression="SET revoked = :r",
-        ExpressionAttributeValues={":r": True},
-        ConditionExpression="attribute_exists(token_hash)",
-    )
+    try:
+        _table("REFRESH_TOKEN_TABLE").update_item(
+            Key={"token_hash": _hash_token(refresh_token)},
+            UpdateExpression="SET revoked = :r",
+            ExpressionAttributeValues={":r": True},
+            ConditionExpression="attribute_exists(token_hash)",
+        )
+    except ClientError as exc:
+        # Token already gone/revoked: logout is idempotent, keep going.
+        if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
 
     # If an access token is supplied, denylist its JTI until it expires.
     headers = event.get("headers", {})
@@ -531,10 +547,7 @@ def lambda_handler(event, context):
 
     except Exception:
         # Detailed errors stay in CloudWatch logs, not in the client response.
-        print(
-            "Authentication request failed; "
-            "inspect CloudWatch logs for the exception."
-        )
+        log.exception("Authentication request failed: %s %s", method, path)
 
         return response(
             500,

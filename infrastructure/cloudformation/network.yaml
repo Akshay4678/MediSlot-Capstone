@@ -352,6 +352,25 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
+  # DynamoDB Gateway Endpoint (free). Lambdas in the private app subnets have
+  # no NAT, so without this every DynamoDB call (refresh tokens, denylist)
+  # hangs until the Lambda times out and API Gateway returns 500.
+  DynamoDbGatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.dynamodb'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateAppRouteTable
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-dynamodb-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
   # Application security group. No inbound rules by default.
   AppSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -407,6 +426,29 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${EnvironmentName}-secretsmanager-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # SSM interface endpoint. The JWT signing secret is an SSM SecureString read
+  # by the auth Lambdas, which run inside the VPC with no NAT. Reuses the
+  # endpoint security group (HTTPS 443 from AppSecurityGroup only).
+  SsmVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssm'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateAppSubnet1
+        - !Ref PrivateAppSubnet2
+      SecurityGroupIds:
+        - !Ref SecretsManagerEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-ssm-endpoint'
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
@@ -638,3 +680,9 @@ Outputs:
     Condition: CreateS3Endpoint
     Description: S3 Gateway VPC Endpoint ID, if enabled.
     Value: !Ref S3GatewayEndpoint
+  SsmVpcEndpointId:
+    Description: Interface endpoint used by private Lambdas to read SSM parameters.
+    Value: !Ref SsmVpcEndpoint
+  DynamoDbGatewayEndpointId:
+    Description: Gateway endpoint used by private Lambdas to reach DynamoDB.
+    Value: !Ref DynamoDbGatewayEndpoint

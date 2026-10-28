@@ -1,4 +1,3 @@
-```python
 from application.common.http import (
     response,
     request_method,
@@ -140,4 +139,3 @@ def lambda_handler(event, context):
         405,
         {"error": "METHOD_NOT_ALLOWED"},
     )
-```

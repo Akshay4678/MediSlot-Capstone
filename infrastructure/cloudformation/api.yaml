@@ -79,7 +79,7 @@ Resources:
     Properties:
       FunctionName: !Sub '${ProjectName}-${EnvironmentName}-authorizer'
       Runtime: python3.12
-      Handler: application.authorizer.handler.lambda_handler
+      Handler: application.authorizer.lambda_handler.lambda_handler
       Role:
         Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-AuthorizerLambdaExecutionRoleArn'
       Code:

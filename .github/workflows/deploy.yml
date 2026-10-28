@@ -163,6 +163,7 @@ jobs:
           aws cloudformation deploy \
             --template-file infrastructure/cloudformation/network.yaml \
             --stack-name "${STACK_NAME}" \
+            --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               "ProjectName=${PROJECT_NAME}" \
               "EnvironmentName=${ENVIRONMENT_NAME}" \

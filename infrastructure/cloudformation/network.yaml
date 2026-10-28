@@ -72,6 +72,15 @@ Parameters:
       - 'false'
     Description: Create an S3 Gateway VPC endpoint for private route tables.
 
+  WorkbenchInstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t2.micro
+    Description: Small EC2 instance type for secure MySQL Workbench access through SSM port forwarding.
+
 Conditions:
   CreateNatGateway: !Equals [!Ref EnableNatGateway, 'true']
   CreateS3Endpoint: !Equals [!Ref EnableS3GatewayEndpoint, 'true']
@@ -343,24 +352,6 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
-  # DynamoDB Gateway Endpoint: allows private Lambda subnets to call DynamoDB
-  # without requiring a NAT Gateway. This is separate from IAM permissions.
-  DynamoDBGatewayEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref MediSlotVPC
-      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.dynamodb'
-      VpcEndpointType: Gateway
-      RouteTableIds:
-        - !Ref PrivateAppRouteTable
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${EnvironmentName}-dynamodb-endpoint'
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
   # Application security group. No inbound rules by default.
   AppSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -378,7 +369,7 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
-  # Database SG allows MySQL only from the application SG.
+  # Database SG allows MySQL from the application SG and the dedicated Workbench SG only.
   DatabaseSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -396,6 +387,107 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${EnvironmentName}-database-sg'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ----------------------------------------------------------
+  # EC2 MYSQL WORKBENCH ACCESS HOST (SSM, NO INBOUND SSH)
+  # ----------------------------------------------------------
+
+  WorkbenchInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-workbench-ssm-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-workbench-ssm-role'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  WorkbenchInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${ProjectName}-${EnvironmentName}-workbench-instance-profile'
+      Roles:
+        - !Ref WorkbenchInstanceRole
+
+  WorkbenchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${ProjectName} ${EnvironmentName} MySQL Workbench access host; no inbound access'
+      VpcId: !Ref MediSlotVPC
+      # No inbound rules: use AWS Systems Manager Session Manager.
+      SecurityGroupEgress:
+        - Description: Allow MySQL connections to the RDS security group.
+          IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          DestinationSecurityGroupId: !Ref DatabaseSecurityGroup
+        - Description: Allow HTTPS to Systems Manager endpoints.
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-workbench-sg'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  WorkbenchToDatabaseIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroup
+      Description: Allow MySQL only from the dedicated Workbench EC2 security group.
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId: !Ref WorkbenchSecurityGroup
+
+  WorkbenchInstance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - InternetGatewayAttachment
+      - PublicDefaultRoute
+    Properties:
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      InstanceType: !Ref WorkbenchInstanceType
+      IamInstanceProfile: !Ref WorkbenchInstanceProfile
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          SubnetId: !Ref PublicSubnet1
+          GroupSet:
+            - !Ref WorkbenchSecurityGroup
+          AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-mysql-workbench-host'
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
@@ -474,14 +566,26 @@ Outputs:
     Export:
       Name: !Sub '${ProjectName}-${EnvironmentName}-PrivateDbRouteTableId'
 
+  WorkbenchInstanceId:
+    Description: EC2 instance ID for SSM port forwarding to private RDS.
+    Value: !Ref WorkbenchInstance
+    Export:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-WorkbenchInstanceId'
+
+  WorkbenchSecurityGroupId:
+    Description: Security group attached to the Workbench EC2 instance.
+    Value: !Ref WorkbenchSecurityGroup
+    Export:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-WorkbenchSecurityGroupId'
+
+  WorkbenchPublicIp:
+    Description: Public IP address of the Workbench EC2 instance (SSM is used; no inbound ports are opened).
+    Value: !GetAtt WorkbenchInstance.PublicIp
+
   NatGatewayId:
     Condition: CreateNatGateway
     Description: NAT Gateway ID, if NAT is enabled.
     Value: !Ref NatGateway
-
-  DynamoDBGatewayEndpointId:
-    Description: DynamoDB Gateway VPC Endpoint ID.
-    Value: !Ref DynamoDBGatewayEndpoint
 
   S3GatewayEndpointId:
     Condition: CreateS3Endpoint

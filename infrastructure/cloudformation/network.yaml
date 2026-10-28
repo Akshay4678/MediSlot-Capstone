@@ -369,6 +369,49 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
+  # Interface endpoint security group: only application resources may call
+  # Secrets Manager over HTTPS (TCP 443).
+  SecretsManagerEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${ProjectName} ${EnvironmentName} HTTPS access to Secrets Manager VPC endpoint'
+      VpcId: !Ref MediSlotVPC
+      SecurityGroupIngress:
+        - Description: Allow HTTPS from application Lambda security group
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-secretsmanager-endpoint-sg'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Private DNS makes the standard Secrets Manager hostname resolve to this
+  # endpoint from resources inside the VPC. No NAT Gateway is required for it.
+  SecretsManagerVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.secretsmanager'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateAppSubnet1
+        - !Ref PrivateAppSubnet2
+      SecurityGroupIds:
+        - !Ref SecretsManagerEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-secretsmanager-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
   # Database SG allows MySQL from the application SG and the dedicated Workbench SG only.
   DatabaseSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -581,6 +624,10 @@ Outputs:
   WorkbenchPublicIp:
     Description: Public IP address of the Workbench EC2 instance (SSM is used; no inbound ports are opened).
     Value: !GetAtt WorkbenchInstance.PublicIp
+
+  SecretsManagerVpcEndpointId:
+    Description: Interface endpoint used by private Lambdas to access Secrets Manager.
+    Value: !Ref SecretsManagerVpcEndpoint
 
   NatGatewayId:
     Condition: CreateNatGateway

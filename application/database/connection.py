@@ -1,95 +1,50 @@
-"""
-MediSlot RDS MySQL connection helper.
-
-Required Lambda environment variables:
-    DB_HOST
-    DB_NAME
-    DATABASE_SECRET_ARN
-
-Optional:
-    DB_PORT (defaults to 3306)
-
-The Secrets Manager secret must contain:
-    {
-        "username": "...",
-        "password": "..."
-    }
-"""
-
+"""RDS MySQL connection helper for MediSlot Lambda functions."""
 import json
 import os
 
 import boto3
 import pymysql
+from botocore.config import Config
 
-
-_secrets_client = boto3.client("secretsmanager")
-
+# Uses the regional Secrets Manager endpoint. In private subnets, ensure a
+# Secrets Manager interface VPC endpoint exists or configure NAT routing.
+_secrets = boto3.client(
+    "secretsmanager",
+    config=Config(connect_timeout=5, read_timeout=10, retries={"max_attempts": 3, "mode": "standard"}),
+)
 
 def get_connection():
-    """Create and return a connection to the MediSlot RDS database."""
-
-    required_variables = (
-        "DB_HOST",
-        "DB_NAME",
-        "DATABASE_SECRET_ARN",
-    )
-
-    missing_variables = [
-        name for name in required_variables
-        if not os.environ.get(name)
-    ]
-
-    if missing_variables:
+    secret_arn = os.environ.get("DATABASE_SECRET_ARN")
+    db_host = os.environ.get("DB_HOST")
+    db_name = os.environ.get("DB_NAME")
+    if not secret_arn or not db_host or not db_name:
         raise RuntimeError(
-            "Missing required database environment variables: "
-            + ", ".join(missing_variables)
+            "DATABASE_SECRET_ARN, DB_HOST, and DB_NAME must all be configured."
         )
 
-    secret_arn = os.environ["DATABASE_SECRET_ARN"]
-
-    secret_response = _secrets_client.get_secret_value(
-        SecretId=secret_arn
-    )
-
-    secret_string = secret_response.get("SecretString")
-
+    response = _secrets.get_secret_value(SecretId=secret_arn)
+    secret_string = response.get("SecretString")
     if not secret_string:
-        raise RuntimeError(
-            "The database secret does not contain a SecretString."
-        )
+        raise RuntimeError("The database secret does not contain SecretString.")
 
     try:
-        credentials = json.loads(secret_string)
-    except json.JSONDecodeError as exc:
+        secret = json.loads(secret_string)
+        username = secret["username"]
+        password = secret["password"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
         raise RuntimeError(
-            "The database secret is not valid JSON."
-        ) from exc
-
-    username = credentials.get("username")
-    password = credentials.get("password")
-
-    if not username or not password:
-        raise RuntimeError(
-            "The database secret must contain username and password."
-        )
-
-    try:
-        port = int(os.environ.get("DB_PORT", "3306"))
-    except ValueError as exc:
-        raise RuntimeError(
-            "DB_PORT must be a valid integer."
+            "The database secret must be JSON containing username and password fields."
         ) from exc
 
     return pymysql.connect(
-        host=os.environ["DB_HOST"],
+        host=db_host,
         user=username,
         password=password,
-        database=os.environ["DB_NAME"],
-        port=port,
+        database=db_name,
+        port=int(os.environ.get("DB_PORT", "3306")),
         connect_timeout=10,
-        read_timeout=30,
-        write_timeout=30,
+        read_timeout=20,
+        write_timeout=20,
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=False,
         ssl={"check_hostname": True},

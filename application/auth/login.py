@@ -1,6 +1,7 @@
 """MediSlot login Lambda handler."""
 
 import logging
+import time
 
 import bcrypt
 
@@ -18,11 +19,16 @@ log.setLevel(logging.INFO)
 
 def lambda_handler(event, context):
     conn = None
+    stage = "initialization"
+    start_time = time.monotonic()
 
     try:
-        log.info("Login request received")
+        log.info("LOGIN_DEBUG: Login request received")
 
-        # Parse and validate the request.
+        # 1. Parse and validate the request.
+        stage = "request_validation"
+        log.info("LOGIN_DEBUG: Parsing request body")
+
         data = body_json(event)
         email = email_value(data.get("email"))
         password = data.get("password")
@@ -44,52 +50,86 @@ def lambda_handler(event, context):
                 {"message": "Invalid role"},
             )
 
-        # Connect to the database.
-        log.info("Opening database connection")
+        log.info("LOGIN_DEBUG: Request validation completed")
+
+        # 2. Connect to RDS.
+        stage = "database_connection"
+        log.info("LOGIN_DEBUG: Opening database connection")
+
         conn = db_connection()
 
-        # Find the account.
-        log.info("Looking up login account")
+        log.info(
+            "LOGIN_DEBUG: Database connection established in %.2f seconds",
+            time.monotonic() - start_time,
+        )
+
+        # 3. Retrieve the user from the users table.
+        stage = "user_lookup"
+        query_start = time.monotonic()
+
+        log.info("LOGIN_DEBUG: Executing user lookup query")
 
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT user_id, email, password_hash, role, is_active
+                SELECT
+                    user_id,
+                    email,
+                    password_hash,
+                    role,
+                    is_active
                 FROM users
                 WHERE email = %s
                 LIMIT 1
                 """,
                 (email,),
             )
+
             user = cur.fetchone()
 
-        # Avoid revealing whether an account exists.
+        log.info(
+            "LOGIN_DEBUG: User lookup completed in %.2f seconds; "
+            "user_found=%s",
+            time.monotonic() - query_start,
+            user is not None,
+        )
+
+        # Do not reveal whether the account exists or is inactive.
         if not user or not user.get("is_active"):
+            log.warning("LOGIN_DEBUG: Login rejected during account validation")
+
             return response(
                 401,
                 {"message": "Invalid email or password"},
             )
 
-        if requested_role and user["role"] != requested_role:
+        if requested_role and str(user["role"]).upper() != requested_role:
+            log.warning("LOGIN_DEBUG: Requested role does not match account role")
+
             return response(
                 401,
                 {"message": "Invalid email or password"},
             )
 
-        # Verify the password.
-        log.info("Verifying password")
+        # 4. Verify the password hash.
+        stage = "password_verification"
 
         stored_hash = user.get("password_hash")
 
-        if not isinstance(stored_hash, (str, bytes)):
-            log.error("Account has an invalid password hash")
+        if isinstance(stored_hash, str):
+            stored_hash = stored_hash.encode("utf-8")
+
+        if not isinstance(stored_hash, bytes):
+            log.error("LOGIN_DEBUG: Stored password hash is missing or invalid")
+
             return response(
                 500,
                 {"message": "Unable to authenticate account"},
             )
 
-        if isinstance(stored_hash, str):
-            stored_hash = stored_hash.encode("utf-8")
+        log.info("LOGIN_DEBUG: Starting bcrypt password verification")
+
+        password_start = time.monotonic()
 
         try:
             password_matches = bcrypt.checkpw(
@@ -97,23 +137,42 @@ def lambda_handler(event, context):
                 stored_hash,
             )
         except (ValueError, TypeError):
-            log.exception("Password hash verification failed")
+            log.exception("LOGIN_DEBUG: Password hash verification failed")
             password_matches = False
 
+        log.info(
+            "LOGIN_DEBUG: Password verification finished in %.2f seconds",
+            time.monotonic() - password_start,
+        )
+
         if not password_matches:
+            log.info("LOGIN_DEBUG: Login rejected due to invalid credentials")
+
             return response(
                 401,
                 {"message": "Invalid email or password"},
             )
 
-        # Generate access and refresh tokens.
-        log.info("Password verified; generating tokens")
+        log.info("LOGIN_DEBUG: Password verified successfully")
+
+        # 5. Generate access and refresh tokens.
+        stage = "token_generation"
+
+        log.info("LOGIN_DEBUG: Starting token generation")
+
+        token_start = time.monotonic()
 
         access_token, refresh_token, refresh_expires = create_tokens(user)
 
-        log.info("Login completed successfully")
+        log.info(
+            "LOGIN_DEBUG: Token generation completed in %.2f seconds",
+            time.monotonic() - token_start,
+        )
 
-        return response(
+        # 6. Return the successful login response.
+        stage = "response"
+
+        result = response(
             200,
             {
                 "message": "Login successful",
@@ -125,21 +184,34 @@ def lambda_handler(event, context):
                 "user": {
                     "user_id": str(user["user_id"]),
                     "email": user["email"],
-                    "role": user["role"],
+                    "role": str(user["role"]).upper(),
                 },
             },
         )
 
+        log.info(
+            "LOGIN_DEBUG: Login completed successfully in %.2f seconds",
+            time.monotonic() - start_time,
+        )
+
+        return result
+
     except Exception:
-        log.exception("Login failed")
+        # The full traceback is recorded in CloudWatch for diagnosis.
+        log.exception(
+            "LOGIN_ERROR: Login failed at stage '%s'",
+            stage,
+        )
+
         return response(
             500,
             {"message": "Internal server error"},
         )
 
     finally:
-        if conn:
+        if conn is not None:
             try:
                 conn.close()
+                log.info("LOGIN_DEBUG: Database connection closed")
             except Exception:
-                log.exception("Failed to close database connection")
+                log.exception("LOGIN_ERROR: Failed to close database connection")

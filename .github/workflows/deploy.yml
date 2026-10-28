@@ -689,7 +689,7 @@ jobs:
             --runtime python3.12 \
             --handler application.database.init_schema.lambda_handler \
             --role "${ROLE_ARN}" \
-            --timeout 120 \
+            --timeout 300 \
             --memory-size 256 \
             --zip-file "fileb://${ZIP_FILE}" \
             --vpc-config "SubnetIds=${SUBNET_IDS},SecurityGroupIds=${SECURITY_GROUP_IDS}" \
@@ -701,17 +701,25 @@ jobs:
             --region "${AWS_REGION}"
 
           printf '{}' > "${PAYLOAD_FILE}"
+          # AWS CLI read timeout must exceed the Lambda's 300-second timeout.
           aws lambda invoke \
             --function-name "${BOOTSTRAP_FUNCTION}" \
             --invocation-type RequestResponse \
             --payload "fileb://${PAYLOAD_FILE}" \
             --cli-binary-format raw-in-base64-out \
+            --cli-connect-timeout 30 \
+            --cli-read-timeout 330 \
             "${RESPONSE_FILE}" \
             --region "${AWS_REGION}" > "${RUNNER_TEMP}/schema-bootstrap-invoke-metadata.json"
 
+          echo "Schema bootstrap Lambda response:"
           cat "${RESPONSE_FILE}"
-          if grep -q '"FunctionError"' "${RUNNER_TEMP}/schema-bootstrap-invoke-metadata.json"; then
-            echo "::error::Schema initialization Lambda failed. See its CloudWatch log stream for details."
+          if grep -q '\"FunctionError\"' "${RUNNER_TEMP}/schema-bootstrap-invoke-metadata.json"; then
+            echo "::error::Schema initialization Lambda returned a function error. Recent CloudWatch logs follow."
+            aws logs tail "/aws/lambda/${BOOTSTRAP_FUNCTION}" \
+              --since 15m \
+              --format short \
+              --region "${AWS_REGION}" || true
             exit 1
           fi
           echo "RDS schema initialization completed successfully."

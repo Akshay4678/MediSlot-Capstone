@@ -637,6 +637,86 @@ jobs:
           echo "API Stack deployed successfully."
 
       # ==========================================
+      # STEP 13B: Initialize the RDS MySQL schema through a temporary VPC Lambda
+      # The GitHub-hosted runner cannot directly connect to private RDS.
+      # This function reuses the VPC settings and execution role of the auth Lambda.
+      # ==========================================
+      - name: Initialize RDS MySQL schema
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          AUTH_FUNCTION="${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth"
+          BOOTSTRAP_FUNCTION="${PROJECT_NAME}-${ENVIRONMENT_NAME}-schema-bootstrap-${GITHUB_RUN_ID}"
+          PACKAGE_DIR="${RUNNER_TEMP}/schema-bootstrap-package"
+          ZIP_FILE="${RUNNER_TEMP}/schema-bootstrap.zip"
+          PAYLOAD_FILE="${RUNNER_TEMP}/schema-bootstrap-payload.json"
+          RESPONSE_FILE="${RUNNER_TEMP}/schema-bootstrap-response.json"
+
+          cleanup() {
+            aws lambda delete-function --function-name "${BOOTSTRAP_FUNCTION}" --region "${AWS_REGION}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          if [[ ! -f application/database/schema.sql ]]; then
+            echo "::error::application/database/schema.sql was not found."
+            exit 1
+          fi
+
+          # Reuse the existing auth Lambda's role and VPC configuration so the
+          # bootstrap function can read the DB secret and reach private RDS.
+          AUTH_CONFIG="$(aws lambda get-function-configuration --function-name "${AUTH_FUNCTION}" --region "${AWS_REGION}")"
+          ROLE_ARN="$(python -c 'import json,sys; print(json.load(sys.stdin).get("Role", ""))' <<< "${AUTH_CONFIG}")"
+          SUBNET_IDS="$(python -c 'import json,sys; d=json.load(sys.stdin); print(",".join(d.get("VpcConfig",{}).get("SubnetIds",[])))' <<< "${AUTH_CONFIG}")"
+          SECURITY_GROUP_IDS="$(python -c 'import json,sys; d=json.load(sys.stdin); print(",".join(d.get("VpcConfig",{}).get("SecurityGroupIds",[])))' <<< "${AUTH_CONFIG}")"
+
+          if [[ -z "${ROLE_ARN}" || -z "${SUBNET_IDS}" || -z "${SECURITY_GROUP_IDS}" ]]; then
+            echo "::error::Auth Lambda must have an execution role, VPC subnets, and security groups to initialize private RDS."
+            exit 1
+          fi
+
+          rm -rf "${PACKAGE_DIR}"
+          mkdir -p "${PACKAGE_DIR}/application/database"
+          python -m pip install --requirement requirements-auth.txt --target "${PACKAGE_DIR}"
+          cp application/__init__.py "${PACKAGE_DIR}/application/__init__.py"
+          cp application/database/__init__.py application/database/connection.py "${PACKAGE_DIR}/application/database/"
+          cp application/database/schema.sql "${PACKAGE_DIR}/application/database/schema.sql"
+          cp application/database/init_schema.py "${PACKAGE_DIR}/application/database/init_schema.py"
+          ( cd "${PACKAGE_DIR}" && zip -qr "${ZIP_FILE}" . )
+
+          aws lambda create-function \
+            --function-name "${BOOTSTRAP_FUNCTION}" \
+            --runtime python3.12 \
+            --handler application.database.init_schema.lambda_handler \
+            --role "${ROLE_ARN}" \
+            --timeout 120 \
+            --memory-size 256 \
+            --zip-file "fileb://${ZIP_FILE}" \
+            --vpc-config "SubnetIds=${SUBNET_IDS},SecurityGroupIds=${SECURITY_GROUP_IDS}" \
+            --environment "Variables={DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DATABASE_SECRET_ARN=${DB_SECRET_ARN},DB_PORT=3306}" \
+            --region "${AWS_REGION}" >/dev/null
+
+          aws lambda wait function-active-v2 \
+            --function-name "${BOOTSTRAP_FUNCTION}" \
+            --region "${AWS_REGION}"
+
+          printf '{}' > "${PAYLOAD_FILE}"
+          aws lambda invoke \
+            --function-name "${BOOTSTRAP_FUNCTION}" \
+            --invocation-type RequestResponse \
+            --payload "fileb://${PAYLOAD_FILE}" \
+            --cli-binary-format raw-in-base64-out \
+            "${RESPONSE_FILE}" \
+            --region "${AWS_REGION}" > "${RUNNER_TEMP}/schema-bootstrap-invoke-metadata.json"
+
+          cat "${RESPONSE_FILE}"
+          if grep -q '"FunctionError"' "${RUNNER_TEMP}/schema-bootstrap-invoke-metadata.json"; then
+            echo "::error::Schema initialization Lambda failed. See its CloudWatch log stream for details."
+            exit 1
+          fi
+          echo "RDS schema initialization completed successfully."
+
+      # ==========================================
       # STEP 14: Display API endpoint
       # ==========================================
       - name: Display API endpoint

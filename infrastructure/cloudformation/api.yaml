@@ -124,6 +124,10 @@ Resources:
       IdentitySource: ['$request.header.Authorization']
       AuthorizerPayloadFormatVersion: '2.0'
       EnableSimpleResponses: true
+      # Caching disabled on purpose: API Gateway would otherwise remember an
+      # "allow" for a token and keep honouring it after the jti is denylisted.
+      # Cost: one authorizer call + one DynamoDB read per request (free tier).
+      AuthorizerResultTtlInSeconds: 0
 
   AuthIntegration:
     Type: AWS::ApiGatewayV2::Integration
@@ -160,6 +164,34 @@ Resources:
     Properties:
       ApiId: !Ref MediSlotHttpApi
       RouteKey: 'POST /auth/logout'
+      Target: !Sub 'integrations/${AuthIntegration}'
+      AuthorizationType: NONE
+  AuthDoctorRegisterRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'POST /auth/doctors/register'
+      Target: !Sub 'integrations/${AuthIntegration}'
+      AuthorizationType: NONE
+  AuthPatientRegisterRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'POST /auth/patients/register'
+      Target: !Sub 'integrations/${AuthIntegration}'
+      AuthorizationType: NONE
+  AuthDoctorLoginRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'POST /auth/doctors/login'
+      Target: !Sub 'integrations/${AuthIntegration}'
+      AuthorizationType: NONE
+  AuthPatientLoginRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'POST /auth/patients/login'
       Target: !Sub 'integrations/${AuthIntegration}'
       AuthorizationType: NONE
 

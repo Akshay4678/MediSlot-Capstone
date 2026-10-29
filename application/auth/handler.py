@@ -382,35 +382,9 @@ def _refresh(body):
             "Refresh token is invalid, expired, or revoked.",
         )
 
-    # Rotate the refresh token so the old token cannot be reused.
-    new_refresh_token = secrets.token_urlsafe(48)
-
-    try:
-        refresh_table.delete_item(
-            Key={"token_hash": token_hash},
-            ConditionExpression="attribute_exists(token_hash)",
-        )
-
-        refresh_table.put_item(
-            Item={
-                "token_hash": _hash_token(new_refresh_token),
-                "user_id": token_record["user_id"],
-                "role": token_record["role"],
-                "created_at": current_time,
-                "expires_at": current_time + REFRESH_TTL,
-                "ttl": current_time + REFRESH_TTL,
-                "revoked": False,
-            },
-            ConditionExpression="attribute_not_exists(token_hash)",
-        )
-
-    except Exception:
-        return _json_error(
-            401,
-            "REFRESH_REPLAY_OR_RACE",
-            "Refresh token was already used. Please log in again.",
-        )
-
+    # The refresh token is NOT rotated: it stays valid, and revocable via
+    # logout, until its own 7-day expiry. Each call only mints a fresh
+    # short-lived access token.
     new_access_token = _jwt({
         "sub": str(token_record["user_id"]),
         "role": str(token_record["role"]).lower(),
@@ -426,8 +400,7 @@ def _refresh(body):
             "access_token": new_access_token,
             "token_type": "Bearer",
             "expires_in": ACCESS_TTL,
-            "refresh_token": new_refresh_token,
-            "refresh_expires_in": REFRESH_TTL,
+            "refresh_expires_in": int(token_record["expires_at"]) - current_time,
         },
     )
 

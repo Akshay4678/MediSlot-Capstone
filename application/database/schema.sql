@@ -1,4 +1,3 @@
-
 -- MediSlot MySQL schema for MySQL 8.0+ / Amazon RDS MySQL 8.4
 -- Run this against the database created by rds.yaml (default DBName: medislot).
 -- DynamoDB-backed slot capacity, idempotency, waitlist entries, hold offers,
@@ -220,9 +219,12 @@ CREATE TABLE IF NOT EXISTS refund_ledger (
 
 -- =====================================================================
 -- DEVELOPMENT SEED DATA (idempotent: safe to re-run on every deploy)
--- Existing rows are never overwritten, so profile edits made later survive.
+-- * Existing rows are never overwritten, so later profile edits survive.
+-- * Parent rows are looked up by natural key (email / specialisation name),
+--   NOT by assumed IDs, so the seed also works if an account such as
+--   doctor1@example.com was already registered through the API.
 -- Sample doctor accounts: doctor1@example.com ... doctor4@example.com
--- Their passwords are stored ONLY as bcrypt hashes (work factor 12).
+-- Passwords are stored ONLY as bcrypt hashes (work factor 12).
 -- For a production environment, move this block to a dev-only file.
 -- =====================================================================
 
@@ -233,11 +235,11 @@ INSERT INTO hospitals (hospital_id, name, address_line1, city, state, postal_cod
 ON DUPLICATE KEY UPDATE hospital_id = hospital_id;
 
 INSERT INTO specialisations (specialisation_id, name, description) VALUES
-    ('fb0169b1-b09c-5b39-9ca5-b513cb849e0c', 'Cardiology', 'Heart and cardiovascular care'),
-    ('72fe8c9e-439d-5fcc-90b9-2fc0fb625dfc', 'General Medicine', 'Primary care and general health'),
-    ('d09bd70e-4e82-5997-a7c6-7a49ae6aed4b', 'Dermatology', 'Skin, hair and nail care'),
-    ('f40b4f52-f4b3-5cc9-a371-5865c8c9473c', 'Paediatrics', 'Care for infants and children'),
-    ('da71b5a9-d5e3-598b-bf2a-580ae5e6b63b', 'Orthopaedics', 'Bones, joints and muscles')
+    ('ad359f48-c0c7-51ea-8063-61773f0eacbd', 'Cardiology', 'Heart and cardiovascular care'),
+    ('f0db8612-077c-57be-9c68-f1981fc5c99c', 'General Medicine', 'Primary care and general health'),
+    ('a0c52501-cb94-5716-bfe2-d60bd58e0636', 'Dermatology', 'Skin, hair and nail care'),
+    ('ce73354d-4129-5790-b12e-14d25c0bd183', 'Paediatrics', 'Care for infants and children'),
+    ('e54e5198-0dc5-5afa-b631-d888c7a531f5', 'Orthopaedics', 'Bones, joints and muscles')
 ON DUPLICATE KEY UPDATE specialisation_id = specialisation_id;
 
 INSERT INTO users (user_id, email, password_hash, role, is_active, email_verified) VALUES
@@ -247,29 +249,86 @@ INSERT INTO users (user_id, email, password_hash, role, is_active, email_verifie
     ('67f59346-9788-5841-b5af-03726468434a', 'doctor4@example.com', '$2b$12$6cxj2Eyr09WIeSbHRY39EO3s3DkT9zJQ3a9CQUFmqabKsXRTtMPv2', 'DOCTOR', TRUE, TRUE)
 ON DUPLICATE KEY UPDATE user_id = user_id;
 
-INSERT INTO doctors (doctor_id, user_id, hospital_id, specialisation_id, first_name, last_name, qualifications, years_experience, phone, consultation_fee) VALUES
-    ('98b99efa-fc4f-5a0b-ac7d-8c7b5a54c853', '3cda2790-fffc-5400-b9a1-c2236d0250d8', '552ff03b-e90c-5672-91e7-78cd42654538', 'fb0169b1-b09c-5b39-9ca5-b513cb849e0c', 'Priya', 'Sharma', 'MBBS, MD (Cardiology)', 12, '+91-9000000001', 800),
-    ('b43a84f3-b681-5b56-8537-9ec860c263c9', 'd39248c4-f567-58c8-acf7-b23e595a09f6', '7d2b0c11-2506-58d5-a845-1cfcbd8b64e0', '72fe8c9e-439d-5fcc-90b9-2fc0fb625dfc', 'Rahul', 'Verma', 'MBBS, MD (General Medicine)', 8, '+91-9000000002', 500),
-    ('60c82fb1-e883-5986-99ce-bc424b954ed4', '873a8bdb-ece4-51cc-9d30-8b499f7ddef2', '5f39b269-c16d-5b6d-838e-c65672002651', 'd09bd70e-4e82-5997-a7c6-7a49ae6aed4b', 'Ananya', 'Reddy', 'MBBS, MD (Dermatology)', 6, '+91-9000000003', 600),
-    ('3151f055-eeb6-5a1c-84d6-73514264c628', '67f59346-9788-5841-b5af-03726468434a', '552ff03b-e90c-5672-91e7-78cd42654538', 'f40b4f52-f4b3-5cc9-a371-5865c8c9473c', 'Karthik', 'Rao', 'MBBS, DCH, MD (Paediatrics)', 15, '+91-9000000004', 700)
+-- Doctor profile for doctor1@example.com (user_id and specialisation_id are looked up)
+INSERT INTO doctors (doctor_id, user_id, hospital_id, specialisation_id, first_name, last_name, qualifications, years_experience, phone, consultation_fee)
+SELECT '98b99efa-fc4f-5a0b-ac7d-8c7b5a54c853', u.user_id, '552ff03b-e90c-5672-91e7-78cd42654538', s.specialisation_id, 'Priya', 'Sharma', 'MBBS, MD (Cardiology)', 12, '+91-9000000001', 800
+FROM users u
+JOIN specialisations s ON s.name = 'Cardiology'
+WHERE u.email = 'doctor1@example.com' AND u.role = 'DOCTOR'
 ON DUPLICATE KEY UPDATE doctor_id = doctor_id;
 
+-- Doctor profile for doctor2@example.com (user_id and specialisation_id are looked up)
+INSERT INTO doctors (doctor_id, user_id, hospital_id, specialisation_id, first_name, last_name, qualifications, years_experience, phone, consultation_fee)
+SELECT 'b43a84f3-b681-5b56-8537-9ec860c263c9', u.user_id, '7d2b0c11-2506-58d5-a845-1cfcbd8b64e0', s.specialisation_id, 'Rahul', 'Verma', 'MBBS, MD (General Medicine)', 8, '+91-9000000002', 500
+FROM users u
+JOIN specialisations s ON s.name = 'General Medicine'
+WHERE u.email = 'doctor2@example.com' AND u.role = 'DOCTOR'
+ON DUPLICATE KEY UPDATE doctor_id = doctor_id;
 
--- INSERT INTO consultation_types (consultation_type_id, doctor_id, name, description, duration_minutes, fee, capacity) VALUES
---     ('c46b6593-3879-58a0-b758-c276c3225e90', '98b99efa-fc4f-5a0b-ac7d-8c7b5a54c853', 'Quick Consult', 'Short follow-up or simple query', 15, 400, 1),
---     ('cbadb35a-17d1-50ec-ad09-39cdd10d8bc4', '98b99efa-fc4f-5a0b-ac7d-8c7b5a54c853', 'Standard Consult', 'Regular consultation', 30, 800, 1),
---     ('39a19693-b820-53cb-ae1c-fd75a4c0b58b', '98b99efa-fc4f-5a0b-ac7d-8c7b5a54c853', 'Detailed Consult', 'Extended in-depth consultation', 60, 1400, 1),
---     ('0081bc9a-9c66-5478-8c7b-dff782d217a3', 'b43a84f3-b681-5b56-8537-9ec860c263c9', 'Quick Consult', 'Short follow-up or simple query', 15, 250, 1),
---     ('cfbd50af-b268-5891-8d08-bb0d8378df87', 'b43a84f3-b681-5b56-8537-9ec860c263c9', 'Standard Consult', 'Regular consultation', 30, 500, 1),
---     ('fe953ada-6388-5f98-84b4-c4c5ec162c2a', 'b43a84f3-b681-5b56-8537-9ec860c263c9', 'Detailed Consult', 'Extended in-depth consultation', 60, 900, 1),
---     ('391e3ca7-2dbe-5a52-a05c-6dd340fed7ca', '60c82fb1-e883-5986-99ce-bc424b954ed4', 'Quick Consult', 'Short follow-up or simple query', 15, 300, 1),
---     ('a36d8b07-d284-570e-a3bf-5b4386da4eef', '60c82fb1-e883-5986-99ce-bc424b954ed4', 'Standard Consult', 'Regular consultation', 30, 600, 1),
---     ('5794fc04-5499-5778-a737-09f717f864c3', '60c82fb1-e883-5986-99ce-bc424b954ed4', 'Detailed Consult', 'Extended in-depth consultation', 60, 1000, 1),
---     ('0241db69-4bb1-5437-abf8-20123d1b3719', '3151f055-eeb6-5a1c-84d6-73514264c628', 'Quick Consult', 'Short follow-up or simple query', 15, 350, 1),
---     ('47b0ccb7-ca20-5c40-b56d-eca7042abee7', '3151f055-eeb6-5a1c-84d6-73514264c628', 'Standard Consult', 'Regular consultation', 30, 700, 1),
---     ('364507d5-efa6-5237-a3d5-6d61eb9a67c2', '3151f055-eeb6-5a1c-84d6-73514264c628', 'Detailed Consult', 'Extended in-depth consultation', 60, 1200, 1),
---     ('aa9f22d7-afaf-5694-910f-0480623c5cec', '98b99efa-fc4f-5a0b-ac7d-8c7b5a54c853', 'Health Camp Session', 'Group heart-health screening (3 seats)', 60, 200, 3)
--- ON DUPLICATE KEY UPDATE consultation_type_id = consultation_type_id;
+-- Doctor profile for doctor3@example.com (user_id and specialisation_id are looked up)
+INSERT INTO doctors (doctor_id, user_id, hospital_id, specialisation_id, first_name, last_name, qualifications, years_experience, phone, consultation_fee)
+SELECT '60c82fb1-e883-5986-99ce-bc424b954ed4', u.user_id, '5f39b269-c16d-5b6d-838e-c65672002651', s.specialisation_id, 'Ananya', 'Reddy', 'MBBS, MD (Dermatology)', 6, '+91-9000000003', 600
+FROM users u
+JOIN specialisations s ON s.name = 'Dermatology'
+WHERE u.email = 'doctor3@example.com' AND u.role = 'DOCTOR'
+ON DUPLICATE KEY UPDATE doctor_id = doctor_id;
+
+-- Doctor profile for doctor4@example.com (user_id and specialisation_id are looked up)
+INSERT INTO doctors (doctor_id, user_id, hospital_id, specialisation_id, first_name, last_name, qualifications, years_experience, phone, consultation_fee)
+SELECT '3151f055-eeb6-5a1c-84d6-73514264c628', u.user_id, '552ff03b-e90c-5672-91e7-78cd42654538', s.specialisation_id, 'Karthik', 'Rao', 'MBBS, DCH, MD (Paediatrics)', 15, '+91-9000000004', 700
+FROM users u
+JOIN specialisations s ON s.name = 'Paediatrics'
+WHERE u.email = 'doctor4@example.com' AND u.role = 'DOCTOR'
+ON DUPLICATE KEY UPDATE doctor_id = doctor_id;
+
+-- Consultation types for doctor1@example.com (doctor_id is looked up via the account email)
+INSERT INTO consultation_types (consultation_type_id, doctor_id, name, description, duration_minutes, fee, capacity)
+SELECT t.ct_id, dr.doctor_id, t.ct_name, t.ct_desc, t.ct_minutes, t.ct_fee, t.ct_capacity
+FROM (
+    SELECT 'c46b6593-3879-58a0-b758-c276c3225e90' AS ct_id, 'Quick Consult' AS ct_name, 'Short follow-up or simple query' AS ct_desc, 15 AS ct_minutes, 400 AS ct_fee, 1 AS ct_capacity
+    UNION ALL SELECT 'cbadb35a-17d1-50ec-ad09-39cdd10d8bc4' AS ct_id, 'Standard Consult' AS ct_name, 'Regular consultation' AS ct_desc, 30 AS ct_minutes, 800 AS ct_fee, 1 AS ct_capacity
+    UNION ALL SELECT '39a19693-b820-53cb-ae1c-fd75a4c0b58b' AS ct_id, 'Detailed Consult' AS ct_name, 'Extended in-depth consultation' AS ct_desc, 60 AS ct_minutes, 1400 AS ct_fee, 1 AS ct_capacity
+    UNION ALL SELECT 'aa9f22d7-afaf-5694-910f-0480623c5cec' AS ct_id, 'Health Camp Session' AS ct_name, 'Group heart-health screening (3 seats)' AS ct_desc, 60 AS ct_minutes, 200 AS ct_fee, 3 AS ct_capacity
+) t
+JOIN users u ON u.email = 'doctor1@example.com' AND u.role = 'DOCTOR'
+JOIN doctors dr ON dr.user_id = u.user_id
+ON DUPLICATE KEY UPDATE consultation_type_id = consultation_type_id;
+
+-- Consultation types for doctor2@example.com (doctor_id is looked up via the account email)
+INSERT INTO consultation_types (consultation_type_id, doctor_id, name, description, duration_minutes, fee, capacity)
+SELECT t.ct_id, dr.doctor_id, t.ct_name, t.ct_desc, t.ct_minutes, t.ct_fee, t.ct_capacity
+FROM (
+    SELECT '0081bc9a-9c66-5478-8c7b-dff782d217a3' AS ct_id, 'Quick Consult' AS ct_name, 'Short follow-up or simple query' AS ct_desc, 15 AS ct_minutes, 250 AS ct_fee, 1 AS ct_capacity
+    UNION ALL SELECT 'cfbd50af-b268-5891-8d08-bb0d8378df87' AS ct_id, 'Standard Consult' AS ct_name, 'Regular consultation' AS ct_desc, 30 AS ct_minutes, 500 AS ct_fee, 1 AS ct_capacity
+    UNION ALL SELECT 'fe953ada-6388-5f98-84b4-c4c5ec162c2a' AS ct_id, 'Detailed Consult' AS ct_name, 'Extended in-depth consultation' AS ct_desc, 60 AS ct_minutes, 900 AS ct_fee, 1 AS ct_capacity
+) t
+JOIN users u ON u.email = 'doctor2@example.com' AND u.role = 'DOCTOR'
+JOIN doctors dr ON dr.user_id = u.user_id
+ON DUPLICATE KEY UPDATE consultation_type_id = consultation_type_id;
+
+-- Consultation types for doctor3@example.com (doctor_id is looked up via the account email)
+INSERT INTO consultation_types (consultation_type_id, doctor_id, name, description, duration_minutes, fee, capacity)
+SELECT t.ct_id, dr.doctor_id, t.ct_name, t.ct_desc, t.ct_minutes, t.ct_fee, t.ct_capacity
+FROM (
+    SELECT '391e3ca7-2dbe-5a52-a05c-6dd340fed7ca' AS ct_id, 'Quick Consult' AS ct_name, 'Short follow-up or simple query' AS ct_desc, 15 AS ct_minutes, 300 AS ct_fee, 1 AS ct_capacity
+    UNION ALL SELECT 'a36d8b07-d284-570e-a3bf-5b4386da4eef' AS ct_id, 'Standard Consult' AS ct_name, 'Regular consultation' AS ct_desc, 30 AS ct_minutes, 600 AS ct_fee, 1 AS ct_capacity
+    UNION ALL SELECT '5794fc04-5499-5778-a737-09f717f864c3' AS ct_id, 'Detailed Consult' AS ct_name, 'Extended in-depth consultation' AS ct_desc, 60 AS ct_minutes, 1000 AS ct_fee, 1 AS ct_capacity
+) t
+JOIN users u ON u.email = 'doctor3@example.com' AND u.role = 'DOCTOR'
+JOIN doctors dr ON dr.user_id = u.user_id
+ON DUPLICATE KEY UPDATE consultation_type_id = consultation_type_id;
+
+-- Consultation types for doctor4@example.com (doctor_id is looked up via the account email)
+INSERT INTO consultation_types (consultation_type_id, doctor_id, name, description, duration_minutes, fee, capacity)
+SELECT t.ct_id, dr.doctor_id, t.ct_name, t.ct_desc, t.ct_minutes, t.ct_fee, t.ct_capacity
+FROM (
+    SELECT '0241db69-4bb1-5437-abf8-20123d1b3719' AS ct_id, 'Quick Consult' AS ct_name, 'Short follow-up or simple query' AS ct_desc, 15 AS ct_minutes, 350 AS ct_fee, 1 AS ct_capacity
+    UNION ALL SELECT '47b0ccb7-ca20-5c40-b56d-eca7042abee7' AS ct_id, 'Standard Consult' AS ct_name, 'Regular consultation' AS ct_desc, 30 AS ct_minutes, 700 AS ct_fee, 1 AS ct_capacity
+    UNION ALL SELECT '364507d5-efa6-5237-a3d5-6d61eb9a67c2' AS ct_id, 'Detailed Consult' AS ct_name, 'Extended in-depth consultation' AS ct_desc, 60 AS ct_minutes, 1200 AS ct_fee, 1 AS ct_capacity
+) t
+JOIN users u ON u.email = 'doctor4@example.com' AND u.role = 'DOCTOR'
+JOIN doctors dr ON dr.user_id = u.user_id
+ON DUPLICATE KEY UPDATE consultation_type_id = consultation_type_id;
 
 -- Important implementation notes:
 -- 1) Generate CHAR(36) IDs in the application (UUIDs) before INSERT.

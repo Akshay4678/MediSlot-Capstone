@@ -29,12 +29,12 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
-  TokenDenylistTable:
+  TokenActiveListTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      TableName: !Sub '${EnvironmentName}-medislot-token-denylist'
+      TableName: !Sub '${EnvironmentName}-medislot-token-activelist'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: jti
@@ -43,7 +43,7 @@ Resources:
         - AttributeName: jti
           KeyType: HASH
       TimeToLiveSpecification:
-        AttributeName: expires_at
+        AttributeName: ttl
         Enabled: true
       SSESpecification:
         SSEEnabled: true
@@ -61,13 +61,13 @@ Outputs:
     Value: !GetAtt RefreshTokenTable.Arn
     Export:
       Name: !Sub '${EnvironmentName}-MediSlot-RefreshTokenTableArn'
-  TokenDenylistTableName:
-    Description: DynamoDB token denylist table name
-    Value: !Ref TokenDenylistTable
+  TokenActiveListTableName:
+    Description: DynamoDB token active-list table name
+    Value: !Ref TokenActiveListTable
     Export:
-      Name: !Sub '${EnvironmentName}-MediSlot-TokenDenylistTableName'
-  TokenDenylistTableArn:
-    Description: DynamoDB token denylist table ARN
-    Value: !GetAtt TokenDenylistTable.Arn
+      Name: !Sub '${EnvironmentName}-MediSlot-TokenActiveListTableName'
+  TokenActiveListTableArn:
+    Description: DynamoDB token active-list table ARN
+    Value: !GetAtt TokenActiveListTable.Arn
     Export:
-      Name: !Sub '${EnvironmentName}-MediSlot-TokenDenylistTableArn'
+      Name: !Sub '${EnvironmentName}-MediSlot-TokenActiveListTableArn'

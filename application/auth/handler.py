@@ -95,7 +95,7 @@ def _issue_access(user):
     """Generate an access token. Returns (token, jti, exp).
 
     The jti and exp are returned so the caller can remember the latest token
-    of this login and denylist it when it is replaced or on logout.
+    of this login and deactivate it when it is replaced or on logout.
     """
     current_time = int(time.time())
     jti = str(uuid.uuid4())
@@ -113,8 +113,8 @@ def _issue_access(user):
     return token, jti, expires_at
 
 
-def _deny_jti(jti, expires_at):
-    """Put an access token's jti on the denylist until the token expires.
+def _activate_jti(jti, user_id, expires_at):
+    """Register an access token's jti as active until the token expires.
 
     The entry's TTL equals the token's own expiry, so DynamoDB removes it once
     the token would be rejected anyway. Already-expired tokens are skipped.
@@ -127,9 +127,17 @@ def _deny_jti(jti, expires_at):
     if expires_at <= int(time.time()):
         return
 
-    _table("TOKEN_DENYLIST_TABLE").put_item(
-        Item={"jti": jti, "expires_at": expires_at, "ttl": expires_at}
+    _table("TOKEN_ACTIVELIST_TABLE").put_item(
+        Item={"jti": str(jti), "user_id": str(user_id), "expires_at": expires_at, "ttl": expires_at},
+        ConditionExpression="attribute_not_exists(jti)",
     )
+
+
+def _deactivate_jti(jti):
+    """Remove an access token from the active list, making it unusable immediately."""
+    if not jti:
+        return
+    _table("TOKEN_ACTIVELIST_TABLE").delete_item(Key={"jti": str(jti)})
 
 
 def _hash_token(token):
@@ -369,22 +377,27 @@ def _login(body, path_role=None):
 
     current_time = int(time.time())
 
-    # Store only the hash of the refresh token in DynamoDB.
-    _table("REFRESH_TOKEN_TABLE").put_item(
-        Item={
-            "token_hash": _hash_token(refresh_token),
-            "user_id": str(user["user_id"]),
-            "role": str(user["role"]).lower(),
-            "created_at": current_time,
-            "expires_at": current_time + REFRESH_TTL,
-            "ttl": current_time + REFRESH_TTL,
-            "revoked": False,
-            # The newest access token issued for this login. It is denylisted
-            # when replaced at refresh time and when the user logs out.
-            "current_jti": access_jti,
-            "current_jti_exp": access_exp,
-        }
-    )
+    # Register the access token first. The refresh record retains current_jti
+    # as a session pointer so refresh/logout can identify the current token;
+    # authorization decisions are made only from TOKEN_ACTIVELIST_TABLE.
+    _activate_jti(access_jti, user["user_id"], access_exp)
+    try:
+        _table("REFRESH_TOKEN_TABLE").put_item(
+            Item={
+                "token_hash": _hash_token(refresh_token),
+                "user_id": str(user["user_id"]),
+                "role": str(user["role"]).lower(),
+                "created_at": current_time,
+                "expires_at": current_time + REFRESH_TTL,
+                "ttl": current_time + REFRESH_TTL,
+                "revoked": False,
+                "current_jti": access_jti,
+            },
+            ConditionExpression="attribute_not_exists(token_hash)",
+        )
+    except Exception:
+        _deactivate_jti(access_jti)
+        raise
 
     return response(
         200,
@@ -407,7 +420,7 @@ MAX_REFRESH_ATTEMPTS = 3
 
 
 def _refresh(body):
-    """Issue a new access token and denylist the one it replaces.
+    """Issue a new access token and deactivate the one it replaces.
 
     At most ONE access token per login is valid at any moment: the newest.
     """
@@ -443,43 +456,49 @@ def _refresh(body):
             )
 
         old_jti = record.get("current_jti")
-        old_exp = record.get("current_jti_exp")
 
         new_token, new_jti, new_exp = _issue_access(
             {"user_id": record["user_id"], "role": record["role"]}
         )
 
-        # 1. Denylist the previous access token FIRST. If this write fails the
-        #    request fails and the old token is simply still the valid one.
-        _deny_jti(old_jti, old_exp)
+        # Add the candidate token to the active list before changing the
+        # session pointer. If the conditional update loses a race, remove it.
+        _activate_jti(new_jti, record["user_id"], new_exp)
 
-        # 2. Record the new token as "current", but only if nobody refreshed
-        #    (or logged out) since we read the record. Optimistic concurrency:
-        #    two simultaneous refreshes can never both end up with a live token.
+        # Update the current-token pointer only if nobody refreshed (or logged
+        # out) since we read it. The active list remains authoritative for API
+        # authorization; current_jti is only a session-management pointer.
         if old_jti:
             condition = "attribute_exists(token_hash) AND current_jti = :old"
-            values = {":n": new_jti, ":e": new_exp, ":old": old_jti}
+            values = {":n": new_jti, ":old": old_jti}
         else:
             # Record created before this feature existed.
             condition = (
                 "attribute_exists(token_hash) "
                 "AND attribute_not_exists(current_jti)"
             )
-            values = {":n": new_jti, ":e": new_exp}
+            values = {":n": new_jti}
 
         try:
             table.update_item(
                 Key={"token_hash": token_hash},
-                UpdateExpression="SET current_jti = :n, current_jti_exp = :e",
+                UpdateExpression="SET current_jti = :n",
                 ConditionExpression=condition,
                 ExpressionAttributeValues=values,
             )
         except ClientError as exc:
             if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
                 raise
-            # Lost the race (or logged out meanwhile): the new token was never
-            # returned to anyone, so discard it and re-read.
+            # Lost the race (or logged out meanwhile): this token was never
+            # returned, so remove it from the active list and re-read.
+            _deactivate_jti(new_jti)
+            # The previously current token must not remain active if another
+            # refresh won the race between our read and conditional update.
+            _deactivate_jti(old_jti)
             continue
+
+        # Rotation succeeded; now the previous access token is no longer active.
+        _deactivate_jti(old_jti)
 
         return response(
             200,
@@ -499,10 +518,10 @@ def _refresh(body):
 
 
 def _logout(event, body):
-    """Log out: delete the refresh token and denylist the latest access token.
+    """Log out: delete the refresh token and deactivate the latest access token.
 
     The refresh token is required: it is the only way to find the newest
-    access token of this login (earlier ones were denylisted at refresh time).
+    access token of this login (older tokens are removed from the active list during refresh).
     Failures are not swallowed, so a failed revocation never reports success.
     """
     refresh_token = body.get("refresh_token")
@@ -517,33 +536,33 @@ def _logout(event, body):
     table = _table("REFRESH_TOKEN_TABLE")
     key = {"token_hash": _hash_token(refresh_token)}
 
-    # 1. Denylist the newest access token recorded for this login.
+    # 1. Deactivate the newest access token recorded for this login.
     record = table.get_item(Key=key, ConsistentRead=True).get("Item")
-    denied_jti = None
+    deactivated_jti = None
 
     if record:
-        denied_jti = record.get("current_jti")
-        _deny_jti(denied_jti, record.get("current_jti_exp"))
+        deactivated_jti = record.get("current_jti")
+        _deactivate_jti(deactivated_jti)
 
     # 2. Delete the refresh token. ALL_OLD returns the record as it was at the
     #    instant of deletion; if a refresh slipped in between steps 1 and 2,
     #    its newer token is caught here. After deletion no refresh can succeed.
     deleted = table.delete_item(Key=key, ReturnValues="ALL_OLD").get("Attributes")
 
-    if deleted and deleted.get("current_jti") != denied_jti:
-        _deny_jti(deleted.get("current_jti"), deleted.get("current_jti_exp"))
+    if deleted and deleted.get("current_jti") != deactivated_jti:
+        _deactivate_jti(deleted.get("current_jti"))
 
-    # 3. If a (valid) access token was presented, denylist it too.
+    # 3. If a (valid) access token was presented, deactivate it too.
     bearer = _bearer_token(event)
 
     if bearer:
         try:
             claims = verify_access_token(bearer)
         except ValueError:
-            claims = None  # expired, forged or already denylisted
+            claims = None  # expired, forged or already inactive
 
-        if claims:
-            _deny_jti(claims["jti"], claims["exp"])
+        if claims and (not deleted or str(claims.get("sub")) == str(deleted.get("user_id"))):
+            _deactivate_jti(claims["jti"])
 
     return response(
         200,
@@ -590,6 +609,27 @@ def lambda_handler(event, context):
         )
 
     try:
+        # Protected diagnostic endpoint used to demonstrate access-token
+        # validation. API Gateway also invokes the Lambda authorizer on this route.
+        if method == "GET" and path.endswith("/auth/test-token"):
+            bearer = _bearer_token(event)
+            if not bearer:
+                return _json_error(401, "MISSING_ACCESS_TOKEN", "Send Authorization: Bearer <access_token>.")
+            try:
+                claims = verify_access_token(bearer)
+            except Exception:
+                return _json_error(401, "INVALID_ACCESS_TOKEN", "Access token is invalid, expired, or inactive.")
+            return response(200, {
+                "message": "Access token is valid.",
+                "authenticated": True,
+                "user": {
+                    "user_id": str(claims["sub"]),
+                    "role": str(claims["role"]),
+                    "jti": str(claims["jti"]),
+                },
+                "expires_at": int(claims["exp"]),
+            })
+
         if method != "POST":
             return response(
                 405,

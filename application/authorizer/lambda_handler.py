@@ -1,15 +1,15 @@
 """
 MediSlot API Gateway Lambda Authorizer
 
-Verifies JWT access tokens and checks whether they have been revoked.
+Verifies JWT access tokens and requires their jti to exist in the active-token table.
 
 Required environment variables:
     JWT_SECRET_PARAMETER_NAME
-    TOKEN_DENYLIST_TABLE
+    TOKEN_ACTIVELIST_TABLE
     JWT_ISSUER (optional; defaults to "medislot")
 
 DynamoDB:
-    Token denylist table partition key: jti (String)
+    Token active-list table partition key: jti (String)
 """
 
 import base64
@@ -49,12 +49,12 @@ def get_jwt_secret():
     return parameter["Parameter"]["Value"].encode()
 
 
-def is_token_revoked(token_id):
-    """Check whether the token ID exists in the denylist and has not expired."""
-    table_name = os.environ.get("TOKEN_DENYLIST_TABLE")
+def is_token_active(token_id):
+    """Return True only when the token ID exists and has not expired in the active list."""
+    table_name = os.environ.get("TOKEN_ACTIVELIST_TABLE")
 
     if not table_name:
-        raise RuntimeError("TOKEN_DENYLIST_TABLE is not configured")
+        raise RuntimeError("TOKEN_ACTIVELIST_TABLE is not configured")
 
     table = dynamodb.Table(table_name)
 
@@ -131,9 +131,9 @@ def verify_access_token(token):
     if not user_id or user_role not in allowed_roles or not token_id:
         raise ValueError("Required claims missing")
 
-    # Reject tokens that have been revoked.
-    if is_token_revoked(token_id):
-        raise ValueError("Token revoked")
+    # Active-list semantics: absence means the token is not authorized.
+    if not is_token_active(token_id):
+        raise ValueError("Token is not active or has expired")
 
     return claims
 

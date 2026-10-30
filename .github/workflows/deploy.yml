@@ -358,13 +358,13 @@ jobs:
             --output text \
             --region "${AWS_REGION}")"
 
-          TOKEN_DENYLIST_TABLE_NAME="$(aws cloudformation describe-stacks \
+          TOKEN_ACTIVELIST_TABLE_NAME="$(aws cloudformation describe-stacks \
             --stack-name "${AUTH_DDB_STACK}" \
-            --query "Stacks[0].Outputs[?OutputKey=='TokenDenylistTableName'].OutputValue | [0]" \
+            --query "Stacks[0].Outputs[?OutputKey=='TokenActiveListTableName'].OutputValue | [0]" \
             --output text \
             --region "${AWS_REGION}")"
 
-          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_DENYLIST_TABLE_NAME; do
+          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME; do
             value="${!name}"
             if [[ -z "${value}" || "${value}" == "None" ]]; then
               echo "::error::Required Data Stack output '${name}' is missing from ${STACK_NAME}."
@@ -382,7 +382,7 @@ jobs:
             echo "WAITLIST_TABLE_NAME=${WAITLIST_TABLE_NAME}"
             echo "NOTIFICATION_DISPATCH_TABLE_NAME=${NOTIFICATION_DISPATCH_TABLE_NAME}"
             echo "REFRESH_TOKEN_TABLE_NAME=${REFRESH_TOKEN_TABLE_NAME}"
-            echo "TOKEN_DENYLIST_TABLE_NAME=${TOKEN_DENYLIST_TABLE_NAME}"
+            echo "TOKEN_ACTIVELIST_TABLE_NAME=${TOKEN_ACTIVELIST_TABLE_NAME}"
           } >> "${GITHUB_ENV}"
 
           echo "Using artifacts bucket from Data Stack: ${LAMBDA_ARTIFACTS_BUCKET}"
@@ -551,7 +551,7 @@ jobs:
               "LambdaCodeS3Key=${LAMBDA_CODE_S3_KEY}" \
               "LambdaSubnetIds=${LAMBDA_SUBNET_1_ID},${LAMBDA_SUBNET_2_ID}" \
               "LambdaSecurityGroupId=${LAMBDA_SECURITY_GROUP_ID}" \
-              "TokenDenylistTableName=${TOKEN_DENYLIST_TABLE_NAME}" \
+              "TokenActiveListTableName=${TOKEN_ACTIVELIST_TABLE_NAME}" \
               "RefreshTokenTableName=${REFRESH_TOKEN_TABLE_NAME}" \
               "DatabaseHost=${DB_HOST}" \
               "DatabaseName=${DB_NAME}" \

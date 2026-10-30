@@ -37,9 +37,9 @@ Parameters:
   RefreshTokenTableName:
     Type: String
     Description: Existing refresh-token DynamoDB table name.
-  TokenDenylistTableName:
+  TokenActiveListTableName:
     Type: String
-    Description: Existing token-denylist DynamoDB table name.
+    Description: Existing token-activelist DynamoDB table name.
 
 Resources:
   AuthFunction:
@@ -64,7 +64,7 @@ Resources:
           DB_HOST: !Ref DatabaseHost
           DB_NAME: !Ref DatabaseName
           REFRESH_TOKEN_TABLE: !Ref RefreshTokenTableName
-          TOKEN_DENYLIST_TABLE: !Ref TokenDenylistTableName
+          TOKEN_ACTIVELIST_TABLE: !Ref TokenActiveListTableName
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds
         SecurityGroupIds: [!Ref LambdaSecurityGroupId]
@@ -92,7 +92,7 @@ Resources:
           ENVIRONMENT_NAME: !Ref EnvironmentName
           JWT_SECRET_PARAMETER_NAME: !Ref JwtSecretParameterName
           JWT_ISSUER: medislot
-          TOKEN_DENYLIST_TABLE: !Ref TokenDenylistTableName
+          TOKEN_ACTIVELIST_TABLE: !Ref TokenActiveListTableName
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -125,7 +125,7 @@ Resources:
       AuthorizerPayloadFormatVersion: '2.0'
       EnableSimpleResponses: true
       # Caching disabled on purpose: API Gateway would otherwise remember an
-      # "allow" for a token and keep honouring it after the jti is denylisted.
+      # "allow" for a token and keep honouring it after the jti is active.
       # Cost: one authorizer call + one DynamoDB read per request (free tier).
       AuthorizerResultTtlInSeconds: 0
 
@@ -195,6 +195,15 @@ Resources:
       Target: !Sub 'integrations/${AuthIntegration}'
       AuthorizationType: NONE
 
+  AuthTestTokenRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'GET /auth/test-token'
+      Target: !Sub 'integrations/${AuthIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
+
   ApiStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
@@ -236,3 +245,6 @@ Outputs:
     Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/auth/refresh'
   AuthLogoutEndpoint:
     Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/auth/logout'
+  AuthTestTokenEndpoint:
+    Description: Protected endpoint for testing access-token authorization.
+    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/auth/test-token'

@@ -39,9 +39,20 @@ Resources:
       AttributeDefinitions:
         - AttributeName: jti
           AttributeType: S
+        - AttributeName: session_id
+          AttributeType: S
       KeySchema:
         - AttributeName: jti
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: session_id-index
+          KeySchema:
+            - AttributeName: session_id
+              KeyType: HASH
+            - AttributeName: jti
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
       TimeToLiveSpecification:
         AttributeName: ttl
         Enabled: true

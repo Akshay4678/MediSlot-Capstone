@@ -17,6 +17,7 @@ import boto3
 import bcrypt
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Key
 
 from application.common.http import (
     response,
@@ -91,11 +92,12 @@ def _jwt(payload):
     return f"{header}.{body}.{signature}"
 
 
-def _issue_access(user):
-    """Generate an access token. Returns (token, jti, exp).
+def _issue_access(user, session_id):
+    """Generate an access token bound to a refresh-token session.
 
-    The jti and exp are returned so the caller can remember the latest token
-    of this login and deactivate it when it is replaced or on logout.
+    The session ID is the SHA-256 hash of the opaque refresh token. It lets the
+    active list associate access tokens with a session without storing a JTI
+    or TTL attribute in REFRESH_TOKENS.
     """
     current_time = int(time.time())
     jti = str(uuid.uuid4())
@@ -107,18 +109,15 @@ def _issue_access(user):
         "iat": current_time,
         "exp": expires_at,
         "jti": jti,
+        "sid": str(session_id),
         "iss": os.environ.get("JWT_ISSUER", "medislot"),
     })
 
     return token, jti, expires_at
 
 
-def _activate_jti(jti, user_id, expires_at):
-    """Register an access token's jti as active until the token expires.
-
-    The entry's TTL equals the token's own expiry, so DynamoDB removes it once
-    the token would be rejected anyway. Already-expired tokens are skipped.
-    """
+def _activate_jti(jti, user_id, expires_at, session_id):
+    """Register an access token and associate it with its login session."""
     if not jti or not expires_at:
         return
 
@@ -128,7 +127,7 @@ def _activate_jti(jti, user_id, expires_at):
         return
 
     _table("TOKEN_ACTIVELIST_TABLE").put_item(
-        Item={"jti": str(jti), "user_id": str(user_id), "expires_at": expires_at, "ttl": expires_at},
+        Item={"jti": str(jti), "user_id": str(user_id), "session_id": str(session_id), "expires_at": expires_at, "ttl": expires_at},
         ConditionExpression="attribute_not_exists(jti)",
     )
 
@@ -372,26 +371,23 @@ def _login(body, path_role=None):
             "Email or password is incorrect.",
         )
 
-    access_token, access_jti, access_exp = _issue_access(user)
     refresh_token = secrets.token_urlsafe(48)
+    session_id = _hash_token(refresh_token)
+    access_token, access_jti, access_exp = _issue_access(user, session_id)
 
     current_time = int(time.time())
 
-    # Register the access token first. The refresh record retains current_jti
-    # as a session pointer so refresh/logout can identify the current token;
-    # authorization decisions are made only from TOKEN_ACTIVELIST_TABLE.
-    _activate_jti(access_jti, user["user_id"], access_exp)
+    # REFRESH_TOKENS stores only the fields in the data model. Its expires_at
+    # attribute is configured as DynamoDB TTL; no separate ttl/current_jti/role
+    # attribute is stored in this table.
+    _activate_jti(access_jti, user["user_id"], access_exp, session_id)
     try:
         _table("REFRESH_TOKEN_TABLE").put_item(
             Item={
-                "token_hash": _hash_token(refresh_token),
+                "token_hash": session_id,
                 "user_id": str(user["user_id"]),
-                "role": str(user["role"]).lower(),
                 "created_at": current_time,
                 "expires_at": current_time + REFRESH_TTL,
-                "ttl": current_time + REFRESH_TTL,
-                "revoked": False,
-                "current_jti": access_jti,
             },
             ConditionExpression="attribute_not_exists(token_hash)",
         )
@@ -416,158 +412,150 @@ def _login(body, path_role=None):
     )
 
 
-MAX_REFRESH_ATTEMPTS = 3
+def _deactivate_session_tokens(session_id):
+    """Deactivate all access tokens associated with one refresh-token session."""
+    if not session_id:
+        return
+    table = _table("TOKEN_ACTIVELIST_TABLE")
+    query_args = {
+        "IndexName": "session_id-index",
+        "KeyConditionExpression": Key("session_id").eq(str(session_id)),
+    }
+    while True:
+        result = table.query(**query_args)
+        for item in result.get("Items", []):
+            _deactivate_jti(item.get("jti"))
+        last_key = result.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        query_args["ExclusiveStartKey"] = last_key
+
+
+def _user_for_refresh(user_id):
+    """Load the current role/status from MySQL; role is not duplicated in DynamoDB."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT user_id, role, is_active FROM users WHERE user_id = %s LIMIT 1",
+                (str(user_id),),
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
 
 
 def _refresh(body):
-    """Issue a new access token and deactivate the one it replaces.
-
-    At most ONE access token per login is valid at any moment: the newest.
-    """
+    """Rotate a refresh token and replace access tokens for its session."""
     refresh_token = body.get("refresh_token")
-
     if not isinstance(refresh_token, str) or not refresh_token:
-        return _json_error(
-            400,
-            "MISSING_REFRESH_TOKEN",
-            "refresh_token is required.",
-        )
+        return _json_error(400, "MISSING_REFRESH_TOKEN", "refresh_token is required.")
 
     table = _table("REFRESH_TOKEN_TABLE")
-    token_hash = _hash_token(refresh_token)
+    old_hash = _hash_token(refresh_token)
+    current_time = int(time.time())
+    record = table.get_item(Key={"token_hash": old_hash}, ConsistentRead=True).get("Item")
 
-    for _attempt in range(MAX_REFRESH_ATTEMPTS):
-        record = table.get_item(
-            Key={"token_hash": token_hash},
-            ConsistentRead=True,
-        ).get("Item")
+    if (
+        not record
+        or record.get("revoked_at") is not None
+        or int(record.get("expires_at", 0)) <= current_time
+    ):
+        return _json_error(401, "INVALID_REFRESH_TOKEN", "Refresh token is invalid, expired, or revoked.")
 
-        current_time = int(time.time())
+    user = _user_for_refresh(record["user_id"])
+    if not user or not user.get("is_active"):
+        return _json_error(401, "INVALID_REFRESH_TOKEN", "The account is unavailable.")
 
-        if (
-            not record
-            or record.get("revoked")
-            or int(record.get("expires_at", 0)) <= current_time
-        ):
-            return _json_error(
-                401,
-                "INVALID_REFRESH_TOKEN",
-                "Refresh token is invalid, expired, or revoked.",
-            )
+    # Rotate the refresh token. Conditional revocation below ensures only one
+    # concurrent request can successfully consume the old refresh token.
+    new_refresh_token = secrets.token_urlsafe(48)
+    new_hash = _hash_token(new_refresh_token)
+    new_token, new_jti, new_exp = _issue_access(user, new_hash)
+    _activate_jti(new_jti, record["user_id"], new_exp, new_hash)
 
-        old_jti = record.get("current_jti")
-
-        new_token, new_jti, new_exp = _issue_access(
-            {"user_id": record["user_id"], "role": record["role"]}
-        )
-
-        # Add the candidate token to the active list before changing the
-        # session pointer. If the conditional update loses a race, remove it.
-        _activate_jti(new_jti, record["user_id"], new_exp)
-
-        # Update the current-token pointer only if nobody refreshed (or logged
-        # out) since we read it. The active list remains authoritative for API
-        # authorization; current_jti is only a session-management pointer.
-        if old_jti:
-            condition = "attribute_exists(token_hash) AND current_jti = :old"
-            values = {":n": new_jti, ":old": old_jti}
-        else:
-            # Record created before this feature existed.
-            condition = (
-                "attribute_exists(token_hash) "
-                "AND attribute_not_exists(current_jti)"
-            )
-            values = {":n": new_jti}
-
-        try:
-            table.update_item(
-                Key={"token_hash": token_hash},
-                UpdateExpression="SET current_jti = :n",
-                ConditionExpression=condition,
-                ExpressionAttributeValues=values,
-            )
-        except ClientError as exc:
-            if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
-                raise
-            # Lost the race (or logged out meanwhile): this token was never
-            # returned, so remove it from the active list and re-read.
-            _deactivate_jti(new_jti)
-            # The previously current token must not remain active if another
-            # refresh won the race between our read and conditional update.
-            _deactivate_jti(old_jti)
-            continue
-
-        # Rotation succeeded; now the previous access token is no longer active.
-        _deactivate_jti(old_jti)
-
-        return response(
-            200,
-            {
-                "access_token": new_token,
-                "token_type": "Bearer",
-                "expires_in": ACCESS_TTL,
-                "refresh_expires_in": int(record["expires_at"]) - current_time,
+    try:
+        table.put_item(
+            Item={
+                "token_hash": new_hash,
+                "user_id": str(record["user_id"]),
+                "created_at": current_time,
+                "expires_at": current_time + REFRESH_TTL,
             },
+            ConditionExpression="attribute_not_exists(token_hash)",
         )
+        table.update_item(
+            Key={"token_hash": old_hash},
+            UpdateExpression="SET revoked_at = :now",
+            ConditionExpression=(
+                "attribute_exists(token_hash) AND attribute_not_exists(revoked_at) "
+                "AND expires_at > :now"
+            ),
+            ExpressionAttributeValues={":now": current_time},
+        )
+    except ClientError as exc:
+        _deactivate_jti(new_jti)
+        # If the new refresh record was created but the old token was already
+        # consumed by another request, remove the unreturned candidate record.
+        try:
+            table.delete_item(Key={"token_hash": new_hash})
+        except Exception:
+            log.exception("Could not clean up losing refresh candidate")
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return _json_error(401, "INVALID_REFRESH_TOKEN", "Refresh token was already used or revoked.")
+        raise
+    except Exception:
+        _deactivate_jti(new_jti)
+        try:
+            table.delete_item(Key={"token_hash": new_hash})
+        except Exception:
+            log.exception("Could not clean up failed refresh candidate")
+        raise
 
-    return _json_error(
-        409,
-        "REFRESH_CONFLICT",
-        "Concurrent refresh detected. Please retry.",
-    )
+    # Remove old session access tokens only after the refresh-token rotation
+    # succeeds. The new access token is tied to new_hash, so it remains active.
+    _deactivate_session_tokens(old_hash)
+
+    return response(200, {
+        "access_token": new_token,
+        "token_type": "Bearer",
+        "expires_in": ACCESS_TTL,
+        "refresh_token": new_refresh_token,
+        "refresh_expires_in": REFRESH_TTL,
+    })
 
 
 def _logout(event, body):
-    """Log out: delete the refresh token and deactivate the latest access token.
-
-    The refresh token is required: it is the only way to find the newest
-    access token of this login (older tokens are removed from the active list during refresh).
-    Failures are not swallowed, so a failed revocation never reports success.
-    """
+    """Revoke the supplied refresh token and deactivate its session's access tokens."""
     refresh_token = body.get("refresh_token")
-
     if not isinstance(refresh_token, str) or not refresh_token:
-        return _json_error(
-            400,
-            "MISSING_REFRESH_TOKEN",
-            "refresh_token is required.",
-        )
+        return _json_error(400, "MISSING_REFRESH_TOKEN", "refresh_token is required.")
 
     table = _table("REFRESH_TOKEN_TABLE")
-    key = {"token_hash": _hash_token(refresh_token)}
+    session_id = _hash_token(refresh_token)
+    now = int(time.time())
+    record = table.get_item(Key={"token_hash": session_id}, ConsistentRead=True).get("Item")
 
-    # 1. Deactivate the newest access token recorded for this login.
-    record = table.get_item(Key=key, ConsistentRead=True).get("Item")
-    deactivated_jti = None
+    if record and record.get("revoked_at") is None:
+        table.update_item(
+            Key={"token_hash": session_id},
+            UpdateExpression="SET revoked_at = :now",
+            ConditionExpression="attribute_exists(token_hash) AND attribute_not_exists(revoked_at)",
+            ExpressionAttributeValues={":now": now},
+        )
+        _deactivate_session_tokens(session_id)
 
-    if record:
-        deactivated_jti = record.get("current_jti")
-        _deactivate_jti(deactivated_jti)
-
-    # 2. Delete the refresh token. ALL_OLD returns the record as it was at the
-    #    instant of deletion; if a refresh slipped in between steps 1 and 2,
-    #    its newer token is caught here. After deletion no refresh can succeed.
-    deleted = table.delete_item(Key=key, ReturnValues="ALL_OLD").get("Attributes")
-
-    if deleted and deleted.get("current_jti") != deactivated_jti:
-        _deactivate_jti(deleted.get("current_jti"))
-
-    # 3. If a (valid) access token was presented, deactivate it too.
+    # Also deactivate the bearer token if it belongs to this user/session.
     bearer = _bearer_token(event)
-
     if bearer:
         try:
             claims = verify_access_token(bearer)
         except ValueError:
-            claims = None  # expired, forged or already inactive
+            claims = None
+        if claims and claims.get("sid") == session_id:
+            _deactivate_jti(claims.get("jti"))
 
-        if claims and (not deleted or str(claims.get("sub")) == str(deleted.get("user_id"))):
-            _deactivate_jti(claims["jti"])
-
-    return response(
-        200,
-        {"message": "Logged out successfully."},
-    )
+    return response(200, {"message": "Logged out successfully."})
 
 
 def _bearer_token(event):

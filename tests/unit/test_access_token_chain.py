@@ -1,12 +1,8 @@
-"""Unit tests: only the NEWEST access token of a login is valid.
+"""Unit tests for active access-token tracking and refresh rotation.
 
-Login remembers the access token's jti on the refresh-token record. Every
-refresh denylists the previous jti and records the new one; logout denylists
-the newest jti and deletes the refresh token. Denylist entries expire with
-the token they describe.
-
-Runs offline: DynamoDB, SSM, MySQL and bcrypt are in-memory fakes; the real
-authorizer and auth-handler code runs.   python -m pytest tests/unit
+Login registers a jti in TOKEN_ACTIVELIST. Refresh replaces the current jti;
+logout deactivates the latest token and deletes the refresh-token record.
+Run offline with: python -m pytest tests/unit
 """
 import base64, copy, hashlib, hmac, json, os, sys, time, types
 from pathlib import Path
@@ -28,7 +24,7 @@ SECRET = "s3cret-" * 8
 STORE = {}                      # table name -> {key: item}
 HOOKS = {}                      # name -> callable run at a chosen moment
 FAIL_PUT = set()                # tables whose put_item raises
-KEYS = {"dev-medislot-refresh-tokens": "token_hash", "dev-medislot-token-denylist": "jti"}
+KEYS = {"dev-medislot-refresh-tokens": "token_hash", "dev-medislot-token-activelist": "jti"}
 
 
 class FakeSSM:
@@ -56,6 +52,8 @@ class Table:
         STORE[self.name][Item[self.k]] = copy.deepcopy(Item)
 
     def delete_item(self, Key, ReturnValues=None, **kw):
+        if self.name in FAIL_PUT:
+            raise ClientError({"Error": {"Code": "InternalServerError"}}, "DeleteItem")
         if "before_delete" in HOOKS:
             HOOKS.pop("before_delete")()
         old = STORE[self.name].pop(Key[self.k], None)
@@ -96,7 +94,7 @@ sys.modules["pymysql"] = pm
 os.environ.update(
     JWT_SECRET_PARAMETER_NAME="/p",
     REFRESH_TOKEN_TABLE="dev-medislot-refresh-tokens",
-    TOKEN_DENYLIST_TABLE="dev-medislot-token-denylist",
+    TOKEN_ACTIVELIST_TABLE="dev-medislot-token-activelist",
 )
 
 import application.authorizer.lambda_handler as az   # noqa: E402
@@ -124,9 +122,9 @@ ah.get_connection = lambda: Conn()
 
 
 # ---------------- helpers ----------------
-def call(path, body, headers=None):
-    r = ah.lambda_handler({"requestContext": {"http": {"method": "POST"}}, "rawPath": path,
-                           "body": json.dumps(body), "headers": headers or {}}, None)
+def call(path, body=None, headers=None, method="POST"):
+    r = ah.lambda_handler({"requestContext": {"http": {"method": method}}, "rawPath": path,
+                           "body": json.dumps(body or {}), "headers": headers or {}}, None)
     return r["statusCode"], json.loads(r["body"])
 
 
@@ -148,16 +146,16 @@ def record(refresh_token):
     return STORE["dev-medislot-refresh-tokens"][ah._hash_token(refresh_token)]
 
 
-DENY = lambda: STORE["dev-medislot-token-denylist"]
+ACTIVE = lambda: STORE["dev-medislot-token-activelist"]
 
 
 def reset():
     STORE.clear(); HOOKS.clear(); FAIL_PUT.clear()
-    STORE["dev-medislot-refresh-tokens"] = {}; STORE["dev-medislot-token-denylist"] = {}
+    STORE["dev-medislot-refresh-tokens"] = {}; STORE["dev-medislot-token-activelist"] = {}
 
 
 # ---------------- tests ----------------
-def test_ten_tokens_nine_denylisted_one_valid():
+def test_ten_tokens_nine_deactivated_one_active():
     reset()
     tokens = []
     a, r = login(); tokens.append(a)
@@ -166,19 +164,22 @@ def test_ten_tokens_nine_denylisted_one_valid():
         tokens.append(d["access_token"])
     assert len(set(claims(t)["jti"] for t in tokens)) == 10, "every token has its own jti"
     assert [valid(t) for t in tokens] == [False] * 9 + [True], "only the newest token is valid"
-    assert len(DENY()) == 9 and claims(tokens[-1])["jti"] not in DENY()
+    assert len(ACTIVE()) == 1 and claims(tokens[-1])["jti"] in ACTIVE()
     assert record(r)["current_jti"] == claims(tokens[-1])["jti"]
 
 
-def test_denylist_entries_expire_with_their_token():
+def test_active_list_entry_expires_with_its_token():
     reset()
-    a, r = login(); call("/auth/refresh", {"refresh_token": r})
-    entry = DENY()[claims(a)["jti"]]
-    assert entry["expires_at"] == claims(a)["exp"] and entry["ttl"] == claims(a)["exp"]
-    assert claims(a)["exp"] - claims(a)["iat"] == 900, "15-minute access tokens"
+    a, r = login()
+    c, d = call("/auth/refresh", {"refresh_token": r})
+    assert c == 200
+    latest = d["access_token"]
+    entry = ACTIVE()[claims(latest)["jti"]]
+    assert entry["expires_at"] == claims(latest)["exp"] and entry["ttl"] == claims(latest)["exp"]
+    assert claims(latest)["exp"] - claims(latest)["iat"] == 900, "15-minute access tokens"
 
 
-def test_logout_denies_the_latest_token_and_kills_refresh():
+def test_logout_deactivates_latest_token_and_kills_refresh():
     reset()
     a, r = login(); _, d = call("/auth/refresh", {"refresh_token": r}); latest = d["access_token"]
     c, _ = call("/auth/logout", {"refresh_token": r})            # NO bearer sent
@@ -211,13 +212,35 @@ def test_logout_requires_refresh_token_and_ignores_forged_bearer():
     a, r = login()
     now = int(time.time())
     # Signed with the WRONG secret: an attacker must not be able to write
-    # arbitrary jti values into the denylist through the logout endpoint.
+    # arbitrary jti values into the active list through the logout endpoint.
     forged = _sign({"sub": "x", "role": "patient", "iat": now, "exp": now + 900,
                     "jti": "attacker-chosen-jti", "iss": "medislot"}, "wrong-secret")
     c, _ = call("/auth/logout", {"refresh_token": r}, {"authorization": "Bearer " + forged})
     assert c == 200
-    assert "attacker-chosen-jti" not in DENY()
+    assert "attacker-chosen-jti" not in ACTIVE()
     assert not valid(a), "the real latest token was still revoked via the refresh record"
+
+
+def test_dummy_endpoint_requires_a_valid_active_access_token():
+    reset()
+    assert call("/auth/test-token", method="GET")[0] == 401
+    access, _ = login()
+    status, body = call(
+        "/auth/test-token",
+        headers={"authorization": "Bearer " + access},
+        method="GET",
+    )
+    assert status == 200
+    assert body["authenticated"] is True
+    assert body["user"]["jti"] == claims(access)["jti"]
+
+    old_access, refresh = login()
+    assert call("/auth/refresh", {"refresh_token": refresh})[0] == 200
+    assert call(
+        "/auth/test-token",
+        headers={"authorization": "Bearer " + old_access},
+        method="GET",
+    )[0] == 401
 
 
 def test_tampered_or_unknown_tokens_rejected():
@@ -237,14 +260,14 @@ def test_race_two_refreshes_leave_exactly_one_live_token():
         if state["n"] == 0:
             state["n"] = 1
             rec = record(r)
-            rec["current_jti"], rec["current_jti_exp"] = "rival-token-jti", int(time.time()) + 900
+            rec["current_jti"] = "rival-token-jti"
 
     HOOKS["before_update"] = other_refresh_wins_first
     c, d = call("/auth/refresh", {"refresh_token": r})
     assert c == 200
     new = d["access_token"]
     assert valid(new) and not valid(a)
-    assert "rival-token-jti" in DENY(), "the rival's token is denylisted, not left live"
+    assert "rival-token-jti" not in ACTIVE(), "the rival's token is losing token is not left active"
     assert record(r)["current_jti"] == claims(new)["jti"]
 
 
@@ -255,7 +278,7 @@ def test_persistent_conflict_returns_409_not_two_live_tokens():
 
     def always_interleaved():
         counter["i"] += 1
-        rec = record(r); rec["current_jti"] = f"rival-{counter['i']}"; rec["current_jti_exp"] = int(time.time()) + 900
+        rec = record(r); rec["current_jti"] = f"rival-{counter['i']}"
 
     HOOKS["before_update"] = always_interleaved
     c, d = call("/auth/refresh", {"refresh_token": r})
@@ -267,18 +290,18 @@ def test_race_refresh_slips_in_between_logout_steps():
     a, r = login()
 
     def refresh_sneaks_in():
-        rec = record(r); rec["current_jti"], rec["current_jti_exp"] = "sneaky-jti", int(time.time()) + 900
+        rec = record(r); rec["current_jti"] = "sneaky-jti"
 
     HOOKS["before_delete"] = refresh_sneaks_in
     assert call("/auth/logout", {"refresh_token": r})[0] == 200
-    assert "sneaky-jti" in DENY(), "token created during the logout race is also denylisted"
+    assert "sneaky-jti" not in ACTIVE(), "token created during the logout race is also inactive"
     assert call("/auth/refresh", {"refresh_token": r})[0] == 401
 
 
-def test_fail_closed_when_denylist_write_fails():
+def test_fail_closed_when_active_list_write_fails():
     reset()
     a, r = login()
-    FAIL_PUT.add("dev-medislot-token-denylist")
+    FAIL_PUT.add("dev-medislot-token-activelist")
     c, _ = call("/auth/refresh", {"refresh_token": r}); assert c == 500
     assert valid(a), "refresh failed -> old token is still the one valid token"
     c, _ = call("/auth/logout", {"refresh_token": r}); assert c == 500, "never a false 'Logged out'"
@@ -290,7 +313,7 @@ def test_fail_closed_when_denylist_write_fails():
 def test_login_record_created_before_this_feature_still_refreshes():
     reset()
     a, r = login()
-    rec = record(r); rec.pop("current_jti"); rec.pop("current_jti_exp")      # legacy record
+    rec = record(r); rec.pop("current_jti")      # legacy record
     c, d = call("/auth/refresh", {"refresh_token": r}); assert c == 200
     assert valid(d["access_token"]) and record(r)["current_jti"] == claims(d["access_token"])["jti"]
 

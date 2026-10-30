@@ -1,3 +1,4 @@
+
 name: MediSlot CI
 
 on:
@@ -57,11 +58,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
-      - name: Install test dependencies
+      - name: Install test and application dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest
+          python -m pip install pytest boto3 PyMySQL bcrypt PyJWT
 
       - name: Run unit tests
         run: |

@@ -245,8 +245,7 @@ ON DUPLICATE KEY UPDATE specialisation_id = specialisation_id;
 INSERT INTO users (user_id, email, password_hash, role, is_active, email_verified) VALUES
     ('3cda2790-fffc-5400-b9a1-c2236d0250d8', 'doctor1@example.com', '$2b$12$weCHDUG/EgIMFzVhMoZC9enTBeIkUk4zTuzA6rw.n.GCqW0/6f8zS', 'DOCTOR', TRUE, TRUE),
     ('d39248c4-f567-58c8-acf7-b23e595a09f6', 'doctor2@example.com', '$2b$12$n08c3eYjy1Rv9cH/wbWqpOjn9bP5uNi3SKnODWeybFnwVvDnmJ6yK', 'DOCTOR', TRUE, TRUE),
-    ('873a8bdb-ece4-51cc-9d30-8b499f7ddef2', 'doctor3@example.com', '$2b$12$zNXXkINMJu1u5fDfKjksmOdyc7hGvF0UFHGw2vpqb3HxCB4cAPysi', 'DOCTOR', TRUE, TRUE),
-    ('67f59346-9788-5841-b5af-03726468434a', 'doctor4@example.com', '$2b$12$6cxj2Eyr09WIeSbHRY39EO3s3DkT9zJQ3a9CQUFmqabKsXRTtMPv2', 'DOCTOR', TRUE, TRUE)
+    ('873a8bdb-ece4-51cc-9d30-8b499f7ddef2', 'doctor3@example.com', '$2b$12$zNXXkINMJu1u5fDfKjksmOdyc7hGvF0UFHGw2vpqb3HxCB4cAPysi', 'DOCTOR', TRUE, TRUE)
 ON DUPLICATE KEY UPDATE user_id = user_id;
 
 -- Doctor profile for doctor1@example.com (user_id and specialisation_id are looked up)

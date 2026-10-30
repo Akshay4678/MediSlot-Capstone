@@ -1,7 +1,7 @@
 """
 MediSlot API Gateway Lambda Authorizer
 
-Verifies JWT access tokens and requires their jti to exist in the active-token table.
+Verifies JWT access tokens and requires a matching active-list entry.
 
 Required environment variables:
     JWT_SECRET_PARAMETER_NAME
@@ -49,32 +49,22 @@ def get_jwt_secret():
     return parameter["Parameter"]["Value"].encode()
 
 
-def is_token_active(token_id):
-    """Return True only when the token ID exists and has not expired in the active list."""
+def is_token_active(token_id, subject=None):
+    """Return True only when the JTI exists and has not expired in the active list."""
     table_name = os.environ.get("TOKEN_ACTIVELIST_TABLE")
-
     if not table_name:
         raise RuntimeError("TOKEN_ACTIVELIST_TABLE is not configured")
-
-    table = dynamodb.Table(table_name)
-
-    result = table.get_item(
-        Key={"jti": token_id},
-        ConsistentRead=True
-    )
-
-    item = result.get("Item")
-
-    if not item:
+    item = dynamodb.Table(table_name).get_item(
+        Key={"jti": token_id}, ConsistentRead=True
+    ).get("Item")
+    if not item or int(item.get("expires_at", 0)) <= int(time.time()):
         return False
-
-    expiry_time = int(item.get("expires_at", 0))
-    current_time = int(time.time())
-
-    return expiry_time > current_time
+    if subject is not None and str(item.get("user_id")) != str(subject):
+        return False
+    return True
 
 
-def verify_access_token(token):
+def verify_access_token(token, check_active=True):
     """Verify the JWT signature, expiry, issuer, and required claims."""
 
     # A JWT must contain three parts.
@@ -131,9 +121,11 @@ def verify_access_token(token):
     if not user_id or user_role not in allowed_roles or not token_id:
         raise ValueError("Required claims missing")
 
-    # Active-list semantics: absence means the token is not authorized.
-    if not is_token_active(token_id):
-        raise ValueError("Token is not active or has expired")
+    # Normal API authorization requires the JTI to exist in TOKEN_ACTIVELIST.
+    # Logout can set check_active=False after verifying the signature and claims,
+    # so it can remove the current JTI from the list.
+    if check_active and not is_token_active(token_id, user_id):
+        raise ValueError("Token is not active")
 
     return claims
 

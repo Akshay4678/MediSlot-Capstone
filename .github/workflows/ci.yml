@@ -4,11 +4,9 @@ on:
   push:
     branches:
       - milestone-2-branch
-
   pull_request:
     branches:
       - milestone-2-branch
-
   workflow_dispatch:
 
 permissions:
@@ -18,59 +16,39 @@ jobs:
   validate-cloudformation:
     name: Validate CloudFormation Templates
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install cfn-lint
         run: |
           python -m pip install --upgrade pip
           python -m pip install cfn-lint
-
       - name: Validate Network Stack
         run: cfn-lint infrastructure/cloudformation/network.yaml
-
       - name: Validate RDS and Data Stack
         run: cfn-lint infrastructure/cloudformation/rds.yaml
-
       - name: Validate Authentication Stack
         run: cfn-lint infrastructure/cloudformation/auth.yaml
 
   unit-tests:
     name: Run Unit Tests
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install test and application dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --force-reinstall boto3
-          python -m pip install pytest PyMySQL bcrypt PyJWT
-
-      - name: Diagnose boto3 import
-        env:
-          PYTHONPATH: .
-        run: |
-          python -m pip show boto3
-          python -c "import boto3; print('boto3 location:', boto3.__file__); print('boto3 version:', getattr(boto3, '__version__', 'unknown'))"
-          python -c "from boto3.dynamodb.conditions import Key; print('DynamoDB Key import successful')"
-
+          python -m pip install pytest boto3 PyMySQL bcrypt PyJWT
       - name: Run unit tests
         env:
           PYTHONPATH: .
-        run: |
-          python -m pytest tests/unit -v
+        run: python -m pytest tests/unit -v

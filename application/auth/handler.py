@@ -17,7 +17,6 @@ import boto3
 import bcrypt
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from boto3.dynamodb.conditions import Key
 
 from application.common.http import (
     response,
@@ -92,12 +91,11 @@ def _jwt(payload):
     return f"{header}.{body}.{signature}"
 
 
-def _issue_access(user, session_id):
-    """Generate an access token bound to a refresh-token session.
+def _issue_access(user):
+    """Generate an access token. Returns (token, jti, exp).
 
-    The session ID is the SHA-256 hash of the opaque refresh token. It lets the
-    active list associate access tokens with a session without storing a JTI
-    or TTL attribute in REFRESH_TOKENS.
+    The jti and exp are returned so the caller can remember the latest token
+    of this login and denylist it when it is replaced or on logout.
     """
     current_time = int(time.time())
     jti = str(uuid.uuid4())
@@ -109,34 +107,31 @@ def _issue_access(user, session_id):
         "iat": current_time,
         "exp": expires_at,
         "jti": jti,
-        "sid": str(session_id),
         "iss": os.environ.get("JWT_ISSUER", "medislot"),
     })
 
     return token, jti, expires_at
 
 
-def _activate_jti(jti, user_id, expires_at, session_id):
-    """Register an access token and associate it with its login session."""
-    if not jti or not expires_at:
-        return
-
+def _activate_jti(jti, user_id, expires_at):
+    """Register an access token as active until its JWT expiry."""
     expires_at = int(expires_at)
-
     if expires_at <= int(time.time()):
-        return
-
+        raise ValueError("Cannot activate an already-expired access token")
     _table("TOKEN_ACTIVELIST_TABLE").put_item(
-        Item={"jti": str(jti), "user_id": str(user_id), "session_id": str(session_id), "expires_at": expires_at, "ttl": expires_at},
-        ConditionExpression="attribute_not_exists(jti)",
+        Item={
+            "jti": str(jti),
+            "user_id": str(user_id),
+            "expires_at": expires_at,
+            "ttl": expires_at,
+        }
     )
 
 
 def _deactivate_jti(jti):
-    """Remove an access token from the active list, making it unusable immediately."""
-    if not jti:
-        return
-    _table("TOKEN_ACTIVELIST_TABLE").delete_item(Key={"jti": str(jti)})
+    """Remove an access token from the active list immediately."""
+    if jti:
+        _table("TOKEN_ACTIVELIST_TABLE").delete_item(Key={"jti": str(jti)})
 
 
 def _hash_token(token):
@@ -320,124 +315,58 @@ def _register(body, path_role=None):
 
 
 def _login(body, path_role=None):
-    """Verify credentials and issue access and refresh tokens."""
+    """Verify credentials, then store refresh metadata and an active access jti."""
     email = str(body.get("email", "")).strip().lower()
     password = body.get("password")
-
     if not email or not isinstance(password, str):
-        return _json_error(
-            400,
-            "MISSING_CREDENTIALS",
-            "email and password are required.",
-        )
+        return _json_error(400, "MISSING_CREDENTIALS", "email and password are required.")
 
     conn = get_connection()
-
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT
-                    user_id,
-                    email,
-                    password_hash,
-                    role,
-                    is_active
-                FROM users
-                WHERE email = %s
-                LIMIT 1
-                """,
+                "SELECT user_id, email, password_hash, role, is_active FROM users WHERE email = %s LIMIT 1",
                 (email,),
             )
-
             user = cur.fetchone()
-
     finally:
         conn.close()
 
-    # Reject invalid credentials or inactive accounts.
-    if (
-        not user
-        or not user.get("is_active")
-        or (path_role and str(user["role"]).upper() != path_role)
-        or not bcrypt.checkpw(
-            password.encode(),
-            str(user["password_hash"]).encode(),
-        )
-    ):
-        return _json_error(
-            401,
-            "INVALID_CREDENTIALS",
-            "Email or password is incorrect.",
-        )
+    if (not user or not user.get("is_active")
+            or (path_role and str(user["role"]).upper() != path_role)
+            or not bcrypt.checkpw(password.encode(), str(user["password_hash"]).encode())):
+        return _json_error(401, "INVALID_CREDENTIALS", "Email or password is incorrect.")
 
+    access_token, access_jti, access_exp = _issue_access(user)
     refresh_token = secrets.token_urlsafe(48)
-    session_id = _hash_token(refresh_token)
-    access_token, access_jti, access_exp = _issue_access(user, session_id)
+    now = int(time.time())
 
-    current_time = int(time.time())
+    # Refresh table follows the data model: no JTI, role, revoked flag, or TTL.
+    _table("REFRESH_TOKEN_TABLE").put_item(Item={
+        "token_hash": _hash_token(refresh_token),
+        "user_id": str(user["user_id"]),
+        "created_at": now,
+        "expires_at": now + REFRESH_TTL,
+    })
+    _activate_jti(access_jti, user["user_id"], access_exp)
 
-    # REFRESH_TOKENS stores only the fields in the data model. Its expires_at
-    # attribute is configured as DynamoDB TTL; no separate ttl/current_jti/role
-    # attribute is stored in this table.
-    _activate_jti(access_jti, user["user_id"], access_exp, session_id)
-    try:
-        _table("REFRESH_TOKEN_TABLE").put_item(
-            Item={
-                "token_hash": session_id,
-                "user_id": str(user["user_id"]),
-                "created_at": current_time,
-                "expires_at": current_time + REFRESH_TTL,
-            },
-            ConditionExpression="attribute_not_exists(token_hash)",
-        )
-    except Exception:
-        _deactivate_jti(access_jti)
-        raise
-
-    return response(
-        200,
-        {
-            "access_token": access_token,
-            "token_type": "Bearer",
-            "expires_in": ACCESS_TTL,
-            "refresh_token": refresh_token,
-            "refresh_expires_in": REFRESH_TTL,
-            "user": {
-                "user_id": str(user["user_id"]),
-                "email": user["email"],
-                "role": str(user["role"]).lower(),
-            },
-        },
-    )
+    return response(200, {
+        "access_token": access_token,
+        "token_type": "Bearer",
+        "expires_in": ACCESS_TTL,
+        "refresh_token": refresh_token,
+        "refresh_expires_in": REFRESH_TTL,
+        "user": {"user_id": str(user["user_id"]), "email": user["email"], "role": str(user["role"]).lower()},
+    })
 
 
-def _deactivate_session_tokens(session_id):
-    """Deactivate all access tokens associated with one refresh-token session."""
-    if not session_id:
-        return
-    table = _table("TOKEN_ACTIVELIST_TABLE")
-    query_args = {
-        "IndexName": "session_id-index",
-        "KeyConditionExpression": Key("session_id").eq(str(session_id)),
-    }
-    while True:
-        result = table.query(**query_args)
-        for item in result.get("Items", []):
-            _deactivate_jti(item.get("jti"))
-        last_key = result.get("LastEvaluatedKey")
-        if not last_key:
-            break
-        query_args["ExclusiveStartKey"] = last_key
-
-
-def _user_for_refresh(user_id):
-    """Load the current role/status from MySQL; role is not duplicated in DynamoDB."""
+def _load_user_by_id(user_id):
+    """Fetch the user's current role from RDS; role is not stored in REFRESH_TOKENS."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT user_id, role, is_active FROM users WHERE user_id = %s LIMIT 1",
+                "SELECT user_id, email, role, is_active FROM users WHERE user_id = %s LIMIT 1",
                 (str(user_id),),
             )
             return cur.fetchone()
@@ -446,115 +375,69 @@ def _user_for_refresh(user_id):
 
 
 def _refresh(body):
-    """Rotate a refresh token and replace access tokens for its session."""
+    """Validate the refresh record and issue a new active access token.
+
+    The data model intentionally does not associate a JTI with a refresh record.
+    Therefore an older access token remains active until it expires (15 minutes),
+    unless that specific token is explicitly removed from TOKEN_ACTIVELIST.
+    """
     refresh_token = body.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token:
         return _json_error(400, "MISSING_REFRESH_TOKEN", "refresh_token is required.")
 
     table = _table("REFRESH_TOKEN_TABLE")
-    old_hash = _hash_token(refresh_token)
-    current_time = int(time.time())
-    record = table.get_item(Key={"token_hash": old_hash}, ConsistentRead=True).get("Item")
-
-    if (
-        not record
-        or record.get("revoked_at") is not None
-        or int(record.get("expires_at", 0)) <= current_time
-    ):
+    token_hash = _hash_token(refresh_token)
+    record = table.get_item(Key={"token_hash": token_hash}, ConsistentRead=True).get("Item")
+    now = int(time.time())
+    if (not record or record.get("revoked_at") is not None
+            or int(record.get("expires_at", 0)) <= now):
         return _json_error(401, "INVALID_REFRESH_TOKEN", "Refresh token is invalid, expired, or revoked.")
 
-    user = _user_for_refresh(record["user_id"])
+    user = _load_user_by_id(record["user_id"])
     if not user or not user.get("is_active"):
-        return _json_error(401, "INVALID_REFRESH_TOKEN", "The account is unavailable.")
+        return _json_error(401, "INACTIVE_ACCOUNT", "This account is not active.")
 
-    # Rotate the refresh token. Conditional revocation below ensures only one
-    # concurrent request can successfully consume the old refresh token.
-    new_refresh_token = secrets.token_urlsafe(48)
-    new_hash = _hash_token(new_refresh_token)
-    new_token, new_jti, new_exp = _issue_access(user, new_hash)
-    _activate_jti(new_jti, record["user_id"], new_exp, new_hash)
-
-    try:
-        table.put_item(
-            Item={
-                "token_hash": new_hash,
-                "user_id": str(record["user_id"]),
-                "created_at": current_time,
-                "expires_at": current_time + REFRESH_TTL,
-            },
-            ConditionExpression="attribute_not_exists(token_hash)",
-        )
-        table.update_item(
-            Key={"token_hash": old_hash},
-            UpdateExpression="SET revoked_at = :now",
-            ConditionExpression=(
-                "attribute_exists(token_hash) AND attribute_not_exists(revoked_at) "
-                "AND expires_at > :now"
-            ),
-            ExpressionAttributeValues={":now": current_time},
-        )
-    except ClientError as exc:
-        _deactivate_jti(new_jti)
-        # If the new refresh record was created but the old token was already
-        # consumed by another request, remove the unreturned candidate record.
-        try:
-            table.delete_item(Key={"token_hash": new_hash})
-        except Exception:
-            log.exception("Could not clean up losing refresh candidate")
-        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-            return _json_error(401, "INVALID_REFRESH_TOKEN", "Refresh token was already used or revoked.")
-        raise
-    except Exception:
-        _deactivate_jti(new_jti)
-        try:
-            table.delete_item(Key={"token_hash": new_hash})
-        except Exception:
-            log.exception("Could not clean up failed refresh candidate")
-        raise
-
-    # Remove old session access tokens only after the refresh-token rotation
-    # succeeds. The new access token is tied to new_hash, so it remains active.
-    _deactivate_session_tokens(old_hash)
-
+    token, jti, exp = _issue_access(user)
+    _activate_jti(jti, user["user_id"], exp)
     return response(200, {
-        "access_token": new_token,
+        "access_token": token,
         "token_type": "Bearer",
         "expires_in": ACCESS_TTL,
-        "refresh_token": new_refresh_token,
-        "refresh_expires_in": REFRESH_TTL,
+        "refresh_expires_in": max(0, int(record["expires_at"]) - now),
     })
 
 
 def _logout(event, body):
-    """Revoke the supplied refresh token and deactivate its session's access tokens."""
+    """Revoke the refresh token and remove the presented access token from active list."""
     refresh_token = body.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token:
         return _json_error(400, "MISSING_REFRESH_TOKEN", "refresh_token is required.")
 
-    table = _table("REFRESH_TOKEN_TABLE")
-    session_id = _hash_token(refresh_token)
-    now = int(time.time())
-    record = table.get_item(Key={"token_hash": session_id}, ConsistentRead=True).get("Item")
+    bearer = _bearer_token(event)
+    if not bearer:
+        return _json_error(400, "MISSING_ACCESS_TOKEN", "Send the current access token as a Bearer token to log out.")
+    try:
+        claims = verify_access_token(bearer, check_active=False)
+    except (ValueError, KeyError, TypeError):
+        return _json_error(401, "INVALID_ACCESS_TOKEN", "A valid signed access token is required for logout.")
 
-    if record and record.get("revoked_at") is None:
+    table = _table("REFRESH_TOKEN_TABLE")
+    key = {"token_hash": _hash_token(refresh_token)}
+    record = table.get_item(Key=key, ConsistentRead=True).get("Item")
+    if not record or int(record.get("expires_at", 0)) <= int(time.time()):
+        return response(200, {"message": "Logged out successfully."})
+    if str(record.get("user_id")) != str(claims.get("sub")):
+        return _json_error(403, "TOKEN_USER_MISMATCH", "The access token and refresh token belong to different users.")
+
+    now = int(time.time())
+    if record.get("revoked_at") is None:
         table.update_item(
-            Key={"token_hash": session_id},
+            Key=key,
             UpdateExpression="SET revoked_at = :now",
             ConditionExpression="attribute_exists(token_hash) AND attribute_not_exists(revoked_at)",
             ExpressionAttributeValues={":now": now},
         )
-        _deactivate_session_tokens(session_id)
-
-    # Also deactivate the bearer token if it belongs to this user/session.
-    bearer = _bearer_token(event)
-    if bearer:
-        try:
-            claims = verify_access_token(bearer)
-        except ValueError:
-            claims = None
-        if claims and claims.get("sid") == session_id:
-            _deactivate_jti(claims.get("jti"))
-
+    _deactivate_jti(claims.get("jti"))
     return response(200, {"message": "Logged out successfully."})
 
 
@@ -582,6 +465,18 @@ def lambda_handler(event, context):
 
     path = event.get("rawPath") or event.get("path") or "/"
 
+    # A small protected route for mentor/demo testing. API Gateway must attach
+    # the Lambda authorizer to GET /auth/test-access for this to be meaningful.
+    if method == "GET" and path.rstrip("/").endswith("/auth/test-access"):
+        request_context = event.get("requestContext") or {}
+        authorizer = request_context.get("authorizer") or {}
+        identity = authorizer.get("lambda") or authorizer.get("claims") or authorizer
+        user_id = identity.get("userId") or identity.get("user_id") or identity.get("sub")
+        role = identity.get("role")
+        if not user_id or not role:
+            return _json_error(401, "UNAUTHORIZED", "A valid access token is required.")
+        return response(200, {"message": "Access token is valid.", "user_id": str(user_id), "role": str(role)})
+
     try:
         body = (
             request_body(event)
@@ -597,27 +492,6 @@ def lambda_handler(event, context):
         )
 
     try:
-        # Protected diagnostic endpoint used to demonstrate access-token
-        # validation. API Gateway also invokes the Lambda authorizer on this route.
-        if method == "GET" and path.endswith("/auth/test-token"):
-            bearer = _bearer_token(event)
-            if not bearer:
-                return _json_error(401, "MISSING_ACCESS_TOKEN", "Send Authorization: Bearer <access_token>.")
-            try:
-                claims = verify_access_token(bearer)
-            except Exception:
-                return _json_error(401, "INVALID_ACCESS_TOKEN", "Access token is invalid, expired, or inactive.")
-            return response(200, {
-                "message": "Access token is valid.",
-                "authenticated": True,
-                "user": {
-                    "user_id": str(claims["sub"]),
-                    "role": str(claims["role"]),
-                    "jti": str(claims["jti"]),
-                },
-                "expires_at": int(claims["exp"]),
-            })
-
         if method != "POST":
             return response(
                 405,

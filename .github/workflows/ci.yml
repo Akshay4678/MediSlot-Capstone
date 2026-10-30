@@ -34,16 +34,13 @@ jobs:
           python -m pip install cfn-lint
 
       - name: Validate Network Stack
-        run: |
-          cfn-lint infrastructure/cloudformation/network.yaml
+        run: cfn-lint infrastructure/cloudformation/network.yaml
 
       - name: Validate RDS and Data Stack
-        run: |
-          cfn-lint infrastructure/cloudformation/rds.yaml
+        run: cfn-lint infrastructure/cloudformation/rds.yaml
 
       - name: Validate Authentication Stack
-        run: |
-          cfn-lint infrastructure/cloudformation/auth.yaml
+        run: cfn-lint infrastructure/cloudformation/auth.yaml
 
   unit-tests:
     name: Run Unit Tests
@@ -61,7 +58,16 @@ jobs:
       - name: Install test and application dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest boto3 PyMySQL bcrypt PyJWT
+          python -m pip install --force-reinstall boto3
+          python -m pip install pytest PyMySQL bcrypt PyJWT
+
+      - name: Diagnose boto3 import
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m pip show boto3
+          python -c "import boto3; print('boto3 location:', boto3.__file__); print('boto3 version:', getattr(boto3, '__version__', 'unknown'))"
+          python -c "from boto3.dynamodb.conditions import Key; print('DynamoDB Key import successful')"
 
       - name: Run unit tests
         env:

@@ -454,6 +454,28 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
+  # X-Ray interface endpoint lets VPC-attached doctor/materialiser Lambdas
+  # publish traces without requiring a NAT Gateway.
+  XRayVpcEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.xray'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateAppSubnet1
+        - !Ref PrivateAppSubnet2
+      SecurityGroupIds:
+        - !Ref SecretsManagerEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-xray-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
   # Database SG allows MySQL from the application SG and the dedicated Workbench SG only.
   DatabaseSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -686,3 +708,7 @@ Outputs:
   DynamoDbGatewayEndpointId:
     Description: Gateway endpoint used by private Lambdas to reach DynamoDB.
     Value: !Ref DynamoDbGatewayEndpoint
+
+  XRayVpcEndpointId:
+    Description: Interface endpoint used by VPC-attached Lambda functions to publish X-Ray traces.
+    Value: !Ref XRayVpcEndpoint

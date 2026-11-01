@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: MediSlot Milestone 2 authentication API - registration, login, refresh, logout and JWT authorizer only.
+Description: MediSlot authentication API and Milestone 3 doctor-domain Lambda API.
 
 Parameters:
   ProjectName:
@@ -40,6 +40,9 @@ Parameters:
   TokenActiveListTableName:
     Type: String
     Description: Existing token-activelist DynamoDB table name.
+  MaterialisedSlotsTableName:
+    Type: String
+    Description: Materialised slots DynamoDB table name.
 
 Resources:
   AuthFunction:
@@ -204,6 +207,122 @@ Resources:
       AuthorizationType: CUSTOM
       AuthorizerId: !Ref MediSlotLambdaAuthorizer
 
+
+  DoctorPhotoBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-${EnvironmentName}-${AWS::AccountId}-doctor-photos'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [PUT, HEAD]
+            AllowedOrigins: ['*']
+            MaxAge: 3000
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DoctorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-doctor-domain'
+      Runtime: python3.12
+      Handler: application.doctor.handler.lambda_handler
+      Role:
+        Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorLambdaExecutionRoleArn'
+      Code: {S3Bucket: !Ref LambdaCodeS3Bucket, S3Key: !Ref LambdaCodeS3Key}
+      Timeout: 25
+      MemorySize: 256
+      TracingConfig: {Mode: Active}
+      Environment:
+        Variables:
+          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+          DB_HOST: !Ref DatabaseHost
+          DB_NAME: !Ref DatabaseName
+          PROFILE_PHOTO_BUCKET: !Ref DoctorPhotoBucket
+          MATERIALISED_SLOTS_TABLE: !Ref MaterialisedSlotsTableName
+      VpcConfig:
+        SubnetIds: !Ref LambdaSubnetIds
+        SecurityGroupIds: [!Ref LambdaSecurityGroupId]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  SlotMaterialiserFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-slot-materialiser'
+      Runtime: python3.12
+      Handler: application.slot_materialiser.handler.lambda_handler
+      Role:
+        Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-MaterialiserLambdaExecutionRoleArn'
+      Code: {S3Bucket: !Ref LambdaCodeS3Bucket, S3Key: !Ref LambdaCodeS3Key}
+      Timeout: 300
+      MemorySize: 512
+      TracingConfig: {Mode: Active}
+      Environment:
+        Variables:
+          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+          DB_HOST: !Ref DatabaseHost
+          DB_NAME: !Ref DatabaseName
+          MATERIALISED_SLOTS_TABLE: !Ref MaterialisedSlotsTableName
+          MATERIALISATION_DAYS: '30'
+      VpcConfig:
+        SubnetIds: !Ref LambdaSubnetIds
+        SecurityGroupIds: [!Ref LambdaSecurityGroupId]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DoctorIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationMethod: POST
+      IntegrationUri: !GetAtt DoctorFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  DoctorRootRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'ANY /doctor'
+      Target: !Sub 'integrations/${DoctorIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
+
+  DoctorProxyRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref MediSlotHttpApi
+      RouteKey: 'ANY /doctor/{proxy+}'
+      Target: !Sub 'integrations/${DoctorIntegration}'
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotLambdaAuthorizer
+
+  DoctorInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DoctorFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${MediSlotHttpApi}/*/*/doctor*'
+
   ApiStage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
@@ -248,3 +367,11 @@ Outputs:
   AuthTestTokenEndpoint:
     Description: Protected endpoint for testing access-token authorization.
     Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/auth/test-token'
+  DoctorProfileEndpoint:
+    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/doctor/profile'
+  DoctorScheduleEndpoint:
+    Value: !Sub '${MediSlotHttpApi.ApiEndpoint}/doctor/schedule'
+  SlotMaterialiserFunctionArn:
+    Value: !GetAtt SlotMaterialiserFunction.Arn
+  DoctorPhotoBucketName:
+    Value: !Ref DoctorPhotoBucket

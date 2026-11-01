@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: MediSlot Milestone 2 authentication state tables
+Description: MediSlot authentication state and Milestone 3 materialised slot tables
 
 Parameters:
   EnvironmentName:
@@ -13,28 +13,14 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      TableName: !Sub '${EnvironmentName}-medislot-refresh-tokens'
+      TableName: !Sub '${EnvironmentName}-medislot-refresh-tokens-m3'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: token_hash
           AttributeType: S
-        - AttributeName: user_id
-          AttributeType: S
       KeySchema:
         - AttributeName: token_hash
           KeyType: HASH
-      GlobalSecondaryIndexes:
-        - IndexName: user_id-index
-          KeySchema:
-            - AttributeName: user_id
-              KeyType: HASH
-            - AttributeName: token_hash
-              KeyType: RANGE
-          Projection:
-            ProjectionType: KEYS_ONLY
-      TimeToLiveSpecification:
-        AttributeName: expires_at
-        Enabled: true
       SSESpecification:
         SSEEnabled: true
       PointInTimeRecoverySpecification:
@@ -45,19 +31,35 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      TableName: !Sub '${EnvironmentName}-medislot-token-activelist-v2'
+      TableName: !Sub '${EnvironmentName}-medislot-token-activelist-m3'
       BillingMode: PAY_PER_REQUEST
-      # One item per user: user_id is the partition key. A new login or
-      # refresh replaces the previous jti for that user.
       AttributeDefinitions:
-        - AttributeName: user_id
+        - AttributeName: jti
           AttributeType: S
       KeySchema:
-        - AttributeName: user_id
+        - AttributeName: jti
           KeyType: HASH
       TimeToLiveSpecification:
         AttributeName: ttl
         Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  MaterialisedSlotsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub '${EnvironmentName}-medislot-materialised-slots'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: slot_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: slot_id
+          KeyType: HASH
       SSESpecification:
         SSEEnabled: true
       PointInTimeRecoverySpecification:
@@ -84,3 +86,13 @@ Outputs:
     Value: !GetAtt TokenActiveListTable.Arn
     Export:
       Name: !Sub '${EnvironmentName}-MediSlot-TokenActiveListTableArn'
+
+  MaterialisedSlotsTableName:
+    Description: DynamoDB materialised slot capacity table
+    Value: !Ref MaterialisedSlotsTable
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-MaterialisedSlotsTableName'
+  MaterialisedSlotsTableArn:
+    Value: !GetAtt MaterialisedSlotsTable.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-MediSlot-MaterialisedSlotsTableArn'

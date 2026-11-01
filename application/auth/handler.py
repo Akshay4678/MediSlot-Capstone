@@ -12,12 +12,13 @@ import time
 import uuid
 
 from functools import lru_cache
+from datetime import datetime, timezone, timedelta
 
 import boto3
 import bcrypt
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Key, Attr
 
 from application.common.http import (
     response,
@@ -114,51 +115,61 @@ def _issue_access(user):
     return token, jti, expires_at
 
 
+def _iso_timestamp(epoch):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(int(epoch), timezone.utc).isoformat()
+
+
 def _activate_jti(jti, user_id, expires_at):
-    """Register an access token as active until its JWT expiry."""
-    expires_at = int(expires_at)
-    if expires_at <= int(time.time()):
-        raise ValueError("Cannot activate an already-expired access token")
-    # user_id is the partition key, so PutItem replaces the previous active
-    # token for this user instead of creating another active-token row.
-    _table("TOKEN_ACTIVELIST_TABLE").put_item(
-        Item={
-            "user_id": str(user_id),
-            "jti": str(jti),
-            "expires_at": expires_at,
-            "ttl": expires_at,
-        }
-    )
+    """Keep one active token per user while the ERD's DynamoDB PK remains jti."""
+    table = _table("TOKEN_ACTIVELIST_TABLE")
+    # The ERD defines jti as the partition key and does not define a user_id GSI.
+    # Scan is acceptable for the small active-token table in this capstone; add a GSI
+    # only if production scale requires it.
+    scan_args = {"FilterExpression": Attr("user_id").eq(int(user_id)), "ProjectionExpression": "jti"}
+    while True:
+        result = table.scan(**scan_args)
+        for old in result.get("Items", []):
+            if str(old.get("jti")) != str(jti):
+                table.delete_item(Key={"jti": old["jti"]})
+        last = result.get("LastEvaluatedKey")
+        if not last:
+            break
+        scan_args["ExclusiveStartKey"] = last
+    table.put_item(Item={
+        "jti": str(jti), "user_id": int(user_id),
+        "expires_at": _iso_timestamp(expires_at), "ttl": int(expires_at),
+    })
 
 
 def _deactivate_user_token(user_id):
-    """Remove the user's single active access-token record immediately."""
-    if user_id:
-        _table("TOKEN_ACTIVELIST_TABLE").delete_item(
-            Key={"user_id": str(user_id)}
-        )
+    """Delete every active access-token record for this user."""
+    if not user_id:
+        return
+    table = _table("TOKEN_ACTIVELIST_TABLE")
+    args = {"FilterExpression": Attr("user_id").eq(int(user_id)), "ProjectionExpression": "jti"}
+    while True:
+        result = table.scan(**args)
+        for item in result.get("Items", []):
+            table.delete_item(Key={"jti": item["jti"]})
+        last = result.get("LastEvaluatedKey")
+        if not last:
+            break
+        args["ExclusiveStartKey"] = last
 
 
 def _delete_all_refresh_tokens(user_id):
-    """Delete every refresh-token record belonging to a user."""
+    """Delete all refresh-token records for a user; ERD does not define a user GSI."""
     table = _table("REFRESH_TOKEN_TABLE")
-    query_args = {
-        "IndexName": "user_id-index",
-        "KeyConditionExpression": Key("user_id").eq(str(user_id)),
-        "ProjectionExpression": "token_hash",
-    }
-
+    args = {"FilterExpression": Attr("user_id").eq(int(user_id)), "ProjectionExpression": "token_hash"}
     while True:
-        result = table.query(**query_args)
+        result = table.scan(**args)
         for item in result.get("Items", []):
-            table.delete_item(
-                Key={"token_hash": item["token_hash"]}
-            )
-
-        last_key = result.get("LastEvaluatedKey")
-        if not last_key:
+            table.delete_item(Key={"token_hash": item["token_hash"]})
+        last = result.get("LastEvaluatedKey")
+        if not last:
             break
-        query_args["ExclusiveStartKey"] = last_key
+        args["ExclusiveStartKey"] = last
 
 
 def _hash_token(token):
@@ -248,9 +259,6 @@ def _register(body, path_role=None):
             "first_name and last_name are required.",
         )
 
-    user_id = str(uuid.uuid4())
-    patient_id = str(uuid.uuid4())
-
     password_hash = bcrypt.hashpw(
         password.encode(),
         bcrypt.gensalt(rounds=12),
@@ -279,42 +287,17 @@ def _register(body, path_role=None):
                     "An account with this email already exists.",
                 )
 
-            # Create the user account.
+            # IDs are BIGINT AUTO_INCREMENT in the approved ERD.
             cur.execute(
-                """
-                INSERT INTO users (
-                    user_id,
-                    email,
-                    password_hash,
-                    role,
-                    is_active,
-                    email_verified
-                )
-                VALUES (%s, %s, %s, %s, TRUE, FALSE)
-                """,
-                (user_id, email, password_hash, role),
+                "INSERT INTO users (email,password_hash,role,is_active) VALUES (%s,%s,%s,TRUE)",
+                (email, password_hash, role),
             )
+            user_id = cur.lastrowid
 
             if role == "PATIENT":
-                # Create the associated patient profile.
                 cur.execute(
-                    """
-                    INSERT INTO patients (
-                        patient_id,
-                        user_id,
-                        first_name,
-                        last_name,
-                        phone
-                    )
-                    VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (
-                        patient_id,
-                        user_id,
-                        first_name,
-                        last_name,
-                        str(body.get("phone", "")).strip() or None,
-                    ),
+                    "INSERT INTO patients (user_id,first_name,last_name,phone) VALUES (%s,%s,%s,%s)",
+                    (user_id, first_name, last_name, str(body.get("phone", "")).strip() or None),
                 )
 
         conn.commit()
@@ -330,7 +313,7 @@ def _register(body, path_role=None):
         201,
         {
             "message": "Registration successful.",
-            "user_id": user_id,
+            "user_id": int(user_id),
             "role": role.lower(),
             **(
                 {"profile_complete": False}
@@ -371,9 +354,10 @@ def _login(body, path_role=None):
     # Refresh table follows the data model: no JTI, role, revoked flag, or TTL.
     _table("REFRESH_TOKEN_TABLE").put_item(Item={
         "token_hash": _hash_token(refresh_token),
-        "user_id": str(user["user_id"]),
-        "created_at": now,
-        "expires_at": now + REFRESH_TTL,
+        "user_id": int(user["user_id"]),
+        "created_at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+        "expires_at": datetime.fromtimestamp(now + REFRESH_TTL, timezone.utc).isoformat(),
+        "revoked_at": "",
     })
     _activate_jti(access_jti, user["user_id"], access_exp)
 
@@ -413,9 +397,14 @@ def _refresh(body):
     table = _table("REFRESH_TOKEN_TABLE")
     token_hash = _hash_token(refresh_token)
     record = table.get_item(Key={"token_hash": token_hash}, ConsistentRead=True).get("Item")
-    now = int(time.time())
-    if (not record or record.get("revoked_at") is not None
-            or int(record.get("expires_at", 0)) <= now):
+    now_dt = datetime.now(timezone.utc)
+    now = int(now_dt.timestamp())
+    try:
+        refresh_expiry = datetime.fromisoformat(str(record.get("expires_at", "")).replace("Z", "+00:00")) if record else None
+    except ValueError:
+        refresh_expiry = None
+    if (not record or record.get("revoked_at")
+            or not refresh_expiry or refresh_expiry <= now_dt):
         return _json_error(401, "INVALID_REFRESH_TOKEN", "Refresh token is invalid, expired, or revoked.")
 
     user = _load_user_by_id(record["user_id"])
@@ -428,7 +417,7 @@ def _refresh(body):
         "access_token": token,
         "token_type": "Bearer",
         "expires_in": ACCESS_TTL,
-        "refresh_expires_in": max(0, int(record["expires_at"]) - now),
+        "refresh_expires_in": max(0, int(refresh_expiry.timestamp()) - now),
     })
 
 

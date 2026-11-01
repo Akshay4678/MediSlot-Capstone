@@ -1,229 +1,330 @@
+"""Doctor-domain API: profile, photo upload, consultation catalogue, patterns and blackouts."""
+import json
+import logging
+import os
+import re
+import uuid
+from datetime import date, datetime, time
+from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-"""Read-only doctor, hospital and specialisation catalogue endpoints.
-Uses the schema.sql columns in this MediSlot project.
-Supports GET /doctors, /doctors/{doctor_id}, /hospitals, /specialisations.
-"""
-
-from application.common.http import response, request_method
+import boto3
+try:
+    from aws_xray_sdk.core import patch_all
+    patch_all()
+except ImportError:
+    pass
+from boto3.dynamodb.conditions import Attr
+from botocore.exceptions import ClientError
+from application.common.http import response, request_method, request_body
 from application.database.connection import get_connection
 
+log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
 
-def _query(sql, params=(), one=False):
-    connection = get_connection()
+PROFILE_FIELDS = {
+    "hospital_id": "hospital_id", "specialisation_id": "specialisation_id",
+    "first_name": "first_name", "last_name": "last_name",
+    "licence_number": "licence_number", "experience_years": "experience_years",
+    "qualifications": "qualifications", "timezone": "timezone", "is_active": "is_active",
+}
 
+
+def _body(event):
+    return request_body(event)
+
+
+def _identity(event):
+    auth = (event.get("requestContext") or {}).get("authorizer") or {}
+    ctx = auth.get("lambda") or auth.get("claims") or auth
+    uid = ctx.get("userId") or ctx.get("user_id") or ctx.get("sub")
+    role = str(ctx.get("role", "")).lower()
+    if not uid:
+        raise PermissionError("Authenticated user context is missing")
+    return int(uid), role
+
+
+def _doctor_id(cursor, user_id):
+    cursor.execute("SELECT doctor_id FROM doctors WHERE user_id=%s LIMIT 1", (user_id,))
+    row = cursor.fetchone()
+    return row["doctor_id"] if row else None
+
+
+def _require_doctor(role):
+    if role not in ("doctor", "admin"):
+        raise PermissionError("DOCTOR_ROLE_REQUIRED")
+
+
+def _json_int(value, field, minimum=0):
     try:
-        with connection.cursor() as cursor:
-            cursor.execute(sql, params)
-
-            if one:
-                return cursor.fetchone()
-
-            return cursor.fetchall()
-
-    finally:
-        connection.close()
-
-
-def _int(value, default, minimum, maximum):
-    try:
-        return max(minimum, min(maximum, int(value)))
-
+        result = int(value)
     except (TypeError, ValueError):
-        return default
+        raise ValueError(f"{field} must be an integer")
+    if result < minimum:
+        raise ValueError(f"{field} must be at least {minimum}")
+    return result
+
+
+def _validate_timezone(value):
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, TypeError):
+        raise ValueError("timezone must be a valid IANA timezone, e.g. Asia/Kolkata")
+    return value
+
+
+def _profile(cursor, doctor_id):
+    cursor.execute("""SELECT d.doctor_id,d.user_id,d.hospital_id,d.specialisation_id,
+        d.first_name,d.last_name,d.licence_number,d.experience_years,d.qualifications,
+        d.photo_url,d.timezone,d.is_active,d.created_at,d.updated_at,
+        h.hospital_name,s.specialisation_name
+        FROM doctors d JOIN hospitals h ON h.hospital_id=d.hospital_id
+        JOIN specialisations s ON s.specialisation_id=d.specialisation_id
+        WHERE d.doctor_id=%s""", (doctor_id,))
+    return cursor.fetchone()
+
+
+def _profile_route(method, path, user_id, role, body):
+    _require_doctor(role)
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            doctor_id = _doctor_id(cur, user_id)
+            if path == "/doctor/profile" and method == "POST":
+                if doctor_id:
+                    return response(409, {"error":"PROFILE_ALREADY_EXISTS"})
+                missing = [f for f in ("hospital_id","specialisation_id","first_name","last_name","licence_number") if body.get(f) in (None, "") or (isinstance(body.get(f),str) and not body.get(f).strip())]
+                if missing:
+                    return response(400, {"error":"MISSING_FIELDS","fields":missing})
+                timezone = _validate_timezone(body.get("timezone", "Asia/Kolkata"))
+                experience = _json_int(body.get("experience_years", 0), "experience_years")
+                cur.execute("SELECT hospital_id FROM hospitals WHERE hospital_id=%s AND is_active=TRUE", (body["hospital_id"],))
+                if not cur.fetchone(): return response(400,{"error":"INVALID_HOSPITAL_ID"})
+                cur.execute("SELECT specialisation_id FROM specialisations WHERE specialisation_id=%s", (body["specialisation_id"],))
+                if not cur.fetchone(): return response(400,{"error":"INVALID_SPECIALISATION_ID"})
+                cur.execute("SELECT doctor_id FROM doctors WHERE licence_number=%s", (str(body["licence_number"]).strip(),))
+                if cur.fetchone(): return response(409,{"error":"LICENCE_NUMBER_EXISTS"})
+                cur.execute("""INSERT INTO doctors (user_id,hospital_id,specialisation_id,first_name,last_name,
+                    licence_number,experience_years,qualifications,timezone) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (user_id,body["hospital_id"],body["specialisation_id"],str(body["first_name"]).strip(),
+                     str(body["last_name"]).strip(),str(body["licence_number"]).strip(),experience,
+                     body.get("qualifications"),timezone))
+                doctor_id = cur.lastrowid
+                conn.commit()
+                return response(201,{"doctor":_profile(cur,doctor_id)})
+            if not doctor_id:
+                return response(404,{"error":"DOCTOR_PROFILE_NOT_FOUND","message":"Create your profile first using POST /doctor/profile."})
+            if path == "/doctor/profile" and method == "GET":
+                return response(200,{"doctor":_profile(cur,doctor_id)})
+            if path == "/doctor/profile" and method in ("PUT","PATCH"):
+                allowed = {k:v for k,v in body.items() if k in PROFILE_FIELDS}
+                if "experience_years" in allowed: allowed["experience_years"] = _json_int(allowed["experience_years"],"experience_years")
+                if "timezone" in allowed: allowed["timezone"] = _validate_timezone(allowed["timezone"])
+                if "is_active" in allowed:
+                    if not isinstance(allowed["is_active"], bool): return response(400,{"error":"is_active must be a JSON boolean"})
+                if not allowed: return response(400,{"error":"NO_UPDATABLE_FIELDS"})
+                if "hospital_id" in allowed:
+                    cur.execute("SELECT hospital_id FROM hospitals WHERE hospital_id=%s AND is_active=TRUE",(allowed["hospital_id"],))
+                    if not cur.fetchone(): return response(400,{"error":"INVALID_HOSPITAL_ID"})
+                if "specialisation_id" in allowed:
+                    cur.execute("SELECT specialisation_id FROM specialisations WHERE specialisation_id=%s",(allowed["specialisation_id"],))
+                    if not cur.fetchone(): return response(400,{"error":"INVALID_SPECIALISATION_ID"})
+                if "licence_number" in allowed:
+                    cur.execute("SELECT doctor_id FROM doctors WHERE licence_number=%s AND doctor_id<>%s",(allowed["licence_number"],doctor_id))
+                    if cur.fetchone(): return response(409,{"error":"LICENCE_NUMBER_EXISTS"})
+                assignments=", ".join(f"{PROFILE_FIELDS[k]}=%s" for k in allowed)
+                cur.execute(f"UPDATE doctors SET {assignments} WHERE doctor_id=%s",tuple(allowed.values())+(doctor_id,))
+                conn.commit()
+                return response(200,{"doctor":_profile(cur,doctor_id)})
+            if path == "/doctor/profile/photo-upload-url" and method == "POST":
+                bucket=os.environ.get("PROFILE_PHOTO_BUCKET")
+                if not bucket: raise RuntimeError("PROFILE_PHOTO_BUCKET is not configured")
+                content_type=body.get("content_type")
+                ext={"image/jpeg":"jpg","image/png":"png","image/webp":"webp"}.get(content_type)
+                if not ext: return response(400,{"error":"UNSUPPORTED_IMAGE_TYPE","allowed":["image/jpeg","image/png","image/webp"]})
+                try:
+                    file_size = int(body.get("file_size", 0))
+                except (TypeError, ValueError):
+                    return response(400, {"error": "INVALID_FILE_SIZE"})
+                if file_size < 1 or file_size > 5 * 1024 * 1024:
+                    return response(400, {"error": "FILE_SIZE_LIMIT", "message": "Image must be between 1 byte and 5 MB."})
+                key=f"doctor-profiles/{doctor_id}/{uuid.uuid4().hex}.{ext}"
+                upload=boto3.client("s3").generate_presigned_url("put_object",Params={"Bucket":bucket,"Key":key,"ContentType":content_type,"ContentLength":file_size},ExpiresIn=300)
+                photo_uri=f"s3://{bucket}/{key}"
+                cur.execute("UPDATE doctors SET photo_url=%s WHERE doctor_id=%s",(photo_uri,doctor_id)); conn.commit()
+                return response(200,{"upload_url":upload,"method":"PUT","headers":{"Content-Type":content_type},"photo_url":photo_uri,"expires_in":300})
+    finally:
+        conn.close()
+    return response(405,{"error":"METHOD_NOT_ALLOWED"})
+
+
+def _consultation_route(method,path,role,body):
+    if role not in ("doctor", "admin"):
+        return response(403,{"error":"DOCTOR_ROLE_REQUIRED"})
+    # ERD has no doctor_id on CONSULTATION_TYPES: it is a shared catalogue.
+    # Mutations are restricted to admins to avoid one doctor changing every doctor's catalogue.
+    if method in ("POST","PUT","PATCH","DELETE") and role != "admin":
+        return response(403,{"error":"ADMIN_ROLE_REQUIRED","message":"Consultation types are global catalogue entries in the ERD."})
+    conn=get_connection()
+    try:
+        with conn.cursor() as cur:
+            parts=path.strip("/").split("/")
+            item_id=parts[2] if len(parts)>2 else None
+            if method=="GET":
+                if item_id:
+                    cur.execute("SELECT * FROM consultation_types WHERE consultation_type_id=%s",(item_id,)); item=cur.fetchone()
+                    return response(200,{"consultation_type":item}) if item else response(404,{"error":"NOT_FOUND"})
+                cur.execute("SELECT * FROM consultation_types WHERE is_active=TRUE ORDER BY type_name")
+                return response(200,{"items":cur.fetchall()})
+            if method=="POST":
+                name=str(body.get("type_name","")).strip(); duration=_json_int(body.get("duration_minutes"),"duration_minutes",1)
+                try: fee=Decimal(str(body.get("fee",0)))
+                except InvalidOperation: return response(400,{"error":"fee must be a valid decimal"})
+                if not name or len(name)>120 or not fee.is_finite() or fee<0: return response(400,{"error":"INVALID_CONSULTATION_TYPE"})
+                cur.execute("INSERT INTO consultation_types(type_name,duration_minutes,fee) VALUES(%s,%s,%s)",(name,duration,fee)); conn.commit()
+                return response(201,{"consultation_type_id":cur.lastrowid})
+            if method in ("PUT","PATCH") and item_id:
+                fields={k:body[k] for k in ("type_name","duration_minutes","fee","is_active") if k in body}
+                if not fields: return response(400,{"error":"NO_UPDATABLE_FIELDS"})
+                if "duration_minutes" in fields: fields["duration_minutes"]=_json_int(fields["duration_minutes"],"duration_minutes",1)
+                if "fee" in fields:
+                    try: fields["fee"]=Decimal(str(fields["fee"]))
+                    except InvalidOperation: return response(400,{"error":"INVALID_FEE"})
+                    if not fields["fee"].is_finite() or fields["fee"]<0: return response(400,{"error":"INVALID_FEE"})
+                cur.execute("UPDATE consultation_types SET "+", ".join(f"{k}=%s" for k in fields)+" WHERE consultation_type_id=%s",tuple(fields.values())+(item_id,)); conn.commit()
+                return response(200,{"message":"Consultation type updated"})
+            if method=="DELETE" and item_id:
+                cur.execute("UPDATE consultation_types SET is_active=FALSE WHERE consultation_type_id=%s",(item_id,)); conn.commit()
+                return response(200,{"message":"Consultation type deactivated"})
+    finally: conn.close()
+    return response(405,{"error":"METHOD_NOT_ALLOWED"})
+
+
+def _availability_route(method,path,user_id,role,body):
+    _require_doctor(role)
+    conn=get_connection()
+    try:
+        with conn.cursor() as cur:
+            doctor_id=_doctor_id(cur,user_id)
+            if not doctor_id: return response(404,{"error":"DOCTOR_PROFILE_NOT_FOUND"})
+            parts=path.strip("/").split("/"); item_id=parts[2] if len(parts)>2 else None
+            if method=="GET":
+                sql="SELECT ap.*,ct.type_name,ct.duration_minutes,ct.fee FROM availability_patterns ap JOIN consultation_types ct ON ct.consultation_type_id=ap.consultation_type_id WHERE ap.doctor_id=%s"
+                params=[doctor_id]
+                if item_id: sql+=" AND ap.availability_id=%s"; params.append(item_id)
+                sql+=" ORDER BY ap.day_of_week,ap.start_time"
+                cur.execute(sql,tuple(params)); rows=cur.fetchall()
+                if item_id and not rows: return response(404,{"error":"AVAILABILITY_PATTERN_NOT_FOUND"})
+                return response(200,{"items":rows} if not item_id else {"availability_pattern":rows[0]})
+            if method=="POST":
+                ctid=_json_int(body.get("consultation_type_id"),"consultation_type_id",1)
+                day=_json_int(body.get("day_of_week"),"day_of_week",1)
+                cap=_json_int(body.get("capacity",1),"capacity",1)
+                if day>7: return response(400,{"error":"day_of_week must be 1..7"})
+                start=body.get("start_time"); end=body.get("end_time")
+                try:
+                    start_value=time.fromisoformat(str(start)); end_value=time.fromisoformat(str(end))
+                except (TypeError,ValueError):
+                    return response(400,{"error":"start_time and end_time must be valid HH:MM[:SS] values"})
+                if end_value<=start_value: return response(400,{"error":"INVALID_TIME_RANGE"})
+                start=start_value.strftime("%H:%M:%S"); end=end_value.strftime("%H:%M:%S")
+                cur.execute("SELECT consultation_type_id FROM consultation_types WHERE consultation_type_id=%s AND is_active=TRUE",(ctid,))
+                if not cur.fetchone(): return response(400,{"error":"INVALID_CONSULTATION_TYPE"})
+                cur.execute("INSERT INTO availability_patterns(doctor_id,consultation_type_id,day_of_week,start_time,end_time,capacity) VALUES(%s,%s,%s,%s,%s,%s)",(doctor_id,ctid,day,start,end,cap)); conn.commit()
+                return response(201,{"availability_id":cur.lastrowid})
+            if method in ("PUT","PATCH") and item_id:
+                fields={k:body[k] for k in ("consultation_type_id","day_of_week","start_time","end_time","capacity","is_active") if k in body}
+                if not fields: return response(400,{"error":"NO_UPDATABLE_FIELDS"})
+                if "day_of_week" in fields and not 1<=int(fields["day_of_week"])<=7: return response(400,{"error":"INVALID_DAY_OF_WEEK"})
+                if "capacity" in fields: fields["capacity"]=_json_int(fields["capacity"],"capacity",1)
+                if "day_of_week" in fields: fields["day_of_week"]=_json_int(fields["day_of_week"],"day_of_week",1)
+                if "day_of_week" in fields and fields["day_of_week"]>7: return response(400,{"error":"INVALID_DAY_OF_WEEK"})
+                if "consultation_type_id" in fields:
+                    cur.execute("SELECT consultation_type_id FROM consultation_types WHERE consultation_type_id=%s AND is_active=TRUE",(fields["consultation_type_id"],))
+                    if not cur.fetchone(): return response(400,{"error":"INVALID_CONSULTATION_TYPE"})
+                if "start_time" in fields or "end_time" in fields:
+                    cur.execute("SELECT start_time,end_time FROM availability_patterns WHERE availability_id=%s AND doctor_id=%s",(item_id,doctor_id))
+                    current=cur.fetchone()
+                    if not current: return response(404,{"error":"AVAILABILITY_PATTERN_NOT_FOUND"})
+                    try:
+                        st=time.fromisoformat(str(fields.get("start_time",current["start_time"])))
+                        en=time.fromisoformat(str(fields.get("end_time",current["end_time"])))
+                    except (TypeError,ValueError):
+                        return response(400,{"error":"INVALID_TIME_RANGE"})
+                    if en<=st: return response(400,{"error":"INVALID_TIME_RANGE"})
+                    if "start_time" in fields: fields["start_time"]=st.strftime("%H:%M:%S")
+                    if "end_time" in fields: fields["end_time"]=en.strftime("%H:%M:%S")
+                cur.execute("UPDATE availability_patterns SET "+", ".join(f"{k}=%s" for k in fields)+" WHERE availability_id=%s AND doctor_id=%s",tuple(fields.values())+(item_id,doctor_id)); conn.commit()
+                return response(200,{"message":"Availability pattern updated"})
+            if method=="DELETE" and item_id:
+                cur.execute("UPDATE availability_patterns SET is_active=FALSE WHERE availability_id=%s AND doctor_id=%s",(item_id,doctor_id)); conn.commit()
+                return response(200,{"message":"Availability pattern deactivated"})
+    finally: conn.close()
+    return response(405,{"error":"METHOD_NOT_ALLOWED"})
+
+
+def _blackout_route(method,path,user_id,role,body):
+    _require_doctor(role)
+    conn=get_connection()
+    try:
+        with conn.cursor() as cur:
+            doctor_id=_doctor_id(cur,user_id)
+            if not doctor_id: return response(404,{"error":"DOCTOR_PROFILE_NOT_FOUND"})
+            parts=path.strip("/").split("/"); item_id=parts[2] if len(parts)>2 else None
+            if method=="GET":
+                cur.execute("SELECT * FROM blackout_dates WHERE doctor_id=%s ORDER BY blackout_date",(doctor_id,)); return response(200,{"items":cur.fetchall()})
+            if method=="POST":
+                try: target=date.fromisoformat(str(body.get("blackout_date")))
+                except ValueError: return response(400,{"error":"blackout_date must be YYYY-MM-DD"})
+                cur.execute("INSERT INTO blackout_dates(doctor_id,blackout_date,reason) VALUES(%s,%s,%s)",(doctor_id,target,body.get("reason"))); conn.commit()
+                return response(201,{"blackout_id":cur.lastrowid})
+            if method=="DELETE" and item_id:
+                cur.execute("DELETE FROM blackout_dates WHERE blackout_id=%s AND doctor_id=%s",(item_id,doctor_id)); conn.commit()
+                return response(200,{"message":"Blackout date deleted"})
+    finally: conn.close()
+    return response(405,{"error":"METHOD_NOT_ALLOWED"})
+
+
+def _schedule(event,user_id,role):
+    _require_doctor(role)
+    try: target=date.fromisoformat((event.get("queryStringParameters") or {}).get("date",""))
+    except ValueError: return response(400,{"error":"date query parameter must be YYYY-MM-DD"})
+    conn=get_connection()
+    try:
+        with conn.cursor() as cur:
+            doctor_id=_doctor_id(cur,user_id)
+            if not doctor_id: return response(404,{"error":"DOCTOR_PROFILE_NOT_FOUND"})
+    finally: conn.close()
+    table_name=os.environ.get("MATERIALISED_SLOTS_TABLE")
+    if not table_name: raise RuntimeError("MATERIALISED_SLOTS_TABLE is not configured")
+    table=boto3.resource("dynamodb").Table(table_name); scan_kwargs={"FilterExpression": Attr("doctor_id").eq(int(doctor_id)) & Attr("date").eq(target.isoformat())}
+    items=[]
+    while True:
+        result=table.scan(**scan_kwargs); items.extend(result.get("Items",[]))
+        if not result.get("LastEvaluatedKey"): break
+        scan_kwargs["ExclusiveStartKey"]=result["LastEvaluatedKey"]
+    items.sort(key=lambda x:x.get("start_time",""))
+    return response(200,{"doctor_id":doctor_id,"date":target.isoformat(),"items":items,"count":len(items)})
 
 
 def lambda_handler(event, context):
-    method = (
-        event.get("requestContext", {})
-        .get("http", {})
-        .get("method")
-        or event.get("httpMethod", "GET")
-    ).upper()
-
-    if method != "GET":
-        return response(
-            405,
-            {
-                "error": "METHOD_NOT_ALLOWED",
-                "message": "Only GET is supported.",
-            },
-        )
-
-    path = (
-        event.get("rawPath")
-        or event.get("path")
-        or "/"
-    ).rstrip("/") or "/"
-
-    query_params = event.get("queryStringParameters") or {}
-
     try:
-        # Get hospitals
-        if path.endswith("/hospitals"):
-            limit = _int(query_params.get("limit"), 50, 1, 100)
-
-            city = (query_params.get("city") or "").strip()
-            search = (query_params.get("search") or "").strip()
-
-            conditions = ["is_active = TRUE"]
-            values = []
-
-            if city:
-                conditions.append("city LIKE %s")
-                values.append(f"%{city}%")
-
-            if search:
-                conditions.append("(name LIKE %s OR city LIKE %s)")
-                values.extend([
-                    f"%{search}%",
-                    f"%{search}%",
-                ])
-
-            values.append(limit)
-
-            sql = (
-                "SELECT hospital_id,name,address_line1,address_line2,"
-                "city,state,postal_code,country,phone,email "
-                "FROM hospitals WHERE "
-                + " AND ".join(conditions)
-                + " ORDER BY name LIMIT %s"
-            )
-
-            hospitals = _query(sql, tuple(values))
-
-            return response(
-                200,
-                {
-                    "items": hospitals,
-                    "count": len(hospitals),
-                },
-            )
-
-        # Get specialisations
-        if (
-            path.endswith("/specialisations")
-            or path.endswith("/specializations")
-        ):
-            limit = _int(query_params.get("limit"), 100, 1, 200)
-
-            sql = (
-                "SELECT specialisation_id,name,description "
-                "FROM specialisations "
-                "WHERE is_active=TRUE "
-                "ORDER BY name LIMIT %s"
-            )
-
-            specialisations = _query(sql, (limit,))
-
-            return response(
-                200,
-                {
-                    "items": specialisations,
-                    "count": len(specialisations),
-                },
-            )
-
-        # Get all doctors or a specific doctor
-        marker = "/doctors"
-        marker_index = path.rfind(marker)
-
-        if marker_index < 0:
-            return response(404, {"error": "ROUTE_NOT_FOUND"})
-
-        doctor_path = path[marker_index + len(marker):].strip("/")
-
-        base_sql = (
-            "SELECT d.doctor_id,d.user_id,d.first_name,d.last_name,d.display_name,"
-            "d.qualifications,d.years_experience,d.bio,d.phone,d.consultation_fee,"
-            "h.hospital_id,h.name AS hospital_name,h.city AS hospital_city,"
-            "s.specialisation_id,s.name AS specialisation "
-            "FROM doctors d JOIN hospitals h ON h.hospital_id=d.hospital_id "
-            "JOIN specialisations s ON s.specialisation_id=d.specialisation_id "
-            "JOIN users u ON u.user_id=d.user_id "
-            "WHERE d.is_active=TRUE AND h.is_active=TRUE "
-            "AND s.is_active=TRUE AND u.is_active=TRUE"
-        )
-
-        # Get one doctor by ID
-        if doctor_path:
-            doctor_id = doctor_path.split("/")[0]
-
-            doctor = _query(
-                base_sql + " AND d.doctor_id=%s LIMIT 1",
-                (doctor_id,),
-                one=True,
-            )
-
-            if not doctor:
-                return response(404, {"error": "DOCTOR_NOT_FOUND"})
-
-            return response(200, {"doctor": doctor})
-
-        # Apply filters when retrieving the doctor list
-        conditions = []
-        values = []
-
-        search = (query_params.get("search") or "").strip()
-        city = (query_params.get("city") or "").strip()
-        hospital_id = (query_params.get("hospital_id") or "").strip()
-        specialisation_id = (
-            query_params.get("specialisation_id") or ""
-        ).strip()
-
-        if search:
-            conditions.append(
-                "(d.first_name LIKE %s OR d.last_name LIKE %s "
-                "OR d.display_name LIKE %s)"
-            )
-
-            values.extend([f"%{search}%"] * 3)
-
-        if city:
-            conditions.append("h.city LIKE %s")
-            values.append(f"%{city}%")
-
-        if hospital_id:
-            conditions.append("d.hospital_id=%s")
-            values.append(hospital_id)
-
-        if specialisation_id:
-            conditions.append("d.specialisation_id=%s")
-            values.append(specialisation_id)
-
-        sql = base_sql
-
-        if conditions:
-            sql += " AND " + " AND ".join(conditions)
-
-        limit = _int(query_params.get("limit"), 50, 1, 100)
-        offset = _int(query_params.get("offset"), 0, 0, 100000)
-
-        sql += " ORDER BY d.last_name,d.first_name LIMIT %s OFFSET %s"
-
-        values.extend([limit, offset])
-
-        doctors = _query(sql, tuple(values))
-
-        return response(
-            200,
-            {
-                "items": doctors,
-                "count": len(doctors),
-                "limit": limit,
-                "offset": offset,
-            },
-        )
-
+        method=request_method(event); path=(event.get("rawPath") or event.get("path") or "/").rstrip("/") or "/"
+        user_id,role=_identity(event)
+        body=_body(event) if method in ("POST","PUT","PATCH") else {}
+        if path.startswith("/doctor/profile"): return _profile_route(method,path,user_id,role,body)
+        if path.startswith("/doctor/consultation-types"): return _consultation_route(method,path,role,body)
+        if path.startswith("/doctor/availability-patterns"): return _availability_route(method,path,user_id,role,body)
+        if path.startswith("/doctor/blackout-dates"): return _blackout_route(method,path,user_id,role,body)
+        if path=="/doctor/schedule" and method=="GET": return _schedule(event,user_id,role)
+        return response(404,{"error":"ROUTE_NOT_FOUND","path":path})
+    except PermissionError as exc:
+        return response(403,{"error":"FORBIDDEN","message":str(exc)})
+    except (ValueError,TypeError) as exc:
+        return response(400,{"error":"INVALID_REQUEST","message":str(exc)})
+    except ClientError:
+        log.exception("AWS service operation failed")
+        return response(502,{"error":"DEPENDENCY_ERROR"})
     except Exception:
-        print(
-            "Doctor/catalogue query failed; "
-            "inspect CloudWatch logs for the exception."
-        )
-
-        return response(
-            500,
-            {
-                "error": "INTERNAL_SERVER_ERROR",
-                "message": "Could not retrieve catalogue data.",
-            },
-        )
+        log.exception("Doctor domain request failed")
+        return response(500,{"error":"INTERNAL_SERVER_ERROR"})

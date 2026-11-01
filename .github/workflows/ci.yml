@@ -31,8 +31,13 @@ jobs:
         run: cfn-lint infrastructure/cloudformation/network.yaml
       - name: Validate RDS and Data Stack
         run: cfn-lint infrastructure/cloudformation/rds.yaml
-      - name: Validate Authentication Stack
-        run: cfn-lint infrastructure/cloudformation/auth.yaml
+      - name: Validate Authentication and Milestone 3 Stacks
+        run: |
+          cfn-lint infrastructure/cloudformation/auth.yaml \
+            infrastructure/cloudformation/dynamodb.yaml \
+            infrastructure/cloudformation/api.yaml \
+            infrastructure/cloudformation/scheduler.yaml \
+            infrastructure/cloudformation/web.yaml
 
   unit-tests:
     name: Run Unit Tests
@@ -48,6 +53,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest boto3 PyMySQL bcrypt PyJWT
+      - name: Compile Python source
+        run: python -m compileall -q application tests
+      - name: Check dashboard JavaScript syntax
+        run: node --check dashboard/app.js
       - name: Run unit tests
         env:
           PYTHONPATH: .

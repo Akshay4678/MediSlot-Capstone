@@ -82,7 +82,9 @@ jobs:
             infrastructure/cloudformation/rds.yaml \
             infrastructure/cloudformation/dynamodb.yaml \
             infrastructure/cloudformation/auth.yaml \
-            infrastructure/cloudformation/api.yaml
+            infrastructure/cloudformation/api.yaml \
+            infrastructure/cloudformation/scheduler.yaml \
+            infrastructure/cloudformation/web.yaml
           do
             if [[ ! -f "${template}" ]]; then
               echo "::error::CloudFormation template not found: ${template}"
@@ -95,8 +97,8 @@ jobs:
             exit 1
           fi
 
-          if [[ ! -f "requirements-auth.txt" ]]; then
-            echo "::error::requirements-auth.txt was not found."
+          if [[ ! -f "requirements-auth.txt" || ! -f "requirements-milestone3.txt" ]]; then
+            echo "::error::Lambda requirements files are missing."
             exit 1
           fi
 
@@ -137,7 +139,9 @@ jobs:
             infrastructure/cloudformation/rds.yaml \
             infrastructure/cloudformation/dynamodb.yaml \
             infrastructure/cloudformation/auth.yaml \
-            infrastructure/cloudformation/api.yaml
+            infrastructure/cloudformation/api.yaml \
+            infrastructure/cloudformation/scheduler.yaml \
+            infrastructure/cloudformation/web.yaml
           do
             echo "Validating ${template}"
 
@@ -259,9 +263,9 @@ jobs:
 
 
       # ==========================================
-      # STEP 8A: Deploy Authentication DynamoDB Tables
+      # STEP 8A: Deploy Authentication and Materialised Slot DynamoDB Tables
       # ==========================================
-      - name: Deploy Authentication DynamoDB Tables
+      - name: Deploy Authentication and Materialised Slot DynamoDB Tables
         shell: bash
         run: |
           set -euo pipefail
@@ -364,7 +368,13 @@ jobs:
             --output text \
             --region "${AWS_REGION}")"
 
-          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME; do
+          MATERIALISED_SLOTS_TABLE_NAME="$(aws cloudformation describe-stacks \
+            --stack-name "${AUTH_DDB_STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='MaterialisedSlotsTableName'].OutputValue | [0]" \
+            --output text \
+            --region "${AWS_REGION}")"
+
+          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME MATERIALISED_SLOTS_TABLE_NAME; do
             value="${!name}"
             if [[ -z "${value}" || "${value}" == "None" ]]; then
               echo "::error::Required Data Stack output '${name}' is missing from ${STACK_NAME}."
@@ -383,6 +393,7 @@ jobs:
             echo "NOTIFICATION_DISPATCH_TABLE_NAME=${NOTIFICATION_DISPATCH_TABLE_NAME}"
             echo "REFRESH_TOKEN_TABLE_NAME=${REFRESH_TOKEN_TABLE_NAME}"
             echo "TOKEN_ACTIVELIST_TABLE_NAME=${TOKEN_ACTIVELIST_TABLE_NAME}"
+            echo "MATERIALISED_SLOTS_TABLE_NAME=${MATERIALISED_SLOTS_TABLE_NAME}"
           } >> "${GITHUB_ENV}"
 
           echo "Using artifacts bucket from Data Stack: ${LAMBDA_ARTIFACTS_BUCKET}"
@@ -490,13 +501,16 @@ jobs:
           rm -rf "${PACKAGE_DIR}"
           mkdir -p "${PACKAGE_DIR}"
           python -m pip install --upgrade pip
-          python -m pip install --requirement requirements-auth.txt --target "${PACKAGE_DIR}"
-          mkdir -p "${PACKAGE_DIR}/application/auth" "${PACKAGE_DIR}/application/authorizer" "${PACKAGE_DIR}/application/common" "${PACKAGE_DIR}/application/database"
+          python -m pip install --requirement requirements-auth.txt --requirement requirements-milestone3.txt --target "${PACKAGE_DIR}"
+          mkdir -p "${PACKAGE_DIR}/application/auth" "${PACKAGE_DIR}/application/authorizer" "${PACKAGE_DIR}/application/common" "${PACKAGE_DIR}/application/database" "${PACKAGE_DIR}/application/doctor" "${PACKAGE_DIR}/application/slot_materialiser" "${PACKAGE_DIR}/application/availability"
           cp application/__init__.py "${PACKAGE_DIR}/application/__init__.py"
           cp application/auth/__init__.py application/auth/handler.py application/auth/register.py application/auth/login.py application/auth/refresh.py application/auth/logout.py "${PACKAGE_DIR}/application/auth/"
           cp application/authorizer/__init__.py application/authorizer/lambda_handler.py "${PACKAGE_DIR}/application/authorizer/"
           cp application/common/__init__.py application/common/auth_utils.py application/common/http.py "${PACKAGE_DIR}/application/common/"
           cp application/database/__init__.py application/database/connection.py "${PACKAGE_DIR}/application/database/"
+          cp application/doctor/__init__.py application/doctor/handler.py "${PACKAGE_DIR}/application/doctor/"
+          cp application/slot_materialiser/handler.py "${PACKAGE_DIR}/application/slot_materialiser/"
+          cp application/availability/__init__.py application/availability/handler.py "${PACKAGE_DIR}/application/availability/"
           ( cd "${PACKAGE_DIR}" && zip -qr "${ZIP_FILE}" . )
           test -s "${ZIP_FILE}"
           echo "Lambda package created successfully."
@@ -553,6 +567,7 @@ jobs:
               "LambdaSecurityGroupId=${LAMBDA_SECURITY_GROUP_ID}" \
               "TokenActiveListTableName=${TOKEN_ACTIVELIST_TABLE_NAME}" \
               "RefreshTokenTableName=${REFRESH_TOKEN_TABLE_NAME}" \
+              "MaterialisedSlotsTableName=${MATERIALISED_SLOTS_TABLE_NAME}" \
               "DatabaseHost=${DB_HOST}" \
               "DatabaseName=${DB_NAME}" \
               "DatabaseSecretArn=${DB_SECRET_ARN}" \
@@ -561,6 +576,49 @@ jobs:
             --region "${AWS_REGION}"
 
           echo "API Stack deployed successfully."
+
+      - name: Deploy rolling slot materialisation schedule
+        shell: bash
+        run: |
+          set -euo pipefail
+          API_STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-api"
+          MATERIALISER_ARN="$(aws cloudformation describe-stacks \
+            --stack-name "${API_STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='SlotMaterialiserFunctionArn'].OutputValue | [0]" \
+            --output text --region "${AWS_REGION}")"
+          if [[ -z "${MATERIALISER_ARN}" || "${MATERIALISER_ARN}" == "None" ]]; then
+            echo "::error::SlotMaterialiserFunctionArn output missing from ${API_STACK}."; exit 1
+          fi
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/scheduler.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-scheduler" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides "ProjectName=${PROJECT_NAME}" "EnvironmentName=${ENVIRONMENT_NAME}" "MaterialiserLambdaArn=${MATERIALISER_ARN}" \
+            --no-fail-on-empty-changeset --region "${AWS_REGION}"
+
+      - name: Deploy doctor dashboard to EC2
+        shell: bash
+        run: |
+          set -euo pipefail
+          API_STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-api"
+          NETWORK_STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-network"
+          API_ENDPOINT="$(aws cloudformation describe-stacks --stack-name "${API_STACK}" --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
+          PUBLIC_SUBNET="$(aws cloudformation describe-stacks --stack-name "${NETWORK_STACK}" --query "Stacks[0].Outputs[?OutputKey=='PublicSubnet1Id'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
+          DASHBOARD_ZIP="${RUNNER_TEMP}/medislot-doctor-dashboard.zip"
+          DASHBOARD_KEY="dashboard/${ENVIRONMENT_NAME}/${GITHUB_SHA}/doctor-dashboard.zip"
+          (cd dashboard && zip -qr "${DASHBOARD_ZIP}" .)
+          aws s3 cp "${DASHBOARD_ZIP}" "s3://${LAMBDA_ARTIFACTS_BUCKET}/${DASHBOARD_KEY}" --region "${AWS_REGION}"
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/web.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              "ProjectName=${PROJECT_NAME}" "EnvironmentName=${ENVIRONMENT_NAME}" \
+              "PublicSubnetId=${PUBLIC_SUBNET}" "DashboardArtifactBucket=${LAMBDA_ARTIFACTS_BUCKET}" \
+              "DashboardArtifactKey=${DASHBOARD_KEY}" "ApiBaseUrl=${API_ENDPOINT}" \
+            --no-fail-on-empty-changeset --region "${AWS_REGION}"
+          aws cloudformation describe-stacks --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web" \
+            --query "Stacks[0].Outputs[?OutputKey=='DashboardUrl'].OutputValue | [0]" --output text --region "${AWS_REGION}"
 
       # ==========================================
       # STEP 13B: Initialize the RDS MySQL schema through a temporary VPC Lambda
@@ -694,7 +752,7 @@ jobs:
           echo "Environment: ${ENVIRONMENT_NAME}"
           echo "Region: ${AWS_REGION}"
 
-          for stack in network data dynamodb auth api; do
+          for stack in network data dynamodb auth api scheduler web; do
             stack_name="${PROJECT_NAME}-${ENVIRONMENT_NAME}-${stack}"
 
             echo ""

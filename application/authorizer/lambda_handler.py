@@ -9,7 +9,7 @@ Required environment variables:
     JWT_ISSUER (optional; defaults to "medislot")
 
 DynamoDB:
-    Token active-list table partition key: jti (String)
+    Token active-list table partition key: jti (String), with user_id, expires_at and ttl attributes
 """
 
 import base64
@@ -50,21 +50,16 @@ def get_jwt_secret():
 
 
 def is_token_active(token_id, subject=None):
-    """Return True only when the JTI exists and has not expired in the active list."""
+    """Look up the token by the ERD's jti partition key."""
     table_name = os.environ.get("TOKEN_ACTIVELIST_TABLE")
-    if not table_name:
-        raise RuntimeError("TOKEN_ACTIVELIST_TABLE is not configured")
-    if not subject:
+    if not table_name or not subject:
         return False
-
-    # The table is keyed by user_id and contains exactly one current JTI
-    # per user. A newly issued token overwrites the previous JTI.
     item = dynamodb.Table(table_name).get_item(
-        Key={"user_id": str(subject)}, ConsistentRead=True
+        Key={"jti": str(token_id)}, ConsistentRead=True
     ).get("Item")
-    if not item or int(item.get("expires_at", 0)) <= int(time.time()):
+    if not item or str(item.get("user_id")) != str(subject):
         return False
-    return hmac.compare_digest(str(item.get("jti", "")), str(token_id))
+    return int(item.get("ttl", 0)) > int(time.time())
 
 
 def verify_access_token(token, check_active=True):

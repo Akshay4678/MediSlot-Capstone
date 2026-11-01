@@ -1,1 +1,48 @@
 
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MediSlot rolling 30-day slot materialisation schedule.
+Parameters:
+  ProjectName:
+    Type: String
+    Default: medislot
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  MaterialiserLambdaArn:
+    Type: String
+    Description: ARN output from the API stack's SlotMaterialiserFunctionArn.
+Resources:
+  SchedulerInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-scheduler-invoke-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: scheduler.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeSlotMaterialiser
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Ref MaterialiserLambdaArn
+  RollingSlotMaterialisationSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-rolling-slot-materialisation'
+      Description: Rebuilds the next 30 days of bookable slots every six hours.
+      State: ENABLED
+      ScheduleExpression: rate(6 hours)
+      FlexibleTimeWindow: {Mode: OFF}
+      Target:
+        Arn: !Ref MaterialiserLambdaArn
+        RoleArn: !GetAtt SchedulerInvokeRole.Arn
+        Input: '{"days":30}'
+Outputs:
+  ScheduleArn:
+    Value: !GetAtt RollingSlotMaterialisationSchedule.Arn

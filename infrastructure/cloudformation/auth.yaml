@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: MediSlot Milestone 2 authentication and authorizer execution roles.
+Description: MediSlot authentication, authorizer, doctor-domain and slot-materialiser execution roles.
 
 Parameters:
   ProjectName:
@@ -53,10 +53,9 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:UpdateItem
                   - dynamodb:DeleteItem
-                  - dynamodb:Query
+                  - dynamodb:Scan
                 Resource:
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-refresh-tokens'
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-refresh-tokens/index/user_id-index'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-refresh-tokens-m3'
               - Sid: TokenActiveListTableAccess
                 Effect: Allow
                 Action:
@@ -65,8 +64,9 @@ Resources:
                   - dynamodb:UpdateItem
                   - dynamodb:DeleteItem
                   - dynamodb:Query
+                  - dynamodb:Scan
                 Resource:
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-token-activelist-v2'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-token-activelist-m3'
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -105,7 +105,76 @@ Resources:
               - Sid: CheckActiveTokens
                 Effect: Allow
                 Action: dynamodb:GetItem
-                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-token-activelist-v2'
+                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-token-activelist-m3'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DoctorLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-doctor-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: DoctorDomainRuntimeAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*'
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${ProjectName}-${EnvironmentName}-${AWS::AccountId}-doctor-photos/*'
+              - Effect: Allow
+                Action: [dynamodb:Scan, dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:DescribeTable]
+                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-materialised-slots'
+              - Effect: Allow
+                Action: [xray:PutTraceSegments, xray:PutTelemetryRecords]
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  MaterialiserLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-materialiser-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: SlotMaterialiserRuntimeAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*'
+              - Effect: Allow
+                Action: [dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Scan, dynamodb:DescribeTable]
+                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-materialised-slots'
+              - Effect: Allow
+                Action: [xray:PutTraceSegments, xray:PutTelemetryRecords]
+                Resource: '*'
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -124,3 +193,11 @@ Outputs:
     Value: !GetAtt AuthorizerLambdaExecutionRole.Arn
     Export:
       Name: !Sub '${ProjectName}-${EnvironmentName}-AuthorizerLambdaExecutionRoleArn'
+  DoctorLambdaExecutionRoleArn:
+    Value: !GetAtt DoctorLambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-DoctorLambdaExecutionRoleArn'
+  MaterialiserLambdaExecutionRoleArn:
+    Value: !GetAtt MaterialiserLambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-MaterialiserLambdaExecutionRoleArn'

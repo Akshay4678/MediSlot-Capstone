@@ -1,1 +1,112 @@
 
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MediSlot Milestone 3 doctor dashboard on an EC2 instance.
+Parameters:
+  ProjectName:
+    Type: String
+    Default: medislot
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  PublicSubnetId:
+    Type: AWS::EC2::Subnet::Id
+  DashboardArtifactBucket:
+    Type: String
+  DashboardArtifactKey:
+    Type: String
+  ApiBaseUrl:
+    Type: String
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small, t3.medium]
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+Resources:
+  DashboardSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTP access to MediSlot doctor dashboard prototype
+      VpcId:
+        Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-doctor-dashboard-sg'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+  DashboardInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: ReadDashboardArtifact
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${DashboardArtifactBucket}/${DashboardArtifactKey}'
+  DashboardInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref DashboardInstanceRole]
+  DoctorDashboardInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref DashboardInstanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: '0'
+          SubnetId: !Ref PublicSubnetId
+          GroupSet: [!Ref DashboardSecurityGroup]
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          dnf install -y nginx unzip awscli
+          mkdir -p /usr/share/nginx/html
+          aws s3 cp s3://${DashboardArtifactBucket}/${DashboardArtifactKey} /tmp/doctor-dashboard.zip
+          unzip -oq /tmp/doctor-dashboard.zip -d /usr/share/nginx/html
+          cat > /usr/share/nginx/html/config.js <<'EOF'
+          window.MEDISLOT_API_BASE = '${ApiBaseUrl}';
+          EOF
+          chown -R nginx:nginx /usr/share/nginx/html
+          systemctl enable nginx
+          systemctl restart nginx
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-doctor-dashboard'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+Outputs:
+  DashboardUrl:
+    Description: HTTP URL for the prototype dashboard. Put behind HTTPS/authentication before production use.
+    Value: !Sub 'http://${DoctorDashboardInstance.PublicDnsName}'
+  DashboardInstanceId:
+    Value: !Ref DoctorDashboardInstance

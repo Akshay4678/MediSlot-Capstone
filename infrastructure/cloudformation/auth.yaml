@@ -53,7 +53,10 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:UpdateItem
                   - dynamodb:DeleteItem
-                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-refresh-tokens'
+                  - dynamodb:Query
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-refresh-tokens'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-refresh-tokens/index/user_id-index'
               - Sid: TokenActiveListTableAccess
                 Effect: Allow
                 Action:
@@ -63,8 +66,7 @@ Resources:
                   - dynamodb:DeleteItem
                   - dynamodb:Query
                 Resource:
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-token-activelist'
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-token-activelist/index/session_id-index'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-token-activelist-v2'
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -103,7 +105,7 @@ Resources:
               - Sid: CheckActiveTokens
                 Effect: Allow
                 Action: dynamodb:GetItem
-                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-token-activelist'
+                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-token-activelist-v2'
       Tags:
         - Key: Project
           Value: !Ref ProjectName

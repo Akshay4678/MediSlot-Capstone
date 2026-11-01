@@ -18,9 +18,20 @@ Resources:
       AttributeDefinitions:
         - AttributeName: token_hash
           AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
       KeySchema:
         - AttributeName: token_hash
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: user_id-index
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+            - AttributeName: token_hash
+              KeyType: RANGE
+          Projection:
+            ProjectionType: KEYS_ONLY
       TimeToLiveSpecification:
         AttributeName: expires_at
         Enabled: true
@@ -34,25 +45,16 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      TableName: !Sub '${EnvironmentName}-medislot-token-activelist'
+      TableName: !Sub '${EnvironmentName}-medislot-token-activelist-v2'
       BillingMode: PAY_PER_REQUEST
+      # One item per user: user_id is the partition key. A new login or
+      # refresh replaces the previous jti for that user.
       AttributeDefinitions:
-        - AttributeName: jti
-          AttributeType: S
-        - AttributeName: session_id
+        - AttributeName: user_id
           AttributeType: S
       KeySchema:
-        - AttributeName: jti
+        - AttributeName: user_id
           KeyType: HASH
-      GlobalSecondaryIndexes:
-        - IndexName: session_id-index
-          KeySchema:
-            - AttributeName: session_id
-              KeyType: HASH
-            - AttributeName: jti
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
       TimeToLiveSpecification:
         AttributeName: ttl
         Enabled: true

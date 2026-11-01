@@ -54,14 +54,17 @@ def is_token_active(token_id, subject=None):
     table_name = os.environ.get("TOKEN_ACTIVELIST_TABLE")
     if not table_name:
         raise RuntimeError("TOKEN_ACTIVELIST_TABLE is not configured")
+    if not subject:
+        return False
+
+    # The table is keyed by user_id and contains exactly one current JTI
+    # per user. A newly issued token overwrites the previous JTI.
     item = dynamodb.Table(table_name).get_item(
-        Key={"jti": token_id}, ConsistentRead=True
+        Key={"user_id": str(subject)}, ConsistentRead=True
     ).get("Item")
     if not item or int(item.get("expires_at", 0)) <= int(time.time()):
         return False
-    if subject is not None and str(item.get("user_id")) != str(subject):
-        return False
-    return True
+    return hmac.compare_digest(str(item.get("jti", "")), str(token_id))
 
 
 def verify_access_token(token, check_active=True):

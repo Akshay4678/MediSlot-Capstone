@@ -17,6 +17,7 @@ import boto3
 import bcrypt
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Key
 
 from application.common.http import (
     response,
@@ -40,7 +41,7 @@ ddb = boto3.resource("dynamodb", config=_AWS_CFG)
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+[.][^@\s]+$")
 
 ACCESS_TTL = 900
-REFRESH_TTL = 7 * 24 * 60 * 60
+REFRESH_TTL = 12 * 60 * 60
 
 
 @lru_cache(maxsize=1)
@@ -118,20 +119,46 @@ def _activate_jti(jti, user_id, expires_at):
     expires_at = int(expires_at)
     if expires_at <= int(time.time()):
         raise ValueError("Cannot activate an already-expired access token")
+    # user_id is the partition key, so PutItem replaces the previous active
+    # token for this user instead of creating another active-token row.
     _table("TOKEN_ACTIVELIST_TABLE").put_item(
         Item={
-            "jti": str(jti),
             "user_id": str(user_id),
+            "jti": str(jti),
             "expires_at": expires_at,
             "ttl": expires_at,
         }
     )
 
 
-def _deactivate_jti(jti):
-    """Remove an access token from the active list immediately."""
-    if jti:
-        _table("TOKEN_ACTIVELIST_TABLE").delete_item(Key={"jti": str(jti)})
+def _deactivate_user_token(user_id):
+    """Remove the user's single active access-token record immediately."""
+    if user_id:
+        _table("TOKEN_ACTIVELIST_TABLE").delete_item(
+            Key={"user_id": str(user_id)}
+        )
+
+
+def _delete_all_refresh_tokens(user_id):
+    """Delete every refresh-token record belonging to a user."""
+    table = _table("REFRESH_TOKEN_TABLE")
+    query_args = {
+        "IndexName": "user_id-index",
+        "KeyConditionExpression": Key("user_id").eq(str(user_id)),
+        "ProjectionExpression": "token_hash",
+    }
+
+    while True:
+        result = table.query(**query_args)
+        for item in result.get("Items", []):
+            table.delete_item(
+                Key={"token_hash": item["token_hash"]}
+            )
+
+        last_key = result.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        query_args["ExclusiveStartKey"] = last_key
 
 
 def _hash_token(token):
@@ -356,7 +383,6 @@ def _login(body, path_role=None):
         "expires_in": ACCESS_TTL,
         "refresh_token": refresh_token,
         "refresh_expires_in": REFRESH_TTL,
-        "user": {"user_id": str(user["user_id"]), "email": user["email"], "role": str(user["role"]).lower()},
     })
 
 
@@ -377,9 +403,8 @@ def _load_user_by_id(user_id):
 def _refresh(body):
     """Validate the refresh record and issue a new active access token.
 
-    The data model intentionally does not associate a JTI with a refresh record.
-    Therefore an older access token remains active until it expires (15 minutes),
-    unless that specific token is explicitly removed from TOKEN_ACTIVELIST.
+    Issuing a new access token overwrites the user's active-token row.
+    The previous access token is therefore rejected immediately by the authorizer.
     """
     refresh_token = body.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token:
@@ -408,36 +433,33 @@ def _refresh(body):
 
 
 def _logout(event, body):
-    """Revoke the refresh token and remove the presented access token from active list."""
-    refresh_token = body.get("refresh_token")
-    if not isinstance(refresh_token, str) or not refresh_token:
-        return _json_error(400, "MISSING_REFRESH_TOKEN", "refresh_token is required.")
-
+    """Log out the user by deleting their active access and all refresh tokens."""
     bearer = _bearer_token(event)
     if not bearer:
-        return _json_error(400, "MISSING_ACCESS_TOKEN", "Send the current access token as a Bearer token to log out.")
+        return _json_error(
+            401,
+            "MISSING_ACCESS_TOKEN",
+            "Send an access token as a Bearer token to log out.",
+        )
+
     try:
+        # Do not require the token to still be in the active list: logout must
+        # also be able to clean up a session whose active-list row is missing.
         claims = verify_access_token(bearer, check_active=False)
     except (ValueError, KeyError, TypeError):
-        return _json_error(401, "INVALID_ACCESS_TOKEN", "A valid signed access token is required for logout.")
-
-    table = _table("REFRESH_TOKEN_TABLE")
-    key = {"token_hash": _hash_token(refresh_token)}
-    record = table.get_item(Key=key, ConsistentRead=True).get("Item")
-    if not record or int(record.get("expires_at", 0)) <= int(time.time()):
-        return response(200, {"message": "Logged out successfully."})
-    if str(record.get("user_id")) != str(claims.get("sub")):
-        return _json_error(403, "TOKEN_USER_MISMATCH", "The access token and refresh token belong to different users.")
-
-    now = int(time.time())
-    if record.get("revoked_at") is None:
-        table.update_item(
-            Key=key,
-            UpdateExpression="SET revoked_at = :now",
-            ConditionExpression="attribute_exists(token_hash) AND attribute_not_exists(revoked_at)",
-            ExpressionAttributeValues={":now": now},
+        return _json_error(
+            401,
+            "INVALID_ACCESS_TOKEN",
+            "A valid, unexpired signed access token is required for logout.",
         )
-    _deactivate_jti(claims.get("jti"))
+
+    user_id = str(claims["sub"])
+
+    # Remove the user's active access token, then every refresh-token record
+    # associated with this user (including sessions from other devices).
+    _deactivate_user_token(user_id)
+    _delete_all_refresh_tokens(user_id)
+
     return response(200, {"message": "Logged out successfully."})
 
 

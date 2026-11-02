@@ -38,7 +38,8 @@ Resources:
       Description: Rebuilds the next 30 days of bookable slots every six hours.
       State: ENABLED
       ScheduleExpression: rate(6 hours)
-      FlexibleTimeWindow: {Mode: OFF}
+      FlexibleTimeWindow:
+        Mode: 'OFF'
       Target:
         Arn: !Ref MaterialiserLambdaArn
         RoleArn: !GetAtt SchedulerInvokeRole.Arn

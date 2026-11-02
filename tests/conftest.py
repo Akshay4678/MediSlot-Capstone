@@ -1,3 +1,4 @@
+
 """Shared test setup.
 
 CI installs the real libraries. When a library is missing (for example on a laptop
@@ -19,9 +20,9 @@ os.environ.setdefault("AWS_ACCESS_KEY_ID", "test")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "test")
 os.environ["JWT_SECRET_PARAMETER_NAME"] = "/test/auth/jwt-secret"
 os.environ["REFRESH_TOKEN_TABLE"] = "dev-medislot-refresh-tokens"
-os.environ["TOKEN_ACTIVELIST_TABLE"] = "dev-medislot-token-activelist"
+os.environ["TOKEN_ACTIVELIST_TABLE"] = "dev-medislot-token-activelist-v2"
 os.environ["JWT_ISSUER"] = "medislot"
-os.environ.pop("SSM_PREFIX", None)  # unit tests must never read real SSM
+os.environ.pop("SSM_PREFIX", None)
 
 
 def _stub(name, **attrs):
@@ -38,10 +39,11 @@ class _ClientError(Exception):
 
 
 try:
-    import boto3  # noqa: F401
-    import botocore  # noqa: F401
+    import boto3
+    import botocore
 except ImportError:
-    _stub("boto3", client=lambda *a, **k: MagicMock(), resource=lambda *a, **k: MagicMock())
+    _stub("boto3", client=lambda *a, **k: MagicMock(),
+          resource=lambda *a, **k: MagicMock())
     _stub("boto3.dynamodb")
     _stub("boto3.dynamodb.conditions", Key=lambda name: MagicMock())
     _stub("botocore")
@@ -49,18 +51,28 @@ except ImportError:
     _stub("botocore.exceptions", ClientError=_ClientError)
 
 try:
-    import pymysql  # noqa: F401
+    import pymysql
 except ImportError:
     class _IntegrityError(Exception):
         pass
 
-    _stub("pymysql", err=types.SimpleNamespace(IntegrityError=_IntegrityError),
-          cursors=types.SimpleNamespace(DictCursor=object), connect=lambda **k: None)
+    _stub(
+        "pymysql",
+        err=types.SimpleNamespace(IntegrityError=_IntegrityError),
+        cursors=types.SimpleNamespace(DictCursor=object),
+        connect=lambda **k: None
+    )
 
 try:
-    import bcrypt  # noqa: F401
+    import bcrypt
 except ImportError:
     import hashlib
-    _stub("bcrypt", gensalt=lambda rounds=12: f"$2b${rounds:02d}$".encode(),
-          hashpw=lambda pw, salt: salt + hashlib.sha256(pw).hexdigest().encode(),
-          checkpw=lambda pw, h: h.endswith(hashlib.sha256(pw).hexdigest().encode()))
+
+    _stub(
+        "bcrypt",
+        gensalt=lambda rounds=12: f"$2b${rounds:02d}$".encode(),
+        hashpw=lambda pw, salt: salt + hashlib.sha256(pw).hexdigest().encode(),
+        checkpw=lambda pw, h: h.endswith(
+            hashlib.sha256(pw).hexdigest().encode()
+        )
+    )

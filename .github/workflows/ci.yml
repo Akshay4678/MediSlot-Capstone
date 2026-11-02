@@ -36,7 +36,7 @@ jobs:
           python -m pip install cfn-lint
       - name: Lint every deployed template
         run: |
-          cfn-lint -i W \
+          cfn-lint -i W -- \
             infrastructure/cloudformation/network.yaml \
             infrastructure/cloudformation/rds.yaml \
             infrastructure/cloudformation/dynamodb.yaml \

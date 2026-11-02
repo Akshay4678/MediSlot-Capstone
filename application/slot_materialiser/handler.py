@@ -18,6 +18,24 @@ log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 
+def _valid_local(local_dt, zone, fold=0):
+    """Return a valid timezone-aware local datetime, or None for a DST gap.
+
+    For ambiguous fall-back times, ``fold=0`` selects the first occurrence.
+    """
+    aware = local_dt.replace(tzinfo=zone, fold=fold)
+    round_trip = aware.astimezone(timezone.utc).astimezone(zone)
+    if round_trip.replace(tzinfo=None) != local_dt:
+        return None
+    return aware
+
+
+def _slot_id(doctor_id, instant):
+    """Build a deterministic slot identifier from a UTC instant."""
+    utc_instant = instant.astimezone(timezone.utc)
+    return f"{doctor_id}#{utc_instant:%Y%m%dT%H%M%SZ}"
+
+
 def _parse_as_of(event):
     value = (event or {}).get("as_of")
     if not value:

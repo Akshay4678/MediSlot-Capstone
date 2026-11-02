@@ -174,12 +174,12 @@ CREATE TABLE IF NOT EXISTS materialised_slots (
     CONSTRAINT fk_materialised_slots_availability
         FOREIGN KEY (availability_id) REFERENCES availability_patterns(availability_id)
         ON UPDATE CASCADE ON DELETE RESTRICT,
-    CONSTRAINT fk_materialised_slots_doctor
-        FOREIGN KEY (doctor_id) REFERENCES doctors(doctor_id)
-        ON UPDATE CASCADE ON DELETE RESTRICT,
-    CONSTRAINT fk_materialised_slots_consultation_type
-        FOREIGN KEY (consultation_type_id) REFERENCES consultation_types(consultation_type_id)
-        ON UPDATE CASCADE ON DELETE RESTRICT,
+    -- doctor_id and consultation_type_id are denormalised lookup columns.
+    -- Their authoritative relationships are already enforced through
+    -- availability_id -> availability_patterns, which itself references
+    -- doctors and consultation_types. Avoid duplicate foreign keys here:
+    -- older RDS databases may have different legacy integer widths on those
+    -- copied columns, causing MySQL error 3780 during schema creation.
     CONSTRAINT chk_materialised_slots_capacity CHECK (capacity > 0),
     CONSTRAINT chk_materialised_slots_booked CHECK (booked_count >= 0 AND booked_count <= capacity),
     CONSTRAINT chk_materialised_slots_time CHECK (end_time > start_time)

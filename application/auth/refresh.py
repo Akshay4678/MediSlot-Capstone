@@ -1,5 +1,4 @@
 import logging
-from botocore.exceptions import ClientError
 
 from application.common.auth_utils import (
     body_json, response, refresh_table, token_hash, utc_epoch, create_tokens

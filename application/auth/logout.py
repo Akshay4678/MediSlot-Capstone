@@ -3,7 +3,7 @@ import jwt
 
 from application.common.auth_utils import (
     body_json, response, get_bearer_token, decode_access_token,
-    refresh_table, token_hash, save_jti_to_denylist, utc_epoch
+    refresh_table, token_hash, save_jti_to_denylist
 )
 
 log = logging.getLogger()

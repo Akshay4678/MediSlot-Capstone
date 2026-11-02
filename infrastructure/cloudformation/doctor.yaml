@@ -143,7 +143,8 @@ Resources:
   SlotMaterialiserFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-slot-materialiser'
+      # Let CloudFormation generate a unique physical name. The previous fixed
+      # name already exists in this AWS account and caused ResourceExistenceCheck.
       Runtime: python3.12
       Handler: application.slot_materialiser.handler.lambda_handler
       Role: !GetAtt MaterialiserRole.Arn

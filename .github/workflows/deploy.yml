@@ -282,10 +282,11 @@ jobs:
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
 
-
+      
       # ==========================================
       # STEP 8A: Deploy Authentication DynamoDB Tables
       # ==========================================
+
       - name: Deploy Authentication DynamoDB Tables
         shell: bash
         run: |
@@ -304,6 +305,29 @@ jobs:
             --region "${AWS_REGION}"
 
           echo "Authentication DynamoDB tables deployed."
+
+      # ==========================================
+      # STEP 8B: Diagnose DynamoDB deployment failures
+      # ==========================================
+
+      - name: Diagnose DynamoDB CloudFormation failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "Checking CloudFormation validation failures..."
+
+          aws cloudformation describe-events \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-dynamodb" \
+            --filters '{"FailedEvents":true}' \
+            --region "${AWS_REGION}" \
+            --output json || true
+
+          echo "Checking existing DynamoDB tables..."
+
+          aws dynamodb list-tables \
+            --region "${AWS_REGION}" \
+            --output table || true
+
 
       # ==========================================
       # STEP 9: Read deployment bucket from Data Stack
@@ -519,6 +543,30 @@ jobs:
           echo "PHOTO_BUCKET=${PHOTO_BUCKET}" >> "${GITHUB_ENV}"
 
       # ==========================================
+      # STEP 10: Deploy Authentication Stack
+      # ==========================================
+      - name: Deploy Authentication Stack
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth"
+
+          echo "Deploying Authentication Stack: ${STACK_NAME}"
+
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/auth.yaml \
+            --stack-name "${STACK_NAME}" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              "ProjectName=${PROJECT_NAME}" \
+              "EnvironmentName=${ENVIRONMENT_NAME}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
+
+
+          
+      # ==========================================
       # STEP 11: Package Python Lambda code
       # ==========================================
       - name: Set up Python
@@ -602,45 +650,6 @@ jobs:
             --region "${AWS_REGION}"
 
       # ==========================================
-      # Wait until the existing Authentication stack has finished rollback.
-      # Its existing exports must remain available while the API stack is updated.
-      # ==========================================
-      - name: Wait for Authentication Stack to become stable
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth"
-          echo "Waiting for ${STACK_NAME} to finish any in-progress operation..."
-
-          for attempt in $(seq 1 120); do
-            STATUS="$(aws cloudformation describe-stacks \
-              --stack-name "${STACK_NAME}" \
-              --query 'Stacks[0].StackStatus' \
-              --output text \
-              --region "${AWS_REGION}")"
-
-            echo "Authentication stack status: ${STATUS}"
-
-            case "${STATUS}" in
-              CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE)
-                echo "Authentication stack is stable."
-                exit 0
-                ;;
-              *_IN_PROGRESS)
-                sleep 15
-                ;;
-              *)
-                echo "::error::Authentication stack is in unexpected state: ${STATUS}"
-                exit 1
-                ;;
-            esac
-          done
-
-          echo "::error::Timed out waiting for Authentication stack to become stable."
-          exit 1
-
-      # ==========================================
       # STEP 13: Deploy API Gateway and Lambda Stack
       # ==========================================
       - name: Deploy API and Lambda Stack
@@ -680,31 +689,6 @@ jobs:
           aws apigateway create-deployment --rest-api-id "${API_ID}" --stage-name "${ENVIRONMENT_NAME}" \
             --description "Release ${GITHUB_SHA}" --region "${AWS_REGION}" >/dev/null
           echo "API deployment created for stage ${ENVIRONMENT_NAME}."
-
-      # ==========================================
-      # Deploy Authentication Stack AFTER the API Stack
-      # This releases the legacy Materialiser role export dependency first.
-      # ==========================================
-      - name: Deploy Authentication Stack
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth"
-
-          echo "Deploying Authentication Stack: ${STACK_NAME}"
-
-          aws cloudformation deploy \
-            --template-file infrastructure/cloudformation/auth.yaml \
-            --stack-name "${STACK_NAME}" \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --parameter-overrides \
-              "ProjectName=${PROJECT_NAME}" \
-              "EnvironmentName=${ENVIRONMENT_NAME}" \
-              "RefreshTokenTableName=${REFRESH_TOKEN_TABLE_NAME}" \
-              "TokenActiveListTableName=${TOKEN_ACTIVELIST_TABLE_NAME}" \
-            --no-fail-on-empty-changeset \
-            --region "${AWS_REGION}"
 
       # ==========================================
       # STEP 13B: Initialize the RDS MySQL schema through a temporary VPC Lambda
@@ -803,7 +787,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          FN="${PROJECT_NAME}-${ENVIRONMENT_NAME}-slot-materialiser"
+          DOCTOR_STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-doctor"
+          FN="$(aws cloudformation describe-stacks \
+            --stack-name "${DOCTOR_STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='SlotMaterialiserFunctionName'].OutputValue | [0]" \
+            --output text \
+            --region "${AWS_REGION}")"
+
+          if [[ -z "${FN}" || "${FN}" == "None" ]]; then
+            echo "::error::Could not read SlotMaterialiserFunctionName from ${DOCTOR_STACK}."
+            exit 1
+          fi
+
+          echo "Invoking slot materialiser: ${FN}"
           for run in 1 2; do
             aws lambda invoke --function-name "${FN}" --payload '{}' --cli-binary-format raw-in-base64-out \
               --cli-read-timeout 330 "${RUNNER_TEMP}/mat-${run}.json" --region "${AWS_REGION}" > "${RUNNER_TEMP}/mat-meta-${run}.json"

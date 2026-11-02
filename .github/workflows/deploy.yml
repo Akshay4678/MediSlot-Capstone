@@ -508,7 +508,6 @@ jobs:
           cp application/authorizer/__init__.py application/authorizer/lambda_handler.py "${PACKAGE_DIR}/application/authorizer/"
           cp application/common/__init__.py application/common/auth_utils.py application/common/http.py "${PACKAGE_DIR}/application/common/"
           cp application/database/__init__.py application/database/connection.py "${PACKAGE_DIR}/application/database/"
-          cp application/doctor/__init__.py application/doctor/handler.py "${PACKAGE_DIR}/application/doctor/"
           cp application/slot_materialiser/handler.py "${PACKAGE_DIR}/application/slot_materialiser/"
           cp application/availability/__init__.py application/availability/handler.py "${PACKAGE_DIR}/application/availability/"
           ( cd "${PACKAGE_DIR}" && zip -qr "${ZIP_FILE}" . )

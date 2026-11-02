@@ -1,15 +1,27 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: MediSlot Milestone 2 authentication and authorizer execution roles.
+Description: MediSlot Milestone 3 authentication and authorizer execution roles.
 
 Parameters:
   ProjectName:
     Type: String
     Default: medislot
     AllowedPattern: '^[a-zA-Z0-9-]+$'
+
   EnvironmentName:
     Type: String
     Default: dev
-    AllowedValues: [dev, test, prod]
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+  RefreshTokenTableName:
+    Type: String
+    Description: Physical name of the Refresh Token DynamoDB table.
+
+  TokenActiveListTableName:
+    Type: String
+    Description: Physical name of the Active Access Token DynamoDB table.
 
 Resources:
   AuthLambdaExecutionRole:
@@ -33,20 +45,26 @@ Resources:
             Statement:
               - Sid: ReadAuthParameters
                 Effect: Allow
-                Action: ssm:GetParameter
+                Action:
+                  - ssm:GetParameter
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${EnvironmentName}/auth/*'
+
               - Sid: DecryptSsmSecureString
                 Effect: Allow
-                Action: kms:Decrypt
+                Action:
+                  - kms:Decrypt
                 Resource: '*'
                 Condition:
                   StringEquals:
                     kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
+
               - Sid: ReadDatabaseCredentials
                 Effect: Allow
-                Action: secretsmanager:GetSecretValue
+                Action:
+                  - secretsmanager:GetSecretValue
                 Resource:
                   Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DBSecretArn'
+
               - Sid: RefreshTokenTableAccess
                 Effect: Allow
                 Action:
@@ -56,8 +74,9 @@ Resources:
                   - dynamodb:DeleteItem
                   - dynamodb:Query
                 Resource:
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-refresh-tokens'
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-refresh-tokens/index/user_id-index'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${RefreshTokenTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${RefreshTokenTableName}/index/user_id-index'
+
               - Sid: TokenActiveListTableAccess
                 Effect: Allow
                 Action:
@@ -66,8 +85,7 @@ Resources:
                   - dynamodb:UpdateItem
                   - dynamodb:DeleteItem
                   - dynamodb:Query
-                Resource:
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-token-activelist-v2'
+                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TokenActiveListTableName}'
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -94,19 +112,24 @@ Resources:
             Statement:
               - Sid: ReadJwtSecret
                 Effect: Allow
-                Action: ssm:GetParameter
+                Action:
+                  - ssm:GetParameter
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${EnvironmentName}/auth/jwt-secret'
+
               - Sid: DecryptSsmSecureString
                 Effect: Allow
-                Action: kms:Decrypt
+                Action:
+                  - kms:Decrypt
                 Resource: '*'
                 Condition:
                   StringEquals:
                     kms:ViaService: !Sub 'ssm.${AWS::Region}.amazonaws.com'
+
               - Sid: CheckActiveTokens
                 Effect: Allow
-                Action: dynamodb:GetItem
-                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-token-activelist-v2'
+                Action:
+                  - dynamodb:GetItem
+                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TokenActiveListTableName}'
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -117,11 +140,15 @@ Outputs:
   JwtSecretParameterName:
     Description: SSM SecureString parameter name used by authentication and authorizer Lambdas.
     Value: !Sub '/${ProjectName}/${EnvironmentName}/auth/jwt-secret'
+
   AuthLambdaExecutionRoleArn:
+    Description: Execution role ARN for the authentication Lambda.
     Value: !GetAtt AuthLambdaExecutionRole.Arn
     Export:
       Name: !Sub '${ProjectName}-${EnvironmentName}-AuthLambdaExecutionRoleArn'
+
   AuthorizerLambdaExecutionRoleArn:
+    Description: Execution role ARN for the JWT authorizer Lambda.
     Value: !GetAtt AuthorizerLambdaExecutionRole.Arn
     Export:
       Name: !Sub '${ProjectName}-${EnvironmentName}-AuthorizerLambdaExecutionRoleArn'

@@ -335,12 +335,6 @@ jobs:
             --output text \
             --region "${AWS_REGION}")"
 
-          SLOT_CAPACITY_TABLE_NAME="$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
-            --query "Stacks[0].Outputs[?OutputKey=='SlotCapacityTableName'].OutputValue | [0]" \
-            --output text \
-            --region "${AWS_REGION}")"
-
           WAITLIST_TABLE_NAME="$(aws cloudformation describe-stacks \
             --stack-name "${STACK_NAME}" \
             --query "Stacks[0].Outputs[?OutputKey=='WaitlistTableName'].OutputValue | [0]" \
@@ -368,13 +362,8 @@ jobs:
             --output text \
             --region "${AWS_REGION}")"
 
-          MATERIALISED_SLOTS_TABLE_NAME="$(aws cloudformation describe-stacks \
-            --stack-name "${AUTH_DDB_STACK}" \
-            --query "Stacks[0].Outputs[?OutputKey=='MaterialisedSlotsTableName'].OutputValue | [0]" \
-            --output text \
-            --region "${AWS_REGION}")"
 
-          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME MATERIALISED_SLOTS_TABLE_NAME; do
+          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME; do
             value="${!name}"
             if [[ -z "${value}" || "${value}" == "None" ]]; then
               echo "::error::Required Data Stack output '${name}' is missing from ${STACK_NAME}."
@@ -388,12 +377,10 @@ jobs:
             echo "DB_NAME=${DB_NAME}"
             echo "DB_SECRET_ARN=${DB_SECRET_ARN}"
             echo "IDEMPOTENCY_TABLE_NAME=${IDEMPOTENCY_TABLE_NAME}"
-            echo "SLOT_CAPACITY_TABLE_NAME=${SLOT_CAPACITY_TABLE_NAME}"
             echo "WAITLIST_TABLE_NAME=${WAITLIST_TABLE_NAME}"
             echo "NOTIFICATION_DISPATCH_TABLE_NAME=${NOTIFICATION_DISPATCH_TABLE_NAME}"
             echo "REFRESH_TOKEN_TABLE_NAME=${REFRESH_TOKEN_TABLE_NAME}"
             echo "TOKEN_ACTIVELIST_TABLE_NAME=${TOKEN_ACTIVELIST_TABLE_NAME}"
-            echo "MATERIALISED_SLOTS_TABLE_NAME=${MATERIALISED_SLOTS_TABLE_NAME}"
           } >> "${GITHUB_ENV}"
 
           echo "Using artifacts bucket from Data Stack: ${LAMBDA_ARTIFACTS_BUCKET}"
@@ -502,14 +489,9 @@ jobs:
           mkdir -p "${PACKAGE_DIR}"
           python -m pip install --upgrade pip
           python -m pip install --requirement requirements-auth.txt --target "${PACKAGE_DIR}"
-          mkdir -p "${PACKAGE_DIR}/application/auth" "${PACKAGE_DIR}/application/authorizer" "${PACKAGE_DIR}/application/common" "${PACKAGE_DIR}/application/database" "${PACKAGE_DIR}/application/doctor" "${PACKAGE_DIR}/application/slot_materialiser" "${PACKAGE_DIR}/application/availability"
-          cp application/__init__.py "${PACKAGE_DIR}/application/__init__.py"
-          cp application/auth/__init__.py application/auth/handler.py application/auth/register.py application/auth/login.py application/auth/refresh.py application/auth/logout.py "${PACKAGE_DIR}/application/auth/"
-          cp application/authorizer/__init__.py application/authorizer/lambda_handler.py "${PACKAGE_DIR}/application/authorizer/"
-          cp application/common/__init__.py application/common/auth_utils.py application/common/http.py "${PACKAGE_DIR}/application/common/"
-          cp application/database/__init__.py application/database/connection.py "${PACKAGE_DIR}/application/database/"
-          cp application/slot_materialiser/handler.py "${PACKAGE_DIR}/application/slot_materialiser/"
-          cp application/availability/__init__.py application/availability/handler.py "${PACKAGE_DIR}/application/availability/"
+          # Package the complete Python application so all handlers, package
+          # markers and shared modules are included in the Lambda artifact.
+          cp -R application "${PACKAGE_DIR}/application"
           ( cd "${PACKAGE_DIR}" && zip -qr "${ZIP_FILE}" . )
           test -s "${ZIP_FILE}"
           echo "Lambda package created successfully."
@@ -566,7 +548,6 @@ jobs:
               "LambdaSecurityGroupId=${LAMBDA_SECURITY_GROUP_ID}" \
               "TokenActiveListTableName=${TOKEN_ACTIVELIST_TABLE_NAME}" \
               "RefreshTokenTableName=${REFRESH_TOKEN_TABLE_NAME}" \
-              "MaterialisedSlotsTableName=${MATERIALISED_SLOTS_TABLE_NAME}" \
               "DatabaseHost=${DB_HOST}" \
               "DatabaseName=${DB_NAME}" \
               "DatabaseSecretArn=${DB_SECRET_ARN}" \

@@ -14,7 +14,6 @@ try:
     patch_all()
 except ImportError:
     pass
-from boto3.dynamodb.conditions import Attr
 from botocore.exceptions import ClientError
 from application.common.http import response, request_method, request_body
 from application.database.connection import get_connection
@@ -287,24 +286,28 @@ def _blackout_route(method,path,user_id,role,body):
 
 def _schedule(event,user_id,role):
     _require_doctor(role)
-    try: target=date.fromisoformat((event.get("queryStringParameters") or {}).get("date",""))
-    except ValueError: return response(400,{"error":"date query parameter must be YYYY-MM-DD"})
+    try:
+        target=date.fromisoformat((event.get("queryStringParameters") or {}).get("date",""))
+    except ValueError:
+        return response(400,{"error":"date query parameter must be YYYY-MM-DD"})
     conn=get_connection()
     try:
         with conn.cursor() as cur:
             doctor_id=_doctor_id(cur,user_id)
-            if not doctor_id: return response(404,{"error":"DOCTOR_PROFILE_NOT_FOUND"})
-    finally: conn.close()
-    table_name=os.environ.get("MATERIALISED_SLOTS_TABLE")
-    if not table_name: raise RuntimeError("MATERIALISED_SLOTS_TABLE is not configured")
-    table=boto3.resource("dynamodb").Table(table_name); scan_kwargs={"FilterExpression": Attr("doctor_id").eq(int(doctor_id)) & Attr("date").eq(target.isoformat())}
-    items=[]
-    while True:
-        result=table.scan(**scan_kwargs); items.extend(result.get("Items",[]))
-        if not result.get("LastEvaluatedKey"): break
-        scan_kwargs["ExclusiveStartKey"]=result["LastEvaluatedKey"]
-    items.sort(key=lambda x:x.get("start_time",""))
-    return response(200,{"doctor_id":doctor_id,"date":target.isoformat(),"items":items,"count":len(items)})
+            if not doctor_id:
+                return response(404,{"error":"DOCTOR_PROFILE_NOT_FOUND"})
+            cur.execute(
+                """SELECT slot_id, availability_id, doctor_id, consultation_type_id,
+                          `date` AS date, start_time, end_time, capacity, booked_count, status
+                   FROM materialised_slots
+                   WHERE doctor_id=%s AND `date`=%s
+                   ORDER BY start_time""",
+                (int(doctor_id),target),
+            )
+            items=cur.fetchall()
+        return response(200,{"doctor_id":doctor_id,"date":target.isoformat(),"items":items,"count":len(items)})
+    finally:
+        conn.close()
 
 
 def lambda_handler(event, context):

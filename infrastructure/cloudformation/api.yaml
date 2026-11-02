@@ -40,9 +40,6 @@ Parameters:
   TokenActiveListTableName:
     Type: String
     Description: Existing token-activelist DynamoDB table name.
-  MaterialisedSlotsTableName:
-    Type: String
-    Description: Materialised slots DynamoDB table name.
 
 Resources:
   AuthFunction:
@@ -250,7 +247,6 @@ Resources:
           DB_HOST: !Ref DatabaseHost
           DB_NAME: !Ref DatabaseName
           PROFILE_PHOTO_BUCKET: !Ref DoctorPhotoBucket
-          MATERIALISED_SLOTS_TABLE: !Ref MaterialisedSlotsTableName
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds
         SecurityGroupIds: [!Ref LambdaSecurityGroupId]
@@ -277,7 +273,6 @@ Resources:
           DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
           DB_HOST: !Ref DatabaseHost
           DB_NAME: !Ref DatabaseName
-          MATERIALISED_SLOTS_TABLE: !Ref MaterialisedSlotsTableName
           MATERIALISATION_DAYS: '30'
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds

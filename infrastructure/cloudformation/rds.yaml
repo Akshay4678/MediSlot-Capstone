@@ -230,41 +230,6 @@ Resources:
           Value: !Ref EnvironmentName
 
   # ----------------------------------------------------------
-  # DYNAMODB: SLOT CAPACITY
-  # ----------------------------------------------------------
-
-  SlotCapacityTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-
-    Properties:
-      BillingMode: PAY_PER_REQUEST
-
-      AttributeDefinitions:
-        - AttributeName: slot_id
-          AttributeType: S
-
-      KeySchema:
-        - AttributeName: slot_id
-          KeyType: HASH
-
-      SSESpecification:
-        SSEEnabled: true
-
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: !If
-          - IsProd
-          - true
-          - false
-
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  # ----------------------------------------------------------
   # DYNAMODB: WAITLIST
   # ----------------------------------------------------------
 
@@ -446,11 +411,6 @@ Outputs:
     Export:
       Name: !Sub '${ProjectName}-${EnvironmentName}-IdempotencyTableName'
 
-  SlotCapacityTableName:
-    Description: DynamoDB slot capacity table name.
-    Value: !Ref SlotCapacityTable
-    Export:
-      Name: !Sub '${ProjectName}-${EnvironmentName}-SlotCapacityTableName'
 
   WaitlistTableName:
     Description: DynamoDB waitlist table name.

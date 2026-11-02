@@ -47,23 +47,6 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
 
-  MaterialisedSlotsTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      TableName: !Sub '${EnvironmentName}-medislot-materialised-slots'
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: slot_id
-          AttributeType: S
-      KeySchema:
-        - AttributeName: slot_id
-          KeyType: HASH
-      SSESpecification:
-        SSEEnabled: true
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: true
 
 Outputs:
   RefreshTokenTableName:
@@ -87,12 +70,3 @@ Outputs:
     Export:
       Name: !Sub '${EnvironmentName}-MediSlot-TokenActiveListTableArn'
 
-  MaterialisedSlotsTableName:
-    Description: DynamoDB materialised slot capacity table
-    Value: !Ref MaterialisedSlotsTable
-    Export:
-      Name: !Sub '${EnvironmentName}-MediSlot-MaterialisedSlotsTableName'
-  MaterialisedSlotsTableArn:
-    Value: !GetAtt MaterialisedSlotsTable.Arn
-    Export:
-      Name: !Sub '${EnvironmentName}-MediSlot-MaterialisedSlotsTableArn'

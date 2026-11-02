@@ -137,9 +137,6 @@ Resources:
                 Action: s3:PutObject
                 Resource: !Sub 'arn:${AWS::Partition}:s3:::${ProjectName}-${EnvironmentName}-${AWS::AccountId}-doctor-photos/*'
               - Effect: Allow
-                Action: [dynamodb:Scan, dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:DescribeTable]
-                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-materialised-slots'
-              - Effect: Allow
                 Action: [xray:PutTraceSegments, xray:PutTelemetryRecords]
                 Resource: '*'
       Tags:
@@ -169,9 +166,6 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*'
-              - Effect: Allow
-                Action: [dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Scan, dynamodb:DescribeTable]
-                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${EnvironmentName}-medislot-materialised-slots'
               - Effect: Allow
                 Action: [xray:PutTraceSegments, xray:PutTelemetryRecords]
                 Resource: '*'

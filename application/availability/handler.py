@@ -4,17 +4,14 @@ Route:
     GET /doctor/schedule?date=YYYY-MM-DD
 
 The authenticated doctor's identity is taken from API Gateway authorizer context.
-The endpoint reads relational schedule/blackout data from RDS, materialised slots
-from DynamoDB, and appointment/patient details from RDS.
+The endpoint reads schedule, blackout dates, materialised slots, and
+appointment/patient details from RDS.
 """
 
 import logging
-import os
 from datetime import date, datetime, time, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import boto3
-from boto3.dynamodb.conditions import Attr
 
 from application.common.http import response, request_method
 from application.database.connection import get_connection
@@ -102,35 +99,17 @@ def _resolve_doctor(cursor, user_id, role, event):
     return doctor
 
 
-def _scan_slots(table, doctor_id, target_date):
-    """Read one doctor's slots for a date.
-
-    The approved ERD defines slot_id as the DynamoDB primary key but does not
-    define a doctor/date GSI. A paginated Scan is therefore used here so this
-    file works with the table definition currently shown in the project.
-    For larger production datasets, add a GSI (doctor_id HASH, date RANGE)
-    and replace this scan with Query.
-    """
-    scan_args = {
-        "FilterExpression": (
-            Attr("doctor_id").eq(int(doctor_id))
-            & Attr("date").eq(target_date.isoformat())
-        )
-    }
-    items = []
-
-    while True:
-        page = table.scan(**scan_args)
-        items.extend(page.get("Items", []))
-
-        last_key = page.get("LastEvaluatedKey")
-        if not last_key:
-            break
-
-        scan_args["ExclusiveStartKey"] = last_key
-
-    items.sort(key=lambda item: str(item.get("start_time", "")))
-    return items
+def _scan_slots(cursor, doctor_id, target_date):
+    """Read materialised slots for a doctor/date from the relational database."""
+    cursor.execute(
+        """SELECT slot_id, availability_id, doctor_id, consultation_type_id,
+                  `date` AS date, start_time, end_time, capacity, booked_count, status
+           FROM materialised_slots
+           WHERE doctor_id = %s AND `date` = %s
+           ORDER BY start_time""",
+        (int(doctor_id), target_date),
+    )
+    return cursor.fetchall()
 
 
 def _time_value(value):
@@ -174,7 +153,7 @@ def _slot_utc_values(slot, target_date, zone):
 
 
 def _appointment_details(cursor, doctor_id, slot_ids):
-    """Fetch appointment and patient details for the selected DynamoDB slots."""
+    """Fetch appointment and patient details for the selected RDS slots."""
     if not slot_ids:
         return {}
 
@@ -261,12 +240,6 @@ def lambda_handler(event, context):
     try:
         user_id, role = _identity(event)
         target_date = _parse_target_date(event)
-        table_name = os.environ.get("MATERIALISED_SLOTS_TABLE")
-
-        if not table_name:
-            log.error("MATERIALISED_SLOTS_TABLE environment variable is missing.")
-            return response(500, {"error": "SERVER_CONFIGURATION_ERROR"})
-
         connection = get_connection()
 
         with connection.cursor() as cursor:
@@ -347,8 +320,7 @@ def lambda_handler(event, context):
                     },
                 )
 
-            dynamodb_table = boto3.resource("dynamodb").Table(table_name)
-            slots = _scan_slots(dynamodb_table, doctor_id, target_date)
+            slots = _scan_slots(cursor, doctor_id, target_date)
             slot_ids = [
                 str(item["slot_id"])
                 for item in slots
@@ -377,8 +349,7 @@ def lambda_handler(event, context):
                 "slots": schedule_slots,
                 "count": len(schedule_slots),
                 "availability_source": (
-                    "DynamoDB materialised slots; appointments and patient details "
-                    "are joined from RDS"
+                    "RDS materialised_slots, appointments and patient details"
                 ),
             },
         )

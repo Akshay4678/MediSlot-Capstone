@@ -731,24 +731,34 @@ Resources:
       RestApiId: !Ref MediSlotRestApi
       Description: Initial deployment (the pipeline creates a fresh deployment on every release).
 
-  
-  HttpApiDefaultStage:
-    Type: AWS::ApiGatewayV2::Stage
+    ApiStage:
+    Type: AWS::ApiGateway::Stage
     Properties:
-      ApiId: !Ref MediSlotHttpApi
-      StageName: '$default'
-      AutoDeploy: true
+      RestApiId: !Ref MediSlotRestApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: !Ref EnvironmentName
+      TracingEnabled: true
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          MetricsEnabled: true
+          ThrottlingRateLimit: 50
+          ThrottlingBurstLimit: 100
       Tags:
-        Project: !Ref ProjectName
-        Environment: !Ref EnvironmentName
-
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
 Outputs:
   ApiId:
-    Description: REST API id (the pipeline creates a new deployment of this API on every release).
+    Description: REST API ID
     Value: !Ref MediSlotRestApi
+
   ApiStageName:
-    Value: !Ref HttpApiDefaultStage
+    Description: REST API stage name
+    Value: !Ref ApiStage
+
   ApiEndpoint:
-    Description: Base URL of the MediSlot API (includes the stage).
+    Description: Base URL of the MediSlot REST API
     Value: !Sub 'https://${MediSlotRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${EnvironmentName}'

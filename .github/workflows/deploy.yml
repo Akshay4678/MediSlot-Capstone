@@ -282,10 +282,11 @@ jobs:
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
 
-
+      
       # ==========================================
       # STEP 8A: Deploy Authentication DynamoDB Tables
       # ==========================================
+
       - name: Deploy Authentication DynamoDB Tables
         shell: bash
         run: |
@@ -304,6 +305,29 @@ jobs:
             --region "${AWS_REGION}"
 
           echo "Authentication DynamoDB tables deployed."
+
+      # ==========================================
+      # STEP 8B: Diagnose DynamoDB deployment failures
+      # ==========================================
+
+      - name: Diagnose DynamoDB CloudFormation failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "Checking CloudFormation validation failures..."
+
+          aws cloudformation describe-events \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-dynamodb" \
+            --filters '{"FailedEvents":true}' \
+            --region "${AWS_REGION}" \
+            --output json || true
+
+          echo "Checking existing DynamoDB tables..."
+
+          aws dynamodb list-tables \
+            --region "${AWS_REGION}" \
+            --output table || true
+
 
       # ==========================================
       # STEP 9: Read deployment bucket from Data Stack

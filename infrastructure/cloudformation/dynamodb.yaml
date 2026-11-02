@@ -11,7 +11,9 @@ Parameters:
     Default: dev
     AllowedValues:
       - dev
+      - test
       - prod
+    Description: Deployment environment.
 
 Resources:
 
@@ -21,10 +23,7 @@ Resources:
 
   TokenActiveListTable:
     Type: AWS::DynamoDB::Table
-
     Properties:
-      TableName: !Sub '${EnvironmentName}-medislot-token-activelist-m3'
-
       BillingMode: PAY_PER_REQUEST
 
       AttributeDefinitions:
@@ -63,10 +62,7 @@ Resources:
 
   RefreshTokenTable:
     Type: AWS::DynamoDB::Table
-
     Properties:
-      TableName: !Sub '${EnvironmentName}-medislot-refresh-tokens-m3'
-
       BillingMode: PAY_PER_REQUEST
 
       AttributeDefinitions:
@@ -97,22 +93,26 @@ Resources:
 
 Outputs:
 
+  # ==========================================
+  # ACTIVE ACCESS TOKEN OUTPUTS
+  # ==========================================
+
   TokenActiveListTableName:
-    Description: Active Access Token DynamoDB Table
+    Description: Active Access Token DynamoDB Table Name
     Value: !Ref TokenActiveListTable
-    Export:
-      Name: !Sub '${EnvironmentName}-TokenActiveListTableName'
 
   TokenActiveListTableArn:
-    Description: Active Access Token Table ARN
+    Description: Active Access Token DynamoDB Table ARN
     Value: !GetAtt TokenActiveListTable.Arn
 
+  # ==========================================
+  # REFRESH TOKEN OUTPUTS
+  # ==========================================
+
   RefreshTokenTableName:
-    Description: Refresh Token DynamoDB Table
+    Description: Refresh Token DynamoDB Table Name
     Value: !Ref RefreshTokenTable
-    Export:
-      Name: !Sub '${EnvironmentName}-RefreshTokenTableName'
 
   RefreshTokenTableArn:
-    Description: Refresh Token Table ARN
+    Description: Refresh Token DynamoDB Table ARN
     Value: !GetAtt RefreshTokenTable.Arn

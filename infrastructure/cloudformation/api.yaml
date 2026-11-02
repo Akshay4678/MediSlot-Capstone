@@ -1,3 +1,4 @@
+
 AWSTemplateFormatVersion: '2010-09-09'
 Description: MediSlot API - REST API Gateway, JWT Lambda Authorizer, auth Lambdas and doctor-domain routes.
 
@@ -6,35 +7,47 @@ Parameters:
     Type: String
     Default: medislot
     AllowedPattern: '^[a-zA-Z0-9-]+$'
+
   EnvironmentName:
     Type: String
     Default: dev
     AllowedValues: [dev, test, prod]
+
   LambdaCodeS3Bucket:
     Type: String
     Description: Private S3 bucket containing the Lambda deployment ZIP.
+
   LambdaCodeS3Key:
     Type: String
     Description: S3 object key of the Lambda deployment ZIP.
+
   LambdaSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
+
   LambdaSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
+
   DatabaseSecretArn:
     Type: String
+
   DatabaseHost:
     Type: String
+
   DatabaseName:
     Type: String
     Default: medislot
+
   JwtSecretParameterName:
     Type: String
+
   RefreshTokenTableName:
     Type: String
+
   TokenActiveListTableName:
     Type: String
 
 Resources:
+
   AuthFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -61,7 +74,8 @@ Resources:
           TOKEN_ACTIVELIST_TABLE: !Ref TokenActiveListTableName
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds: [!Ref LambdaSecurityGroupId]
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupId
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -120,9 +134,6 @@ Resources:
       RestApiId: !Ref MediSlotRestApi
       Type: REQUEST
       IdentitySource: method.request.header.Authorization
-      # TTL 0 on purpose: the active-token check (one token per user, removed on logout or
-      # when a new token is issued) must take effect immediately. Cost: one strongly
-      # consistent DynamoDB GetItem per request.
       AuthorizerResultTtlInSeconds: 0
       AuthorizerUri: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AuthorizerFunction.Arn}/invocations'
 
@@ -157,7 +168,15 @@ Resources:
       RestApiId: !Ref MediSlotRestApi
       Name: LoginRequest
       ContentType: application/json
-      Schema: {"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "required": ["email", "password"], "properties": {"email": {"type": "string"}, "password": {"type": "string"}}}
+      Schema:
+        "$schema": "http://json-schema.org/draft-04/schema#"
+        type: object
+        required: [email, password]
+        properties:
+          email:
+            type: string
+          password:
+            type: string
 
   RegisterPatientModel:
     Type: AWS::ApiGateway::Model
@@ -165,7 +184,21 @@ Resources:
       RestApiId: !Ref MediSlotRestApi
       Name: RegisterPatientRequest
       ContentType: application/json
-      Schema: {"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "required": ["email", "password", "first_name", "last_name"], "properties": {"email": {"type": "string"}, "password": {"type": "string"}, "first_name": {"type": "string"}, "last_name": {"type": "string"}, "phone": {"type": "string"}}}
+      Schema:
+        "$schema": "http://json-schema.org/draft-04/schema#"
+        type: object
+        required: [email, password, first_name, last_name]
+        properties:
+          email:
+            type: string
+          password:
+            type: string
+          first_name:
+            type: string
+          last_name:
+            type: string
+          phone:
+            type: string
 
   RegisterDoctorModel:
     Type: AWS::ApiGateway::Model
@@ -173,7 +206,17 @@ Resources:
       RestApiId: !Ref MediSlotRestApi
       Name: RegisterDoctorRequest
       ContentType: application/json
-      Schema: {"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "required": ["email", "password"], "properties": {"email": {"type": "string"}, "password": {"type": "string"}, "registration_code": {"type": "string"}}}
+      Schema:
+        "$schema": "http://json-schema.org/draft-04/schema#"
+        type: object
+        required: [email, password]
+        properties:
+          email:
+            type: string
+          password:
+            type: string
+          registration_code:
+            type: string
 
   RefreshModel:
     Type: AWS::ApiGateway::Model
@@ -181,7 +224,13 @@ Resources:
       RestApiId: !Ref MediSlotRestApi
       Name: RefreshRequest
       ContentType: application/json
-      Schema: {"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "required": ["refresh_token"], "properties": {"refresh_token": {"type": "string"}}}
+      Schema:
+        "$schema": "http://json-schema.org/draft-04/schema#"
+        type: object
+        required: [refresh_token]
+        properties:
+          refresh_token:
+            type: string
 
   PhotoModel:
     Type: AWS::ApiGateway::Model
@@ -189,7 +238,13 @@ Resources:
       RestApiId: !Ref MediSlotRestApi
       Name: PhotoRequest
       ContentType: application/json
-      Schema: {"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "required": ["content_type"], "properties": {"content_type": {"type": "string"}}}
+      Schema:
+        "$schema": "http://json-schema.org/draft-04/schema#"
+        type: object
+        required: [content_type]
+        properties:
+          content_type:
+            type: string
 
   BlackoutModel:
     Type: AWS::ApiGateway::Model
@@ -197,7 +252,15 @@ Resources:
       RestApiId: !Ref MediSlotRestApi
       Name: BlackoutRequest
       ContentType: application/json
-      Schema: {"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "required": ["blackout_date"], "properties": {"blackout_date": {"type": "string"}, "reason": {"type": "string"}}}
+      Schema:
+        "$schema": "http://json-schema.org/draft-04/schema#"
+        type: object
+        required: [blackout_date]
+        properties:
+          blackout_date:
+            type: string
+          reason:
+            type: string
 
   ConsultationTypeModel:
     Type: AWS::ApiGateway::Model
@@ -205,105 +268,115 @@ Resources:
       RestApiId: !Ref MediSlotRestApi
       Name: ConsultationTypeRequest
       ContentType: application/json
-      Schema: {"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "required": ["type_name", "fee"], "properties": {"type_name": {"type": "string"}, "fee": {"type": ["number", "string"]}, "duration_minutes": {"type": ["integer", "string"]}}}
+      Schema:
+        "$schema": "http://json-schema.org/draft-04/schema#"
+        type: object
+        required: [type_name, fee]
+        properties:
+          type_name:
+            type: string
+          fee:
+            type: [number, string]
+          duration_minutes:
+            type: [integer, string]
 
   AuthRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !GetAtt MediSlotRestApi.RootResourceId
-      PathPart: 'auth'
+      PathPart: auth
 
   AuthDoctorsRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref AuthRes
-      PathPart: 'doctors'
+      PathPart: doctors
 
   AuthDoctorsRegisterRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref AuthDoctorsRes
-      PathPart: 'register'
+      PathPart: register
 
   AuthDoctorsLoginRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref AuthDoctorsRes
-      PathPart: 'login'
+      PathPart: login
 
   AuthPatientsRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref AuthRes
-      PathPart: 'patients'
+      PathPart: patients
 
   AuthPatientsRegisterRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref AuthPatientsRes
-      PathPart: 'register'
+      PathPart: register
 
   AuthPatientsLoginRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref AuthPatientsRes
-      PathPart: 'login'
+      PathPart: login
 
   AuthRefreshRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref AuthRes
-      PathPart: 'refresh'
+      PathPart: refresh
 
   AuthLogoutRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref AuthRes
-      PathPart: 'logout'
+      PathPart: logout
 
   AuthTestTokenRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref AuthRes
-      PathPart: 'test-token'
+      PathPart: test-token
 
   DoctorsRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !GetAtt MediSlotRestApi.RootResourceId
-      PathPart: 'doctors'
+      PathPart: doctors
 
   DoctorsMeRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref DoctorsRes
-      PathPart: 'me'
+      PathPart: me
 
   DoctorsMePhotoRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref DoctorsMeRes
-      PathPart: 'photo'
+      PathPart: photo
 
   DoctorsMeTypesRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref DoctorsMeRes
-      PathPart: 'consultation-types'
+      PathPart: consultation-types
 
   DoctorsMeTypeRes:
     Type: AWS::ApiGateway::Resource
@@ -317,14 +390,14 @@ Resources:
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref DoctorsMeRes
-      PathPart: 'availability'
+      PathPart: availability
 
   DoctorsMeBlackoutsRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref DoctorsMeRes
-      PathPart: 'blackouts'
+      PathPart: blackouts
 
   DoctorsMeBlackoutRes:
     Type: AWS::ApiGateway::Resource
@@ -338,21 +411,21 @@ Resources:
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !Ref DoctorsMeRes
-      PathPart: 'schedule'
+      PathPart: schedule
 
   HospitalsRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !GetAtt MediSlotRestApi.RootResourceId
-      PathPart: 'hospitals'
+      PathPart: hospitals
 
   SpecialisationsRes:
     Type: AWS::ApiGateway::Resource
     Properties:
       RestApiId: !Ref MediSlotRestApi
       ParentId: !GetAtt MediSlotRestApi.RootResourceId
-      PathPart: 'specialisations'
+      PathPart: specialisations
 
   DoctorRegisterMethod:
     Type: AWS::ApiGateway::Method
@@ -467,9 +540,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   DoctorPutMeMethod:
     Type: AWS::ApiGateway::Method
@@ -484,9 +557,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   DoctorPhotoMethod:
     Type: AWS::ApiGateway::Method
@@ -504,9 +577,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   TypesListMethod:
     Type: AWS::ApiGateway::Method
@@ -521,9 +594,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   TypesCreateMethod:
     Type: AWS::ApiGateway::Method
@@ -541,9 +614,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   TypesUpdateMethod:
     Type: AWS::ApiGateway::Method
@@ -560,9 +633,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   TypesDeleteMethod:
     Type: AWS::ApiGateway::Method
@@ -579,9 +652,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   AvailabilityGetMethod:
     Type: AWS::ApiGateway::Method
@@ -596,9 +669,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   AvailabilityPutMethod:
     Type: AWS::ApiGateway::Method
@@ -613,9 +686,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   BlackoutsListMethod:
     Type: AWS::ApiGateway::Method
@@ -630,9 +703,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   BlackoutsCreateMethod:
     Type: AWS::ApiGateway::Method
@@ -650,9 +723,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   BlackoutsDeleteMethod:
     Type: AWS::ApiGateway::Method
@@ -669,9 +742,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   ScheduleGetMethod:
     Type: AWS::ApiGateway::Method
@@ -686,9 +759,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   HospitalsGetMethod:
     Type: AWS::ApiGateway::Method
@@ -703,9 +776,9 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   SpecialisationsGetMethod:
     Type: AWS::ApiGateway::Method
@@ -720,18 +793,40 @@ Resources:
         IntegrationHttpMethod: POST
         Uri:
           Fn::Sub:
-          - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
-          - DoctorFunctionArn:
-              Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DoctorFunctionArn}/invocations'
+            - DoctorFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
 
   ApiDeployment:
     Type: AWS::ApiGateway::Deployment
-    DependsOn: [DoctorRegisterMethod, DoctorLoginMethod, PatientRegisterMethod, PatientLoginMethod, RefreshMethod, LogoutMethod, TestTokenMethod, DoctorGetMeMethod, DoctorPutMeMethod, DoctorPhotoMethod, TypesListMethod, TypesCreateMethod, TypesUpdateMethod, TypesDeleteMethod, AvailabilityGetMethod, AvailabilityPutMethod, BlackoutsListMethod, BlackoutsCreateMethod, BlackoutsDeleteMethod, ScheduleGetMethod, HospitalsGetMethod, SpecialisationsGetMethod]
+    DependsOn:
+      - DoctorRegisterMethod
+      - DoctorLoginMethod
+      - PatientRegisterMethod
+      - PatientLoginMethod
+      - RefreshMethod
+      - LogoutMethod
+      - TestTokenMethod
+      - DoctorGetMeMethod
+      - DoctorPutMeMethod
+      - DoctorPhotoMethod
+      - TypesListMethod
+      - TypesCreateMethod
+      - TypesUpdateMethod
+      - TypesDeleteMethod
+      - AvailabilityGetMethod
+      - AvailabilityPutMethod
+      - BlackoutsListMethod
+      - BlackoutsCreateMethod
+      - BlackoutsDeleteMethod
+      - ScheduleGetMethod
+      - HospitalsGetMethod
+      - SpecialisationsGetMethod
     Properties:
       RestApiId: !Ref MediSlotRestApi
       Description: Initial deployment (the pipeline creates a fresh deployment on every release).
 
-    ApiStage:
+  RestApiStage:
     Type: AWS::ApiGateway::Stage
     Properties:
       RestApiId: !Ref MediSlotRestApi
@@ -757,7 +852,7 @@ Outputs:
 
   ApiStageName:
     Description: REST API stage name
-    Value: !Ref ApiStage
+    Value: !Ref RestApiStage
 
   ApiEndpoint:
     Description: Base URL of the MediSlot REST API

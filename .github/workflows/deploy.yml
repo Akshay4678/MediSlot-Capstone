@@ -97,8 +97,8 @@ jobs:
             exit 1
           fi
 
-          if [[ ! -f "requirements-auth.txt" || ! -f "requirements-milestone3.txt" ]]; then
-            echo "::error::Lambda requirements files are missing."
+          if [[ ! -f "requirements-auth.txt" ]]; then
+            echo "::error::requirements-auth.txt is missing from the repository root."
             exit 1
           fi
 
@@ -501,7 +501,7 @@ jobs:
           rm -rf "${PACKAGE_DIR}"
           mkdir -p "${PACKAGE_DIR}"
           python -m pip install --upgrade pip
-          python -m pip install --requirement requirements-auth.txt --requirement requirements-milestone3.txt --target "${PACKAGE_DIR}"
+          python -m pip install --requirement requirements-auth.txt --target "${PACKAGE_DIR}"
           mkdir -p "${PACKAGE_DIR}/application/auth" "${PACKAGE_DIR}/application/authorizer" "${PACKAGE_DIR}/application/common" "${PACKAGE_DIR}/application/database" "${PACKAGE_DIR}/application/doctor" "${PACKAGE_DIR}/application/slot_materialiser" "${PACKAGE_DIR}/application/availability"
           cp application/__init__.py "${PACKAGE_DIR}/application/__init__.py"
           cp application/auth/__init__.py application/auth/handler.py application/auth/register.py application/auth/login.py application/auth/refresh.py application/auth/logout.py "${PACKAGE_DIR}/application/auth/"

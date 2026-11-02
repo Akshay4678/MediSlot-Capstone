@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Dr. {{ profile.first_name }} {{ profile.last_name }}</h1>
+<div class="grid cols-2">
+  <div class="card">
+    {% if profile.photo_url %}<img class="photo" src="{{ profile.photo_url }}" alt="Profile photo">{% else %}<div class="photo"></div>{% endif %}
+    <p><strong>{{ profile.specialisation_name }}</strong><br>{{ profile.hospital_name }}, {{ profile.hospital_city }}<br>
+    <span class="muted">Licence {{ profile.licence_number }} &middot; {{ profile.experience_years }} yrs &middot; {{ profile.timezone }}</span></p>
+    <a class="btn secondary" href="{{ url_for('doctor.profile') }}">Edit profile</a>
+  </div>
+  <div class="card">
+    <h2>Today ({{ today.date }})</h2>
+    {% if today.blackout %}<p><span class="tag blocked">Blackout - no appointments</span></p>{% endif %}
+    {% if today.slots %}
+      <p>{{ today.slots|length }} slot(s), {{ today.slots|sum(attribute='booked_count') }} booked.</p>
+    {% else %}<p class="muted">No slots today.</p>{% endif %}
+    <a class="btn" href="{{ url_for('doctor.schedule') }}">Open schedule</a>
+  </div>
+</div>
+{% endblock %}

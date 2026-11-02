@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Schedule - MediSlot{% endblock %}
+{% block content %}
+<h1>Schedule</h1>
+<div class="card actions">
+  <a class="btn secondary" href="{{ url_for('doctor.schedule', view=view, date=prev_date) }}">&larr; Previous</a>
+  <strong>{{ data.from }}{% if data.to != data.from %} to {{ data.to }}{% endif %}</strong>
+  <a class="btn secondary" href="{{ url_for('doctor.schedule', view=view, date=next_date) }}">Next &rarr;</a>
+  <span style="margin-left:auto" class="actions">
+    <a class="btn {{ '' if view == 'day' else 'secondary' }}" href="{{ url_for('doctor.schedule', view='day', date=anchor) }}">Day</a>
+    <a class="btn {{ '' if view == 'week' else 'secondary' }}" href="{{ url_for('doctor.schedule', view='week', date=anchor) }}">Week</a>
+    <form class="actions" method="get"><input type="hidden" name="view" value="{{ view }}"><input type="date" name="date" value="{{ anchor }}" style="width:auto"><button class="secondary" type="submit">Go</button></form>
+  </span>
+</div>
+<p class="muted small">Times shown in {{ data.timezone }}.</p>
+{% for day in data.days %}
+<div class="card">
+  <h2>{{ day.weekday }} {{ day.date }} {% if day.blackout %}<span class="tag blocked">Blackout{{ ': ' ~ day.blackout_reason if day.blackout_reason }}</span>{% endif %}</h2>
+  {% if day.slots %}
+  <table>
+    <tr><th>Time</th><th>Type</th><th>Seats</th><th>Status</th><th>Booked patients</th></tr>
+    {% for s in day.slots %}
+    <tr>
+      <td class="nowrap">{{ s.start_time }} - {{ s.end_time }}</td><td>{{ s.type_name }}</td>
+      <td>{{ s.booked_count }} / {{ s.capacity }}</td>
+      <td><span class="tag {{ 'blocked' if s.status == 'BLOCKED' else ('full' if s.status == 'FULL' else '') }}">{{ s.status }}</span></td>
+      <td>{% for a in s.appointments %}{{ a.patient_name }}{% if a.patient_phone %} ({{ a.patient_phone }}){% endif %} <span class="tag">{{ a.status }}</span><br>{% else %}<span class="muted">-</span>{% endfor %}</td>
+    </tr>{% endfor %}
+  </table>
+  {% else %}<p class="muted">No slots.</p>{% endif %}
+</div>
+{% endfor %}
+{% endblock %}

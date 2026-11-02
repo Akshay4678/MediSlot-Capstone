@@ -3,7 +3,9 @@ name: MediSlot AWS Deployment
 on:
   push:
     branches:
+      - master
       - milestone-2-branch
+      - milestone-3-branch
 
   workflow_dispatch:
     inputs:
@@ -34,7 +36,7 @@ jobs:
     environment:
       name: ${{ github.event.inputs.environment || 'dev' }}
 
-    if: github.ref == 'refs/heads/milestone-2-branch'
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/heads/milestone-')
 
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -82,8 +84,9 @@ jobs:
             infrastructure/cloudformation/rds.yaml \
             infrastructure/cloudformation/dynamodb.yaml \
             infrastructure/cloudformation/auth.yaml \
+            infrastructure/cloudformation/storage.yaml \
+            infrastructure/cloudformation/doctor.yaml \
             infrastructure/cloudformation/api.yaml \
-            infrastructure/cloudformation/scheduler.yaml \
             infrastructure/cloudformation/web.yaml
           do
             if [[ ! -f "${template}" ]]; then
@@ -98,7 +101,7 @@ jobs:
           fi
 
           if [[ ! -f "requirements-auth.txt" ]]; then
-            echo "::error::requirements-auth.txt is missing from the repository root."
+            echo "::error::requirements-auth.txt was not found."
             exit 1
           fi
 
@@ -106,6 +109,23 @@ jobs:
           echo "Environment: ${ENVIRONMENT_NAME}"
           echo "Region: ${AWS_REGION}"
           echo "Branch: ${GITHUB_REF_NAME}"
+
+      # ==========================================
+      # STEP 2B: Lint and unit tests gate the deployment
+      # ==========================================
+      - name: Set up Python for checks
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Lint and unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          flake8 application scripts web tests --select=E9,F --exclude=application/booking,application/notification,application/patient,application/availability,application/refund,application/waitlist,application/doctor
+          python -m pytest tests/unit -q
 
       # ==========================================
       # STEP 3: Configure AWS credentials using OIDC
@@ -139,8 +159,9 @@ jobs:
             infrastructure/cloudformation/rds.yaml \
             infrastructure/cloudformation/dynamodb.yaml \
             infrastructure/cloudformation/auth.yaml \
+            infrastructure/cloudformation/storage.yaml \
+            infrastructure/cloudformation/doctor.yaml \
             infrastructure/cloudformation/api.yaml \
-            infrastructure/cloudformation/scheduler.yaml \
             infrastructure/cloudformation/web.yaml
           do
             echo "Validating ${template}"
@@ -335,6 +356,12 @@ jobs:
             --output text \
             --region "${AWS_REGION}")"
 
+          SLOT_CAPACITY_TABLE_NAME="$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_NAME}" \
+            --query "Stacks[0].Outputs[?OutputKey=='SlotCapacityTableName'].OutputValue | [0]" \
+            --output text \
+            --region "${AWS_REGION}")"
+
           WAITLIST_TABLE_NAME="$(aws cloudformation describe-stacks \
             --stack-name "${STACK_NAME}" \
             --query "Stacks[0].Outputs[?OutputKey=='WaitlistTableName'].OutputValue | [0]" \
@@ -362,8 +389,7 @@ jobs:
             --output text \
             --region "${AWS_REGION}")"
 
-
-          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME; do
+          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME; do
             value="${!name}"
             if [[ -z "${value}" || "${value}" == "None" ]]; then
               echo "::error::Required Data Stack output '${name}' is missing from ${STACK_NAME}."
@@ -377,6 +403,7 @@ jobs:
             echo "DB_NAME=${DB_NAME}"
             echo "DB_SECRET_ARN=${DB_SECRET_ARN}"
             echo "IDEMPOTENCY_TABLE_NAME=${IDEMPOTENCY_TABLE_NAME}"
+            echo "SLOT_CAPACITY_TABLE_NAME=${SLOT_CAPACITY_TABLE_NAME}"
             echo "WAITLIST_TABLE_NAME=${WAITLIST_TABLE_NAME}"
             echo "NOTIFICATION_DISPATCH_TABLE_NAME=${NOTIFICATION_DISPATCH_TABLE_NAME}"
             echo "REFRESH_TOKEN_TABLE_NAME=${REFRESH_TOKEN_TABLE_NAME}"
@@ -444,8 +471,52 @@ jobs:
             echo "Created JWT SecureString parameter using a generated secret."
           fi
 
+          # Settings and business rules: created once, never overwritten, so they can be
+          # changed in Parameter Store without a code change or a deployment.
+          put_if_missing() {
+            if ! aws ssm get-parameter --name "$1" --region "${AWS_REGION}" >/dev/null 2>&1; then
+              aws ssm put-parameter --name "$1" --type String --value "$2" --region "${AWS_REGION}" >/dev/null
+              echo "Created $1"
+            fi
+          }
+          P="/${PROJECT_NAME}/${ENVIRONMENT_NAME}"
+          put_if_missing "${P}/auth/access-token-ttl-seconds" 900
+          put_if_missing "${P}/auth/refresh-token-ttl-seconds" 43200
+          put_if_missing "${P}/auth/bcrypt-work-factor" 12
+          put_if_missing "${P}/rules/quick-consult-minutes" 15
+          put_if_missing "${P}/rules/standard-consult-minutes" 30
+          put_if_missing "${P}/rules/detailed-consult-minutes" 60
+          put_if_missing "${P}/rules/health-camp-minutes" 60
+          put_if_missing "${P}/rules/health-camp-min-capacity" 2
+          put_if_missing "${P}/rules/health-camp-max-capacity" 10
+          put_if_missing "${P}/rules/booking-window-days" 30
+          put_if_missing "${P}/rules/photo-max-bytes" 5242880
+          if ! aws ssm get-parameter --name "${P}/web/flask-secret-key" --region "${AWS_REGION}" >/dev/null 2>&1; then
+            aws ssm put-parameter --name "${P}/web/flask-secret-key" --type SecureString \
+              --value "$(openssl rand -hex 32)" --region "${AWS_REGION}" >/dev/null
+            echo "Created web session secret (value not printed)."
+          fi
           echo "SSM Parameter Store configuration completed."
           echo "JWT secret value was not printed."
+
+      # ==========================================
+      # STEP 9B: Storage stack (private photo bucket)
+      # ==========================================
+      - name: Deploy Storage Stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/storage.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-storage" \
+            --parameter-overrides "ProjectName=${PROJECT_NAME}" "EnvironmentName=${ENVIRONMENT_NAME}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
+          PHOTO_BUCKET="$(aws cloudformation describe-stacks \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-storage" \
+            --query "Stacks[0].Outputs[?OutputKey=='PhotoBucketName'].OutputValue | [0]" \
+            --output text --region "${AWS_REGION}")"
+          echo "PHOTO_BUCKET=${PHOTO_BUCKET}" >> "${GITHUB_ENV}"
 
       # ==========================================
       # STEP 10: Deploy Authentication Stack
@@ -485,16 +556,22 @@ jobs:
           set -euo pipefail
           PACKAGE_DIR="${RUNNER_TEMP}/lambda-package"
           ZIP_FILE="${RUNNER_TEMP}/medislot-lambda.zip"
-          rm -rf "${PACKAGE_DIR}"
+          rm -rf "${PACKAGE_DIR}" "${ZIP_FILE}"
           mkdir -p "${PACKAGE_DIR}"
-          python -m pip install --upgrade pip
-          python -m pip install --requirement requirements-auth.txt --target "${PACKAGE_DIR}"
-          # Package the complete Python application so all handlers, package
-          # markers and shared modules are included in the Lambda artifact.
-          cp -R application "${PACKAGE_DIR}/application"
-          ( cd "${PACKAGE_DIR}" && zip -qr "${ZIP_FILE}" . )
+
+          # Lambda runs Linux x86_64 / Python 3.12: install matching binary wheels
+          # (bcrypt has a compiled extension).
+          python -m pip install --requirement requirements-auth.txt --target "${PACKAGE_DIR}" \
+            --platform manylinux2014_x86_64 --platform manylinux_2_28_x86_64 \
+            --implementation cp --python-version 3.12 --only-binary=:all: --upgrade
+
+          # The whole application package is shipped; each Lambda selects its own handler.
+          cp -r application "${PACKAGE_DIR}/application"
+          find "${PACKAGE_DIR}" -name '__pycache__' -type d -prune -exec rm -rf {} +
+
+          ( cd "${PACKAGE_DIR}" && zip -qr "${ZIP_FILE}" . -x '*.pyc' )
           test -s "${ZIP_FILE}"
-          echo "Lambda package created successfully."
+          echo "Lambda package created: $(du -h "${ZIP_FILE}" | cut -f1)"
 
       # ==========================================
       # STEP 12: Upload Lambda ZIP to S3
@@ -522,6 +599,31 @@ jobs:
 
           echo "Lambda package uploaded."
           echo "S3 key: ${S3_KEY}"
+
+      # ==========================================
+      # STEP 12B: Doctor domain stack (doctor API Lambda, slot materialiser, daily schedule)
+      # ==========================================
+      - name: Deploy Doctor Domain Stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/doctor.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-doctor" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              "ProjectName=${PROJECT_NAME}" \
+              "EnvironmentName=${ENVIRONMENT_NAME}" \
+              "LambdaCodeS3Bucket=${LAMBDA_CODE_S3_BUCKET}" \
+              "LambdaCodeS3Key=${LAMBDA_CODE_S3_KEY}" \
+              "LambdaSubnetIds=${LAMBDA_SUBNET_1_ID},${LAMBDA_SUBNET_2_ID}" \
+              "LambdaSecurityGroupId=${LAMBDA_SECURITY_GROUP_ID}" \
+              "DatabaseSecretArn=${DB_SECRET_ARN}" \
+              "DatabaseHost=${DB_HOST}" \
+              "DatabaseName=${DB_NAME}" \
+              "PhotoBucketName=${PHOTO_BUCKET}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
 
       # ==========================================
       # STEP 13: Deploy API Gateway and Lambda Stack
@@ -557,48 +659,12 @@ jobs:
 
           echo "API Stack deployed successfully."
 
-      - name: Deploy rolling slot materialisation schedule
-        shell: bash
-        run: |
-          set -euo pipefail
-          API_STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-api"
-          MATERIALISER_ARN="$(aws cloudformation describe-stacks \
-            --stack-name "${API_STACK}" \
-            --query "Stacks[0].Outputs[?OutputKey=='SlotMaterialiserFunctionArn'].OutputValue | [0]" \
-            --output text --region "${AWS_REGION}")"
-          if [[ -z "${MATERIALISER_ARN}" || "${MATERIALISER_ARN}" == "None" ]]; then
-            echo "::error::SlotMaterialiserFunctionArn output missing from ${API_STACK}."; exit 1
-          fi
-          aws cloudformation deploy \
-            --template-file infrastructure/cloudformation/scheduler.yaml \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-scheduler" \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --parameter-overrides "ProjectName=${PROJECT_NAME}" "EnvironmentName=${ENVIRONMENT_NAME}" "MaterialiserLambdaArn=${MATERIALISER_ARN}" \
-            --no-fail-on-empty-changeset --region "${AWS_REGION}"
-
-      - name: Deploy doctor dashboard to EC2
-        shell: bash
-        run: |
-          set -euo pipefail
-          API_STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-api"
-          NETWORK_STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-network"
-          API_ENDPOINT="$(aws cloudformation describe-stacks --stack-name "${API_STACK}" --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
-          PUBLIC_SUBNET="$(aws cloudformation describe-stacks --stack-name "${NETWORK_STACK}" --query "Stacks[0].Outputs[?OutputKey=='PublicSubnet1Id'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
-          DASHBOARD_ZIP="${RUNNER_TEMP}/medislot-doctor-dashboard.zip"
-          DASHBOARD_KEY="dashboard/${ENVIRONMENT_NAME}/${GITHUB_SHA}/doctor-dashboard.zip"
-          (cd dashboard && zip -qr "${DASHBOARD_ZIP}" .)
-          aws s3 cp "${DASHBOARD_ZIP}" "s3://${LAMBDA_ARTIFACTS_BUCKET}/${DASHBOARD_KEY}" --region "${AWS_REGION}"
-          aws cloudformation deploy \
-            --template-file infrastructure/cloudformation/web.yaml \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web" \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --parameter-overrides \
-              "ProjectName=${PROJECT_NAME}" "EnvironmentName=${ENVIRONMENT_NAME}" \
-              "PublicSubnetId=${PUBLIC_SUBNET}" "DashboardArtifactBucket=${LAMBDA_ARTIFACTS_BUCKET}" \
-              "DashboardArtifactKey=${DASHBOARD_KEY}" "ApiBaseUrl=${API_ENDPOINT}" \
-            --no-fail-on-empty-changeset --region "${AWS_REGION}"
-          aws cloudformation describe-stacks --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web" \
-            --query "Stacks[0].Outputs[?OutputKey=='DashboardUrl'].OutputValue | [0]" --output text --region "${AWS_REGION}"
+          # REST API stages only serve a deployment: publish a fresh one on every release.
+          API_ID="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiId'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
+          aws apigateway create-deployment --rest-api-id "${API_ID}" --stage-name "${ENVIRONMENT_NAME}" \
+            --description "Release ${GITHUB_SHA}" --region "${AWS_REGION}" >/dev/null
+          echo "API deployment created for stage ${ENVIRONMENT_NAME}."
 
       # ==========================================
       # STEP 13B: Initialize the RDS MySQL schema through a temporary VPC Lambda
@@ -611,6 +677,8 @@ jobs:
           set -euo pipefail
 
           AUTH_FUNCTION="${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth"
+          # A pre-ER (Milestone 2) schema is rebuilt once, in dev only. Data is dropped.
+          if [[ "${ENVIRONMENT_NAME}" == "dev" ]]; then ALLOW_REBUILD=true; else ALLOW_REBUILD=false; fi
           BOOTSTRAP_FUNCTION="${PROJECT_NAME}-${ENVIRONMENT_NAME}-schema-bootstrap-${GITHUB_RUN_ID}"
           PACKAGE_DIR="${RUNNER_TEMP}/schema-bootstrap-package"
           ZIP_FILE="${RUNNER_TEMP}/schema-bootstrap.zip"
@@ -657,7 +725,7 @@ jobs:
             --memory-size 256 \
             --zip-file "fileb://${ZIP_FILE}" \
             --vpc-config "SubnetIds=${SUBNET_IDS},SecurityGroupIds=${SECURITY_GROUP_IDS}" \
-            --environment "Variables={DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DATABASE_SECRET_ARN=${DB_SECRET_ARN},DB_PORT=3306}" \
+            --environment "Variables={DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DATABASE_SECRET_ARN=${DB_SECRET_ARN},DB_PORT=3306,ALLOW_SCHEMA_REBUILD=${ALLOW_REBUILD}}" \
             --region "${AWS_REGION}" >/dev/null
 
           aws lambda wait function-active-v2 \
@@ -687,6 +755,94 @@ jobs:
             exit 1
           fi
           echo "RDS schema initialization completed successfully."
+
+      # ==========================================
+      # STEP 13C: Scheduled job safety - the slot materialiser must be safe to run twice
+      # ==========================================
+      - name: Run slot materialiser twice (idempotency check)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FN="${PROJECT_NAME}-${ENVIRONMENT_NAME}-slot-materialiser"
+          for run in 1 2; do
+            aws lambda invoke --function-name "${FN}" --payload '{}' --cli-binary-format raw-in-base64-out \
+              --cli-read-timeout 330 "${RUNNER_TEMP}/mat-${run}.json" --region "${AWS_REGION}" > "${RUNNER_TEMP}/mat-meta-${run}.json"
+            if grep -q FunctionError "${RUNNER_TEMP}/mat-meta-${run}.json"; then
+              echo "::error::Materialiser run ${run} failed"; cat "${RUNNER_TEMP}/mat-${run}.json"; exit 1
+            fi
+            echo "Run ${run}: $(cat "${RUNNER_TEMP}/mat-${run}.json")"
+          done
+          python - <<'PY'
+          import json, os
+          second = json.load(open(os.environ["RUNNER_TEMP"] + "/mat-2.json"))
+          assert second["errors"] == 0 and second["inserted"] == 0, f"second run created slots: {second}"
+          print("Materialiser is idempotent: the second run inserted 0 slots.")
+          PY
+
+      # ==========================================
+      # STEP 13D: End-to-end smoke test of the deployed API
+      # ==========================================
+      - name: Smoke test the deployed API
+        shell: bash
+        run: |
+          set -euo pipefail
+          export API_BASE_URL="$(aws cloudformation describe-stacks \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-api" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
+          # If the optional doctor registration code exists, the test needs it too.
+          export DOCTOR_REGISTRATION_CODE="$(aws ssm get-parameter --with-decryption \
+            --name "/${PROJECT_NAME}/${ENVIRONMENT_NAME}/auth/doctor-registration-code" \
+            --query Parameter.Value --output text --region "${AWS_REGION}" 2>/dev/null || true)"
+          python scripts/smoke_test.py
+
+      # ==========================================
+      # STEP 13E: Web application (Flask on one disposable EC2 instance)
+      # ==========================================
+      - name: Package and upload the web application
+        shell: bash
+        run: |
+          set -euo pipefail
+          WEB_DIR="${RUNNER_TEMP}/web-package"
+          rm -rf "${WEB_DIR}" && mkdir -p "${WEB_DIR}"
+          cp -r web "${WEB_DIR}/web"
+          cp web/requirements.txt "${WEB_DIR}/requirements.txt"
+          printf 'from web.app import create_app\napp = create_app()\n' > "${WEB_DIR}/app.py"
+          find "${WEB_DIR}" -name '__pycache__' -type d -prune -exec rm -rf {} +
+          ( cd "${WEB_DIR}" && zip -qr "${RUNNER_TEMP}/medislot-web.zip" . )
+          WEB_KEY="web/${ENVIRONMENT_NAME}/${GITHUB_SHA}/medislot-web.zip"
+          aws s3 cp "${RUNNER_TEMP}/medislot-web.zip" "s3://${LAMBDA_ARTIFACTS_BUCKET}/${WEB_KEY}" --region "${AWS_REGION}"
+          echo "WEB_PACKAGE_KEY=${WEB_KEY}" >> "${GITHUB_ENV}"
+
+      - name: Deploy Web Stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          NET="${PROJECT_NAME}-${ENVIRONMENT_NAME}-network"
+          net_output() {
+            aws cloudformation describe-stacks --stack-name "${NET}" \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" --output text --region "${AWS_REGION}"
+          }
+          API_ENDPOINT="$(aws cloudformation describe-stacks \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-api" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/web.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              "ProjectName=${PROJECT_NAME}" \
+              "EnvironmentName=${ENVIRONMENT_NAME}" \
+              "VpcId=$(net_output VpcId)" \
+              "PublicSubnetId=$(net_output PublicSubnet1Id)" \
+              "ArtifactsBucketName=${LAMBDA_ARTIFACTS_BUCKET}" \
+              "WebPackageKey=${WEB_PACKAGE_KEY}" \
+              "ApiBaseUrl=${API_ENDPOINT}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
+          WEB_URL="$(aws cloudformation describe-stacks --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web" \
+            --query "Stacks[0].Outputs[?OutputKey=='WebUrl'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
+          echo "WEB_URL=${WEB_URL}" >> "${GITHUB_ENV}"
+          echo "Web application: ${WEB_URL} (allow about two minutes for the instance to boot)"
 
       # ==========================================
       # STEP 14: Display API endpoint
@@ -732,7 +888,7 @@ jobs:
           echo "Environment: ${ENVIRONMENT_NAME}"
           echo "Region: ${AWS_REGION}"
 
-          for stack in network data dynamodb auth api scheduler web; do
+          for stack in network data dynamodb storage auth doctor api web; do
             stack_name="${PROJECT_NAME}-${ENVIRONMENT_NAME}-${stack}"
 
             echo ""

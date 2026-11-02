@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: MediSlot authentication state and Milestone 3 materialised slot tables
+Description: MediSlot Milestone 2 authentication state tables
 
 Parameters:
   EnvironmentName:
@@ -13,14 +13,28 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      TableName: !Sub '${EnvironmentName}-medislot-refresh-tokens-m3'
+      TableName: !Sub '${EnvironmentName}-medislot-refresh-tokens'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: token_hash
           AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
       KeySchema:
         - AttributeName: token_hash
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: user_id-index
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+            - AttributeName: token_hash
+              KeyType: RANGE
+          Projection:
+            ProjectionType: KEYS_ONLY
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
       SSESpecification:
         SSEEnabled: true
       PointInTimeRecoverySpecification:
@@ -31,13 +45,15 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      TableName: !Sub '${EnvironmentName}-medislot-token-activelist-m3'
+      TableName: !Sub '${EnvironmentName}-medislot-token-activelist-v2'
       BillingMode: PAY_PER_REQUEST
+      # One item per user: user_id is the partition key. A new login or
+      # refresh replaces the previous jti for that user.
       AttributeDefinitions:
-        - AttributeName: jti
+        - AttributeName: user_id
           AttributeType: S
       KeySchema:
-        - AttributeName: jti
+        - AttributeName: user_id
           KeyType: HASH
       TimeToLiveSpecification:
         AttributeName: ttl
@@ -46,7 +62,6 @@ Resources:
         SSEEnabled: true
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
-
 
 Outputs:
   RefreshTokenTableName:
@@ -69,4 +84,3 @@ Outputs:
     Value: !GetAtt TokenActiveListTable.Arn
     Export:
       Name: !Sub '${EnvironmentName}-MediSlot-TokenActiveListTableArn'
-

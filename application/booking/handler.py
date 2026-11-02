@@ -1,12 +1,6 @@
 
 import uuid
-import os
-import time
-from datetime import datetime, timezone
-
-import boto3
-from boto3.dynamodb.conditions import Attr
-from botocore.exceptions import ClientError
+from datetime import datetime
 
 from application.common.http import (
     response,
@@ -87,56 +81,10 @@ def lambda_handler(event, context):
             ),
         })
 
-    # Idempotency records remain in the ERD-defined DynamoDB table.
-    idempotency_table_name = os.environ.get("IDEMPOTENCY_TABLE_NAME")
-    if not idempotency_table_name:
-        return response(500, {"error": "SERVER_CONFIGURATION_ERROR"})
-
-    idempotency_table = boto3.resource("dynamodb").Table(idempotency_table_name)
-    idempotency_reserved = False
-    try:
-        idempotency_table.put_item(
-            Item={
-                "idempotency_key": str(body["idempotency_key"]),
-                "action": "BOOK_APPOINTMENT",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "expires_at": int(time.time()) + 3600,
-                "status": "PROCESSING",
-            },
-            ConditionExpression=Attr("idempotency_key").not_exists(),
-        )
-        idempotency_reserved = True
-    except ClientError as error:
-        if error.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-            previous = idempotency_table.get_item(
-                Key={"idempotency_key": str(body["idempotency_key"])}
-            ).get("Item")
-            if previous and previous.get("appointment_id"):
-                return response(200, {
-                    "message": "Idempotent booking result",
-                    "appointment_id": int(previous["appointment_id"]),
-                    "status": previous.get("status", "PENDING"),
-                })
-            return response(409, {"error": "IDEMPOTENT_REQUEST_IN_PROGRESS"})
-        raise
-
-    def release_idempotency_reservation():
-        """Release a PROCESSING key when no appointment was committed."""
-        if idempotency_reserved:
-            try:
-                idempotency_table.delete_item(
-                    Key={"idempotency_key": str(body["idempotency_key"])},
-                    ConditionExpression=Attr("status").eq("PROCESSING"),
-                )
-            except Exception:
-                print("Could not release the idempotency reservation; inspect CloudWatch logs.")
-
     # Connect to the RDS database.
-    connection = None
-    database_committed = False
+    connection = get_connection()
 
     try:
-        connection = get_connection()
         with connection.cursor() as cursor:
 
             # Find the patient profile associated with the logged-in user.
@@ -152,123 +100,109 @@ def lambda_handler(event, context):
             patient = cursor.fetchone()
 
             if not patient:
-                connection.rollback()
-                release_idempotency_reservation()
                 return response(
                     403,
                     {"error": "PATIENT_PROFILE_REQUIRED"},
                 )
 
-            # Idempotency is checked/reserved in DynamoDB above; it is not an
-            # appointments column in the approved relational ERD.
-
-            # Validate the shared consultation type against the doctor's active pattern.
+            # Check whether this booking request was already processed.
             cursor.execute(
                 """
-                SELECT d.is_active AS doctor_active
-                FROM doctors d
-                JOIN availability_patterns ap
-                    ON ap.doctor_id = d.doctor_id
-                WHERE d.doctor_id = %s
-                  AND ap.consultation_type_id = %s
-                  AND ap.is_active = TRUE
-                LIMIT 1
+                SELECT appointment_id, status
+                FROM appointments
+                WHERE idempotency_key = %s
                 """,
-                (int(body["doctor_id"]), int(body["consultation_type_id"])),
+                (str(body["idempotency_key"]),),
+            )
+
+            previous_booking = cursor.fetchone()
+
+            if previous_booking:
+                connection.rollback()
+
+                return response(200, {
+                    "message": "Idempotent booking result",
+                    "appointment": previous_booking,
+                })
+
+            # Validate the consultation type and its associated doctor.
+            cursor.execute(
+                """
+                SELECT
+                    ct.doctor_id,
+                    ct.duration_minutes,
+                    ct.capacity,
+                    ct.is_active,
+                    d.is_active AS doctor_active
+                FROM consultation_types ct
+                JOIN doctors d
+                    ON d.doctor_id = ct.doctor_id
+                WHERE ct.consultation_type_id = %s
+                """,
+                (str(body["consultation_type_id"]),),
             )
 
             consultation = cursor.fetchone()
 
-            if not consultation or not consultation["doctor_active"]:
-                connection.rollback()
-                return response(400, {"error": "INVALID_CONSULTATION_TYPE"})
-
-            # Reserve slot capacity in RDS. FOR UPDATE serializes concurrent
-            # bookings for this slot and prevents overbooking.
-            cursor.execute(
-                """
-                SELECT slot_id, doctor_id, consultation_type_id, capacity,
-                       booked_count, status
-                FROM materialised_slots
-                WHERE slot_id = %s
-                FOR UPDATE
-                """,
-                (str(body["slot_id"]),),
-            )
-            slot = cursor.fetchone()
-
-            if not slot:
-                connection.rollback()
-                return response(404, {"error": "SLOT_NOT_FOUND"})
-
             if (
-                int(slot["doctor_id"]) != int(body["doctor_id"])
-                or int(slot["consultation_type_id"]) != int(body["consultation_type_id"])
+                not consultation
+                or not consultation["is_active"]
+                or not consultation["doctor_active"]
+                or str(consultation["doctor_id"]) != str(body["doctor_id"])
             ):
                 connection.rollback()
-                return response(400, {"error": "SLOT_DETAILS_MISMATCH"})
 
-            if slot["status"] == "UNAVAILABLE" or int(slot["booked_count"]) >= int(slot["capacity"]):
-                connection.rollback()
-                return response(409, {"error": "SLOT_FULL_OR_UNAVAILABLE"})
+                return response(
+                    400,
+                    {"error": "INVALID_CONSULTATION_TYPE"},
+                )
 
-            cursor.execute(
-                """
-                UPDATE materialised_slots
-                SET booked_count = booked_count + 1
-                WHERE slot_id = %s AND booked_count < capacity
-                  AND status <> 'UNAVAILABLE'
-                """,
-                (str(body["slot_id"]),),
-            )
-            if cursor.rowcount != 1:
-                connection.rollback()
-                return response(409, {"error": "SLOT_CAPACITY_EXHAUSTED"})
+            # IMPORTANT:
+            # Slot capacity must be reserved through a DynamoDB
+            # conditional write before inserting the appointment.
+            # This reservation has not yet been connected in this code.
 
-            cursor.execute(
-                """UPDATE materialised_slots
-                   SET status = CASE WHEN booked_count >= capacity THEN 'FULL' ELSE 'AVAILABLE' END
-                   WHERE slot_id = %s""",
-                (str(body["slot_id"]),),
-            )
+            appointment_id = str(uuid.uuid4())
 
-            # Insert the appointment using the BIGINT AUTO_INCREMENT key
-            # and columns defined by application/database/schema.sql.
+            # Insert the appointment into RDS with PENDING status.
             cursor.execute(
                 """
                 INSERT INTO appointments (
+                    appointment_id,
                     patient_id,
                     doctor_id,
                     consultation_type_id,
                     slot_id,
+                    starts_at_utc,
+                    ends_at_utc,
+                    timezone_name,
                     status,
-                    notes
+                    idempotency_key
                 )
-                VALUES (%s, %s, %s, %s, 'PENDING', %s)
+                VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, 'PENDING', %s
+                )
                 """,
                 (
+                    appointment_id,
                     patient["patient_id"],
-                    int(body["doctor_id"]),
-                    int(body["consultation_type_id"]),
+                    str(body["doctor_id"]),
+                    str(body["consultation_type_id"]),
                     str(body["slot_id"]),
-                    body.get("notes"),
+                    start_time.astimezone(
+                        __import__("datetime").timezone.utc
+                    ).replace(tzinfo=None),
+                    end_time.astimezone(
+                        __import__("datetime").timezone.utc
+                    ).replace(tzinfo=None),
+                    str(body["timezone_name"]),
+                    str(body["idempotency_key"]),
                 ),
             )
-            appointment_id = int(cursor.lastrowid)
 
         # Save the appointment in the database.
         connection.commit()
-        database_committed = True
-
-        idempotency_table.update_item(
-            Key={"idempotency_key": str(body["idempotency_key"])},
-            UpdateExpression="SET appointment_id = :appointment_id, #status = :status",
-            ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={
-                ":appointment_id": appointment_id,
-                ":status": "PENDING",
-            },
-        )
 
         return response(201, {
             "appointment_id": appointment_id,
@@ -279,10 +213,7 @@ def lambda_handler(event, context):
         })
 
     except Exception:
-        if connection:
-            connection.rollback()
-        if not database_committed:
-            release_idempotency_reservation()
+        connection.rollback()
 
         print("Booking failed; inspect CloudWatch logs.")
 
@@ -293,5 +224,4 @@ def lambda_handler(event, context):
 
     finally:
         # Always close the database connection.
-        if connection:
-            connection.close()
+        connection.close()

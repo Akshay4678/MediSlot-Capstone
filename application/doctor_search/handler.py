@@ -29,6 +29,7 @@ def lambda_handler(event, context):
     conditions = [
         "d.is_active=TRUE",
         "h.is_active=TRUE",
+        "s.is_active=TRUE",
         "u.is_active=TRUE",
     ]
 
@@ -37,16 +38,16 @@ def lambda_handler(event, context):
     if search:
         conditions.append(
             "(d.first_name LIKE %s OR d.last_name LIKE %s "
-            "OR h.hospital_name LIKE %s)"
+            "OR d.display_name LIKE %s OR h.name LIKE %s)"
         )
-        values.extend([f"%{search}%"] * 3)
+        values.extend([f"%{search}%"] * 4)
 
     if city:
         conditions.append("h.city LIKE %s")
         values.append(f"%{city}%")
 
     if specialisation:
-        conditions.append("s.specialisation_name LIKE %s")
+        conditions.append("s.name LIKE %s")
         values.append(f"%{specialisation}%")
 
     # Prepare the doctor search query
@@ -56,13 +57,16 @@ def lambda_handler(event, context):
             d.doctor_id,
             d.first_name,
             d.last_name,
+            d.display_name,
             d.qualifications,
-            d.experience_years,
+            d.years_experience,
+            d.bio,
+            d.consultation_fee,
             h.hospital_id,
-            h.hospital_name,
+            h.name AS hospital_name,
             h.city,
             s.specialisation_id,
-            s.specialisation_name AS specialisation
+            s.name AS specialisation
         FROM doctors d
         JOIN hospitals h
             ON h.hospital_id = d.hospital_id

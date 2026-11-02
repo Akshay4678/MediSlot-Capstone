@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Availability - MediSlot{% endblock %}
+{% block content %}
+<h1>Weekly availability</h1>
+<p class="muted">Times are in your home timezone (<strong>{{ timezone }}</strong>). Slots are created for the next 30 days and follow these hours all year, including across daylight-saving changes.</p>
+<div class="card">
+  {% if not types %}<p class="muted">Add a <a href="{{ url_for('doctor.types') }}">consultation type</a> first.</p>{% endif %}
+  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="row_count" value="{{ rows|length }}">
+    <table>
+      <tr><th>Day</th><th>Consultation type</th><th>From</th><th>To</th><th>Seats</th><th>Remove</th></tr>
+      {% for r in rows %}{% set i = loop.index0 %}
+      <tr>
+        <td><input type="hidden" name="p{{ i }}_id" value="{{ r.availability_id or '' }}">
+          <select name="p{{ i }}_day"><option value=""></option>{% for n, name in days %}<option value="{{ n }}" {{ 'selected' if r.day_of_week|string == n|string }}>{{ name }}</option>{% endfor %}</select></td>
+        <td><select name="p{{ i }}_type"><option value=""></option>{% for t in types %}<option value="{{ t.consultation_type_id }}" {{ 'selected' if r.consultation_type_id == t.consultation_type_id }}>{{ t.type_name }}</option>{% endfor %}</select></td>
+        <td><input name="p{{ i }}_start" type="time" value="{{ r.start_time }}"></td>
+        <td><input name="p{{ i }}_end" type="time" value="{{ r.end_time }}"></td>
+        <td><input name="p{{ i }}_capacity" type="number" min="1" max="10" value="{{ r.capacity }}" style="max-width:80px"></td>
+        <td>{% if r.availability_id %}<input type="checkbox" name="p{{ i }}_remove" style="width:auto">{% endif %}</td>
+      </tr>{% endfor %}
+    </table>
+    <p class="muted small">Seats above 1 are only allowed for Health Camp Sessions (2 to 10). Leave unused rows empty.</p>
+    <p><button type="submit">Save availability</button></p>
+  </form>
+</div>
+{% endblock %}

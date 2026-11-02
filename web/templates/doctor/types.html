@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Consultation types - MediSlot{% endblock %}
+{% block content %}
+<h1>Consultation types</h1>
+<div class="card">
+  <table>
+    <tr><th>Type</th><th>Duration</th><th>Fee</th><th></th></tr>
+    {% for t in items %}
+    <tr>
+      <td>{{ t.type_name }}</td><td>{{ t.duration_minutes }} min</td>
+      <td><form class="actions" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="update"><input type="hidden" name="id" value="{{ t.consultation_type_id }}">
+        <input name="fee" type="number" step="0.01" min="0" value="{{ '%.2f'|format(t.fee) }}" style="max-width:130px"><button class="secondary" type="submit">Update fee</button></form></td>
+      <td><form method="post" onsubmit="return confirm('Delete this consultation type?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="{{ t.consultation_type_id }}"><button class="danger" type="submit">Delete</button></form></td>
+    </tr>
+    {% else %}<tr><td colspan="4" class="muted">You have not added any consultation types yet.</td></tr>{% endfor %}
+  </table>
+</div>
+<div class="card">
+  <h2>Add a consultation type</h2>
+  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="create">
+    <div class="row"><div><label for="type_name">Type</label><select id="type_name" name="type_name" required>
+      {% for a in allowed_types %}<option value="{{ a.type_name }}">{{ a.type_name }} ({{ a.duration_minutes }} min)</option>{% endfor %}</select></div>
+    <div><label for="fee">Fee</label><input id="fee" name="fee" type="number" step="0.01" min="0" required></div></div>
+    <p><button type="submit">Add</button></p>
+  </form>
+</div>
+{% endblock %}

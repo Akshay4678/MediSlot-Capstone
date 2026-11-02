@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Welcome to MediSlot</h1>
+<p class="muted">Doctor appointment booking and management.</p>
+<div class="hero">
+  <div class="card"><h2>I am a doctor</h2><p class="muted">Manage your profile, availability and schedule.</p>
+    <a class="btn" href="{{ url_for('doctor.login') }}">Login as Doctor</a></div>
+  <div class="card"><h2>I am a patient</h2><p class="muted">Find doctors and manage your appointments.</p>
+    <a class="btn" href="{{ url_for('patient.login') }}">Login as Patient</a></div>
+</div>
+{% endblock %}

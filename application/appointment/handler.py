@@ -34,7 +34,7 @@ def lambda_handler(event, context):
                         JOIN patients p ON p.patient_id = a.patient_id
                         WHERE p.user_id = %s
                           AND (%s IS NULL OR a.appointment_id = %s)
-                        ORDER BY a.created_at DESC
+                        ORDER BY a.starts_at_utc DESC
                         LIMIT 200
                         """,
                         (
@@ -52,7 +52,7 @@ def lambda_handler(event, context):
                         JOIN doctors d ON d.doctor_id = a.doctor_id
                         WHERE d.user_id = %s
                           AND (%s IS NULL OR a.appointment_id = %s)
-                        ORDER BY a.created_at DESC
+                        ORDER BY a.starts_at_utc DESC
                         LIMIT 200
                         """,
                         (
@@ -78,7 +78,7 @@ def lambda_handler(event, context):
                             """
                             SELECT *
                             FROM appointments
-                            ORDER BY created_at DESC
+                            ORDER BY starts_at_utc DESC
                             LIMIT 200
                             """
                         )
@@ -163,65 +163,50 @@ def lambda_handler(event, context):
                 if identity["role"] not in ("patient", "admin"):
                     return response(403, {"error": "FORBIDDEN"})
 
-                # Lock the appointment and its RDS slot so cancellation and
-                # capacity release happen atomically in the same transaction.
                 if identity["role"] == "patient":
                     cur.execute(
-                        """SELECT a.slot_id FROM appointments a
-                           JOIN patients p ON p.patient_id = a.patient_id
-                           WHERE a.appointment_id = %s AND p.user_id = %s
-                             AND a.status IN ('PENDING', 'CONFIRMED')
-                           FOR UPDATE""",
-                        (appointment_id, identity["user_id"]),
-                    )
-                else:
-                    cur.execute(
-                        """SELECT slot_id FROM appointments
-                           WHERE appointment_id = %s
-                             AND status IN ('PENDING', 'CONFIRMED')
-                           FOR UPDATE""",
-                        (appointment_id,),
+                        """
+                        UPDATE appointments a
+                        JOIN patients p ON p.patient_id = a.patient_id
+                        SET a.status = 'CANCELLED',
+                            a.cancellation_reason = %s
+                        WHERE a.appointment_id = %s
+                          AND p.user_id = %s
+                          AND a.status IN ('PENDING', 'CONFIRMED')
+                        """,
+                        (
+                            str(
+                                body.get(
+                                    "reason",
+                                    "Patient cancellation",
+                                )
+                            )[:500],
+                            appointment_id,
+                            identity["user_id"],
+                        ),
                     )
 
-                cancellable = cur.fetchone()
-                if not cancellable:
-                    conn.rollback()
-                    return response(409, {"error": "NOT_CANCELLABLE_OR_NOT_FOUND"})
-
-                if identity["role"] == "patient":
-                    cur.execute(
-                        """UPDATE appointments a
-                           JOIN patients p ON p.patient_id = a.patient_id
-                           SET a.status = 'CANCELLED'
-                           WHERE a.appointment_id = %s AND p.user_id = %s
-                             AND a.status IN ('PENDING', 'CONFIRMED')""",
-                        (appointment_id, identity["user_id"]),
-                    )
                 else:
                     cur.execute(
-                        """UPDATE appointments SET status = 'CANCELLED'
-                           WHERE appointment_id = %s
-                             AND status IN ('PENDING', 'CONFIRMED')""",
-                        (appointment_id,),
+                        """
+                        UPDATE appointments
+                        SET status = 'CANCELLED',
+                            cancellation_reason = %s
+                        WHERE appointment_id = %s
+                          AND status IN ('PENDING', 'CONFIRMED')
+                        """,
+                        (
+                            str(
+                                body.get(
+                                    "reason",
+                                    "Admin cancellation",
+                                )
+                            )[:500],
+                            appointment_id,
+                        ),
                     )
 
                 changed = cur.rowcount
-                if changed:
-                    cur.execute(
-                        """UPDATE materialised_slots
-                           SET booked_count = GREATEST(booked_count - 1, 0)
-                           WHERE slot_id = %s""",
-                        (cancellable["slot_id"],),
-                    )
-                    cur.execute(
-                        """UPDATE materialised_slots
-                           SET status = CASE
-                               WHEN booked_count < capacity THEN 'AVAILABLE'
-                               ELSE 'FULL'
-                           END
-                           WHERE slot_id = %s""",
-                        (cancellable["slot_id"],),
-                    )
                 conn.commit()
 
                 if changed:

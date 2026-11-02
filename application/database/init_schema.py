@@ -9,7 +9,7 @@ Required:
 """
 
 import logging
-import re
+import os
 from pathlib import Path
 
 from application.database.connection import get_connection
@@ -144,247 +144,94 @@ def split_sql_statements(sql_text):
     return statements
 
 
+SCHEMA_VERSION = 3
 
-def migrate_availability_pattern_identifier(cursor):
-    """
-    Align an existing availability_patterns table with the approved schema.
+# Dependency order does not matter for DROP because foreign key checks are disabled,
+# but the list must name every application table.
+APP_TABLES = (
+    "refund_ledger", "appointments", "materialised_slots", "blackout_dates",
+    "availability_patterns", "consultation_types", "doctors", "patients",
+    "specialisations", "hospitals", "users",
+)
 
-    Older development databases may have used a different numeric primary-key
-    name (for example, id or availability_pattern_id). CREATE TABLE IF NOT
-    EXISTS does not alter an existing table, so rename that existing identifier
-    to availability_id before materialised_slots adds its foreign key.
 
-    Existing row identifiers are preserved. If the table has no suitable
-    numeric identifier, a new AUTO_INCREMENT identifier is added.
-    """
-
+def _table_exists(cursor, name):
     cursor.execute(
-        """
-        SELECT COUNT(*) AS table_count
-        FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = 'availability_patterns'
-        """
+        "SELECT COUNT(*) AS n FROM information_schema.tables "
+        "WHERE table_schema = DATABASE() AND table_name = %s",
+        (name,),
     )
-    table_row = cursor.fetchone()
-    if not table_row or int(table_row["table_count"]) == 0:
-        # A fresh database will create the table from schema.sql.
-        return
+    row = cursor.fetchone()
+    return (row["n"] if isinstance(row, dict) else row[0]) > 0
 
+
+def _current_version(cursor):
     cursor.execute(
-        """
-        SELECT COLUMN_NAME, COLUMN_TYPE, EXTRA, COLUMN_KEY, ORDINAL_POSITION
-        FROM information_schema.COLUMNS
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = 'availability_patterns'
-        ORDER BY ORDINAL_POSITION
-        """
+        "CREATE TABLE IF NOT EXISTS schema_meta ("
+        " id TINYINT NOT NULL PRIMARY KEY,"
+        " version INT NOT NULL,"
+        " applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        ") ENGINE=InnoDB"
     )
-    rows = cursor.fetchall()
-    columns = {row["COLUMN_NAME"]: row for row in rows}
-
-    def ensure_unique_identifier(column_name, column_row):
-        if column_row["COLUMN_KEY"] not in ("PRI", "UNI"):
-            cursor.execute(
-                f"ALTER TABLE availability_patterns "
-                f"ADD UNIQUE KEY uq_availability_patterns_{column_name} "
-                f"(`{column_name}`)"
-            )
-
-    if "availability_id" in columns:
-        identifier = columns["availability_id"]
-        ensure_unique_identifier("availability_id", identifier)
-
-        if "auto_increment" not in (identifier.get("EXTRA") or "").lower():
-            other_auto_increment = [
-                row["COLUMN_NAME"]
-                for row in rows
-                if row["COLUMN_NAME"] != "availability_id"
-                and "auto_increment" in (row.get("EXTRA") or "").lower()
-            ]
-            if other_auto_increment:
-                raise RuntimeError(
-                    "availability_patterns.availability_id is not AUTO_INCREMENT "
-                    "and another AUTO_INCREMENT column already exists "
-                    f"({other_auto_increment[0]}). Please inspect this legacy table "
-                    "before deploying; no columns were removed."
-                )
-            cursor.execute(
-                "ALTER TABLE availability_patterns "
-                "MODIFY COLUMN availability_id BIGINT NOT NULL AUTO_INCREMENT"
-            )
-        return
-
-    # Prefer the existing AUTO_INCREMENT identifier, then a single-column
-    # numeric primary key. This preserves the IDs already referenced by rows.
-    auto_increment_columns = [
-        row for row in rows
-        if "auto_increment" in (row.get("EXTRA") or "").lower()
-        and re.fullmatch(r"(tinyint|smallint|mediumint|int|integer|bigint)( unsigned)?", row["COLUMN_TYPE"].lower())
-    ]
-    primary_columns = [row for row in rows if row["COLUMN_KEY"] == "PRI"]
-    numeric_primary_columns = [
-        row for row in primary_columns
-        if re.fullmatch(r"(tinyint|smallint|mediumint|int|integer|bigint)( unsigned)?", row["COLUMN_TYPE"].lower())
-    ]
-
-    candidate = None
-    if auto_increment_columns:
-        candidate = auto_increment_columns[0]
-    elif len(primary_columns) == 1 and numeric_primary_columns:
-        candidate = numeric_primary_columns[0]
-
-    if candidate:
-        old_name = candidate["COLUMN_NAME"]
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", old_name):
-            raise RuntimeError(
-                "Unsupported legacy identifier name in availability_patterns."
-            )
-
-        other_auto_increment = [
-            row["COLUMN_NAME"]
-            for row in rows
-            if row["COLUMN_NAME"] != old_name
-            and "auto_increment" in (row.get("EXTRA") or "").lower()
-        ]
-        if other_auto_increment:
-            raise RuntimeError(
-                "Cannot safely migrate availability_patterns: more than one "
-                "candidate identifier exists. Please inspect the table before "
-                "deploying; no columns were removed."
-            )
-
-        cursor.execute(
-            f"ALTER TABLE availability_patterns "
-            f"CHANGE COLUMN `{old_name}` availability_id "
-            f"BIGINT NOT NULL AUTO_INCREMENT"
-        )
-        cursor.execute(
-            "SELECT COLUMN_KEY FROM information_schema.COLUMNS "
-            "WHERE TABLE_SCHEMA = DATABASE() "
-            "AND TABLE_NAME = 'availability_patterns' "
-            "AND COLUMN_NAME = 'availability_id'"
-        )
-        migrated = cursor.fetchone()
-        if not migrated or migrated["COLUMN_KEY"] not in ("PRI", "UNI"):
-            ensure_unique_identifier("availability_id", {"COLUMN_KEY": None})
-        logger.info(
-            "Migrated availability_patterns.%s to availability_id; existing IDs preserved.",
-            old_name,
-        )
-        return
-
-    if auto_increment_columns:
-        # Defensive branch; normally handled by candidate selection above.
-        raise RuntimeError(
-            "Could not identify a safe availability_patterns identifier."
-        )
-
-    # No numeric identifier exists. Add a new generated key without deleting
-    # or rewriting any existing business columns.
-    cursor.execute(
-        """
-        ALTER TABLE availability_patterns
-        ADD COLUMN availability_id BIGINT NOT NULL AUTO_INCREMENT UNIQUE FIRST
-        """
-    )
-    logger.info(
-        "Added availability_patterns.availability_id to the existing legacy table."
-    )
+    cursor.execute("SELECT version FROM schema_meta WHERE id = 1")
+    row = cursor.fetchone()
+    if not row:
+        return None
+    return row["version"] if isinstance(row, dict) else row[0]
 
 
 def initialize_database():
-    """Execute the SQL statements from schema.sql."""
+    """Create or upgrade the schema.
 
-    sql_text = load_schema()
-    statements = split_sql_statements(sql_text)
-
+    * Fresh database                      -> create everything.
+    * Same SCHEMA_VERSION                 -> idempotent no-op (CREATE IF NOT EXISTS, seed upserts).
+    * Older / unversioned database (the pre-ER layout used by Milestone 2) is REBUILT:
+      all application tables are dropped and re-created from schema.sql. This is a
+      development-only convenience and is allowed only when ALLOW_SCHEMA_REBUILD=true,
+      because it deletes data.
+    """
+    statements = split_sql_statements(load_schema())
     if not statements:
-        raise RuntimeError(
-            "No SQL statements were found in schema.sql."
-        )
+        raise RuntimeError("No SQL statements were found in schema.sql.")
 
     connection = get_connection()
-
     try:
         with connection.cursor() as cursor:
-            # Migrate the known legacy development schema before running the
-            # current ERD-aligned CREATE TABLE and seed statements.
-            cursor.execute(
-                """SELECT COLUMN_NAME FROM information_schema.COLUMNS
-                   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'hospitals'"""
-            )
-            hospital_columns = {row["COLUMN_NAME"] for row in cursor.fetchall()}
-            if hospital_columns:
-                if "hospital_name" not in hospital_columns:
-                    if "name" in hospital_columns:
-                        cursor.execute(
-                            "ALTER TABLE hospitals CHANGE COLUMN name "
-                            "hospital_name VARCHAR(180) NOT NULL"
-                        )
-                        logger.info("Migrated hospitals.name to hospitals.hospital_name")
-                    else:
-                        raise RuntimeError(
-                            "Existing hospitals table does not match the approved schema: "
-                            "expected hospital_name or legacy name. Recreate the development "
-                            "database before initializing schema.sql."
-                        )
-
-                # CREATE TABLE IF NOT EXISTS does not add columns to an existing
-                # table. Older MediSlot databases have a hospitals table without
-                # the address field required by the current schema seed INSERTs.
-                # Add the missing field and backfill existing rows without
-                # deleting or rebuilding hospital records.
-                if "address" not in hospital_columns:
-                    cursor.execute(
-                        "ALTER TABLE hospitals ADD COLUMN address VARCHAR(500) NULL"
+            version = _current_version(cursor)
+            legacy = version is None and _table_exists(cursor, "users")
+            outdated = version is not None and version < SCHEMA_VERSION
+            if legacy or outdated:
+                if os.environ.get("ALLOW_SCHEMA_REBUILD", "").lower() != "true":
+                    raise RuntimeError(
+                        "The database uses an older schema layout. Set ALLOW_SCHEMA_REBUILD=true "
+                        "(development only) to drop and rebuild all application tables."
                     )
-                    cursor.execute(
-                        "UPDATE hospitals SET address = '' WHERE address IS NULL"
-                    )
-                    cursor.execute(
-                        "ALTER TABLE hospitals MODIFY COLUMN address VARCHAR(500) NOT NULL"
-                    )
-                    logger.info(
-                        "Migrated hospitals.address; existing rows were preserved."
-                    )
-
-            # Migrate the legacy availability identifier before the schema
-            # creates materialised_slots and its availability foreign key.
-            migrate_availability_pattern_identifier(cursor)
+                logger.warning("Rebuilding schema: version %s -> %s (data is dropped)", version, SCHEMA_VERSION)
+                cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+                for table in APP_TABLES:
+                    cursor.execute(f"DROP TABLE IF EXISTS `{table}`")
+                cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
 
             for number, statement in enumerate(statements, start=1):
-                logger.info(
-                    "Executing database schema statement %s of %s",
-                    number,
-                    len(statements),
-                )
-
+                logger.info("Executing database schema statement %s of %s", number, len(statements))
                 cursor.execute(statement)
 
+            cursor.execute(
+                "INSERT INTO schema_meta (id, version) VALUES (1, %s) "
+                "ON DUPLICATE KEY UPDATE version = VALUES(version), applied_at = CURRENT_TIMESTAMP",
+                (SCHEMA_VERSION,),
+            )
         connection.commit()
-
-        logger.info(
-            "Database schema initialization completed successfully."
-        )
-
+        logger.info("Database schema is at version %s.", SCHEMA_VERSION)
     except Exception:
         connection.rollback()
-        logger.exception(
-            "Database schema initialization failed."
-        )
+        logger.exception("Database schema initialization failed.")
         raise
-
     finally:
         connection.close()
 
 
 def lambda_handler(event, context):
     """AWS Lambda entry point for schema initialization."""
-
     initialize_database()
-
-    return {
-        "statusCode": 200,
-        "body": "MediSlot database schema initialized successfully.",
-    }
+    return {"statusCode": 200, "body": "MediSlot database schema is up to date."}

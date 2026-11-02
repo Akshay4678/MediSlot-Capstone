@@ -183,6 +183,17 @@ class FakeConn:
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
+    # Isolate environment variables from other test modules.
+    monkeypatch.setenv(
+        "REFRESH_TOKEN_TABLE",
+        "dev-medislot-refresh-tokens"
+    )
+    monkeypatch.setenv(
+        "TOKEN_ACTIVELIST_TABLE",
+        "dev-medislot-token-activelist-v2"
+    )
+    monkeypatch.setenv("JWT_ISSUER", "medislot")
+
     fake = FakeDDB()
 
     users = {
@@ -214,6 +225,42 @@ def env(monkeypatch):
     FakeBcrypt.rounds_seen.clear()
 
     return fake
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def call(path, body=None, headers=None, method="POST", context=None):

@@ -691,34 +691,8 @@ jobs:
           set -euo pipefail
 
           STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth"
-          AUTH_DDB_STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-dynamodb"
-
-          # Read the physical table names directly from the successfully deployed
-          # DynamoDB stack. Do not depend on values carried from an earlier step.
-          get_stack_output() {
-            aws cloudformation describe-stacks \
-              --stack-name "${AUTH_DDB_STACK}" \
-              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" \
-              --output text \
-              --region "${AWS_REGION}"
-          }
-
-          REFRESH_TOKEN_TABLE_NAME="$(get_stack_output RefreshTokenTableName)"
-          TOKEN_ACTIVELIST_TABLE_NAME="$(get_stack_output TokenActiveListTableName)"
-
-          if [[ -z "${REFRESH_TOKEN_TABLE_NAME}" || "${REFRESH_TOKEN_TABLE_NAME}" == "None" ]]; then
-            echo "::error::DynamoDB stack ${AUTH_DDB_STACK} has no RefreshTokenTableName output."
-            exit 1
-          fi
-
-          if [[ -z "${TOKEN_ACTIVELIST_TABLE_NAME}" || "${TOKEN_ACTIVELIST_TABLE_NAME}" == "None" ]]; then
-            echo "::error::DynamoDB stack ${AUTH_DDB_STACK} has no TokenActiveListTableName output."
-            exit 1
-          fi
 
           echo "Deploying Authentication Stack: ${STACK_NAME}"
-          echo "Refresh token table: ${REFRESH_TOKEN_TABLE_NAME}"
-          echo "Active token table: ${TOKEN_ACTIVELIST_TABLE_NAME}"
 
           aws cloudformation deploy \
             --template-file infrastructure/cloudformation/auth.yaml \
@@ -823,9 +797,9 @@ jobs:
           echo "RDS schema initialization completed successfully."
 
       # ==========================================
-      # STEP 13C: Scheduled job safety - the slot materialiser must be safe to run twice
+      # STEP 13C: Verify that the slot materialiser is idempotent
       # ==========================================
-      - name: Run slot materialiser twice (idempotency check)
+      - name: Verify slot materialiser idempotency
         shell: bash
         run: |
           set -euo pipefail

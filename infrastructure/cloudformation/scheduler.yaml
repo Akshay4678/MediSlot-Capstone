@@ -1,1 +1,111 @@
 
+
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  MediSlot EventBridge Scheduler for daily rolling slot materialisation.
+  Invokes the SlotMaterialiser Lambda deployed by the API stack.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: medislot
+    AllowedPattern: '^[a-zA-Z0-9-]+$'
+
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+  MaterialiserLambdaArn:
+    Type: String
+    Description: ARN of the SlotMaterialiser Lambda deployed by the API stack.
+
+  MaterialiserScheduleExpression:
+    Type: String
+    Default: 'cron(15 0 * * ? *)'
+    Description: Run daily at 00:15 UTC.
+
+Resources:
+
+  MaterialiserScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-materialiser-group'
+
+  SchedulerInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-materialiser-scheduler-role'
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !GetAtt MaterialiserScheduleGroup.Arn
+
+      Policies:
+        - PolicyName: InvokeSlotMaterialiser
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Ref MaterialiserLambdaArn
+
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DailyMaterialiserSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-slot-materialiser-daily'
+      GroupName: !Ref MaterialiserScheduleGroup
+
+      Description: >
+        Runs the MediSlot slot materialiser daily to maintain the rolling
+        availability window.
+
+      ScheduleExpression: !Ref MaterialiserScheduleExpression
+      ScheduleExpressionTimezone: UTC
+      State: ENABLED
+
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+
+      Target:
+        Arn: !Ref MaterialiserLambdaArn
+        RoleArn: !GetAtt SchedulerInvokeRole.Arn
+        Input: '{}'
+
+        RetryPolicy:
+          MaximumRetryAttempts: 2
+          MaximumEventAgeInSeconds: 3600
+
+Outputs:
+
+  SchedulerRoleArn:
+    Description: IAM role assumed by EventBridge Scheduler.
+    Value: !GetAtt SchedulerInvokeRole.Arn
+
+  MaterialiserScheduleName:
+    Description: Daily slot materialisation schedule name.
+    Value: !Ref DailyMaterialiserSchedule
+
+  MaterialiserScheduleGroupName:
+    Description: EventBridge Scheduler group name.
+    Value: !Ref MaterialiserScheduleGroup

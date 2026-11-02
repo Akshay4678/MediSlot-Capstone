@@ -748,7 +748,7 @@ Outputs:
     Description: REST API id (the pipeline creates a new deployment of this API on every release).
     Value: !Ref MediSlotRestApi
   ApiStageName:
-    Value: !Ref ApiStage
+    Value: !Ref HttpApiDefaultStage
   ApiEndpoint:
     Description: Base URL of the MediSlot API (includes the stage).
     Value: !Sub 'https://${MediSlotRestApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${EnvironmentName}'

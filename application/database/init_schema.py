@@ -315,18 +315,38 @@ def initialize_database():
                    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'hospitals'"""
             )
             hospital_columns = {row["COLUMN_NAME"] for row in cursor.fetchall()}
-            if hospital_columns and "hospital_name" not in hospital_columns:
-                if "name" in hospital_columns:
+            if hospital_columns:
+                if "hospital_name" not in hospital_columns:
+                    if "name" in hospital_columns:
+                        cursor.execute(
+                            "ALTER TABLE hospitals CHANGE COLUMN name "
+                            "hospital_name VARCHAR(180) NOT NULL"
+                        )
+                        logger.info("Migrated hospitals.name to hospitals.hospital_name")
+                    else:
+                        raise RuntimeError(
+                            "Existing hospitals table does not match the approved schema: "
+                            "expected hospital_name or legacy name. Recreate the development "
+                            "database before initializing schema.sql."
+                        )
+
+                # CREATE TABLE IF NOT EXISTS does not add columns to an existing
+                # table. Older MediSlot databases have a hospitals table without
+                # the address field required by the current schema seed INSERTs.
+                # Add the missing field and backfill existing rows without
+                # deleting or rebuilding hospital records.
+                if "address" not in hospital_columns:
                     cursor.execute(
-                        "ALTER TABLE hospitals CHANGE COLUMN name "
-                        "hospital_name VARCHAR(180) NOT NULL"
+                        "ALTER TABLE hospitals ADD COLUMN address VARCHAR(500) NULL"
                     )
-                    logger.info("Migrated hospitals.name to hospitals.hospital_name")
-                else:
-                    raise RuntimeError(
-                        "Existing hospitals table does not match the approved schema: "
-                        "expected hospital_name or legacy name. Recreate the development "
-                        "database before initializing schema.sql."
+                    cursor.execute(
+                        "UPDATE hospitals SET address = '' WHERE address IS NULL"
+                    )
+                    cursor.execute(
+                        "ALTER TABLE hospitals MODIFY COLUMN address VARCHAR(500) NOT NULL"
+                    )
+                    logger.info(
+                        "Migrated hospitals.address; existing rows were preserved."
                     )
 
             # Migrate the legacy availability identifier before the schema

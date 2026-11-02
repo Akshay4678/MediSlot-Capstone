@@ -11,6 +11,7 @@ import sys
 import types
 from pathlib import Path
 from unittest.mock import MagicMock
+from importlib import import_module
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -39,19 +40,26 @@ class _ClientError(Exception):
 
 
 try:
-    import boto3
-    import botocore
+    import_module("boto3")
+    import_module("botocore")
 except ImportError:
-    _stub("boto3", client=lambda *a, **k: MagicMock(),
-          resource=lambda *a, **k: MagicMock())
+    _stub(
+        "boto3",
+        client=lambda *a, **k: MagicMock(),
+        resource=lambda *a, **k: MagicMock()
+    )
     _stub("boto3.dynamodb")
-    _stub("boto3.dynamodb.conditions", Key=lambda name: MagicMock())
+    _stub(
+        "boto3.dynamodb.conditions",
+        Key=lambda name: MagicMock()
+    )
     _stub("botocore")
     _stub("botocore.config", Config=lambda **k: None)
     _stub("botocore.exceptions", ClientError=_ClientError)
 
+
 try:
-    import pymysql
+    import_module("pymysql")
 except ImportError:
     class _IntegrityError(Exception):
         pass
@@ -63,15 +71,18 @@ except ImportError:
         connect=lambda **k: None
     )
 
+
 try:
-    import bcrypt
+    import_module("bcrypt")
 except ImportError:
     import hashlib
 
     _stub(
         "bcrypt",
         gensalt=lambda rounds=12: f"$2b${rounds:02d}$".encode(),
-        hashpw=lambda pw, salt: salt + hashlib.sha256(pw).hexdigest().encode(),
+        hashpw=lambda pw, salt: (
+            salt + hashlib.sha256(pw).hexdigest().encode()
+        ),
         checkpw=lambda pw, h: h.endswith(
             hashlib.sha256(pw).hexdigest().encode()
         )

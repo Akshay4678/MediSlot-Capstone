@@ -43,16 +43,16 @@ def create_app():
 
     @app.before_request
     def csrf_protect():
-        if request.method == "POST" and request.endpoint != "static" and sessions.current():
+        """Every POST (including login and registration) must carry this browser's CSRF token."""
+        if request.method == "POST" and request.endpoint != "static":
             if not sessions.csrf_ok(request.form.get("csrf_token")):
-                flash("Your session form expired. Please try again.", "error")
-                return redirect(request.referrer or url_for("landing"))
+                flash("The page was open too long. Please try again.", "error")
+                return redirect(request.path if request.path.endswith(("/login", "/register")) else url_for("landing"))
 
     @app.context_processor
     def inject():
         session = sessions.current()
-        return {"csrf_token": (lambda: session["csrf"] if session else ""),
-                "session_role": session["role"] if session else None}
+        return {"csrf_token": sessions.csrf_token, "session_role": session["role"] if session else None}
 
     @app.errorhandler(api_client.SessionExpired)
     def session_expired(_):

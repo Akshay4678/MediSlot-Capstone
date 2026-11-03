@@ -627,12 +627,6 @@ Outputs:
     Export:
       Name: !Sub '${ProjectName}-${EnvironmentName}-AppSecurityGroupId'
 
-  SecretsManagerEndpointSecurityGroupId:
-    Description: Shared security group attached to the Secrets Manager and SSM interface endpoints.
-    Value: !Ref SecretsManagerEndpointSecurityGroup
-    Export:
-      Name: !Sub '${ProjectName}-${EnvironmentName}-SecretsManagerEndpointSecurityGroupId'
-
   DatabaseSecurityGroupId:
     Description: Database security group ID.
     Value: !Ref DatabaseSecurityGroup

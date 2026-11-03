@@ -913,6 +913,26 @@ jobs:
           echo "Web application: ${WEB_URL} (allow about two minutes for the instance to boot)"
 
       # ==========================================
+      # STEP 13F: The deployed website must answer (no manual checks or port changes needed)
+      # ==========================================
+      - name: Check the web application responds
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${WEB_URL}/healthz" || true)"
+            if [[ "${code}" == "200" ]]; then break; fi
+            echo "Waiting for ${WEB_URL}/healthz (attempt ${attempt}, HTTP ${code})"
+            sleep 10
+          done
+          [[ "${code}" == "200" ]] || { echo "::error::The web application did not answer at ${WEB_URL}/healthz"; exit 1; }
+          for portal in doctor patient; do
+            page="$(curl -sS --max-time 15 "${WEB_URL}/${portal}/login")"
+            grep -q 'name="csrf_token"' <<<"${page}" || { echo "::error::${portal} login page is missing its CSRF field"; exit 1; }
+          done
+          echo "Web application is up and both login pages render: ${WEB_URL}"
+
+      # ==========================================
       # STEP 14: Display API endpoint
       # ==========================================
       - name: Display API endpoint

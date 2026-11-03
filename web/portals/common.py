@@ -41,6 +41,9 @@ def add_auth_routes(bp, role):
                 flash("That account is not a " + role + " account.", "error")
                 return redirect(url_for("landing"))
             return redirect(url_for(f"{role}.home"))
+        current = sessions.current()
+        if current and current.get("role") == role:
+            return redirect(url_for(f"{role}.home"))
         return render_template("login.html", role=role)
 
     @bp.route("/register", methods=["GET", "POST"], endpoint="register")

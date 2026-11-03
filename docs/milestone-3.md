@@ -54,7 +54,7 @@ disposable: it pulls the app from S3 on boot), `api.yaml` rewritten as a REST AP
   Confirm with your mentor which one they expect; the change is confined to
   `application/slot_materialiser/core.py` (one insert function) and the schedule query.
 * Daylight-saving handling and X-Ray tracing are intentionally not included (mentor's instruction).
-* Web sessions are kept in memory (one gunicorn worker); restarting the service signs users out. The site is plain HTTP; put CloudFront or an ALB with a certificate in front for production.
+* Web sessions are kept in memory of ONE gunicorn worker (do not add workers); restarting the service signs users out. The site is plain HTTP; put CloudFront or an ALB with a certificate in front for production.
 * Slot cancellation, appointment outcome marking and the booking engine are Milestones 5-6. Handlers under `application/booking`, `patient`, `availability`, `refund`, `waitlist`, `notification`, `doctor` are earlier placeholders that still use the pre-ER column names; they are not deployed.
 * The smoke test creates one throw-away patient and doctor per run (`@smoke.medislot.test`); delete them periodically in dev.
 * The OIDC role used by GitHub Actions needs permission for the new resources (S3, EventBridge Scheduler, EC2 + Elastic IP, API Gateway deployments, Lambda).

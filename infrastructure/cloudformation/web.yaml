@@ -26,15 +26,25 @@ Parameters:
     Type: String
     Default: t2.micro
     AllowedValues: [t2.micro, t3.micro]
+  InstanceConnectCidr:
+    Type: String
+    Default: 13.233.177.0/29
+    Description: >
+      Source range of the browser-based EC2 Instance Connect service for this region (default: ap-south-1).
+      Find other regions in https://ip-ranges.amazonaws.com/ip-ranges.json (service EC2_INSTANCE_CONNECT).
+      Leave empty to close port 22 completely (Session Manager keeps working without any inbound rule).
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Conditions:
+  AllowInstanceConnect: !Not [!Equals [!Ref InstanceConnectCidr, '']]
 
 Resources:
   WebSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: MediSlot web app - HTTP from the internet
+      GroupDescription: MediSlot web app - HTTP from the internet, SSH only from EC2 Instance Connect
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -42,6 +52,14 @@ Resources:
           ToPort: 80
           CidrIp: 0.0.0.0/0
           Description: HTTP
+        - !If
+          - AllowInstanceConnect
+          - IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: !Ref InstanceConnectCidr
+            Description: EC2 Instance Connect (browser based SSH)
+          - !Ref AWS::NoValue
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${EnvironmentName}-web-sg'
@@ -50,23 +68,9 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
-  # Allow the web EC2 instance to retrieve its Flask secret from the SSM
-  # interface endpoint over HTTPS. The endpoint SG is exported by the Network stack.
-  WebToSsmEndpointIngress:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId:
-        Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-SecretsManagerEndpointSecurityGroupId'
-      IpProtocol: tcp
-      FromPort: 443
-      ToPort: 443
-      SourceSecurityGroupId: !Ref WebSecurityGroup
-      Description: Allow HTTPS from MediSlot web EC2 to SSM and Secrets Manager endpoints
-
   WebInstanceRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${ProjectName}-${EnvironmentName}-web-instance-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -89,6 +93,10 @@ Resources:
                 Effect: Allow
                 Action: ssm:GetParameter
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${EnvironmentName}/web/*'
+              - Sid: ReportBootstrapResult
+                Effect: Allow
+                Action: cloudformation:SignalResource
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*'
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -103,6 +111,12 @@ Resources:
 
   WebInstance:
     Type: AWS::EC2::Instance
+    # The stack only succeeds once the application answers /healthz (see the end of UserData).
+    # A broken boot therefore fails the deployment instead of leaving a silent dead website.
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT15M
     Properties:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
@@ -125,23 +139,33 @@ Resources:
           set -euxo pipefail
           exec > >(tee /var/log/medislot-bootstrap.log) 2>&1
 
+          # Tell CloudFormation whether the boot worked (a failure rolls the stack back with a clear reason).
+          dnf install -y aws-cfn-bootstrap || true
+          signal() { /opt/aws/bin/cfn-signal -e "$1" --stack ${AWS::StackName} --resource WebInstance --region ${AWS::Region} || true; }
+          trap 'signal 1' ERR
+
           dnf install -y python3-pip
           useradd --system --home-dir /opt/medislot --shell /sbin/nologin medislot || true
-          mkdir -p /opt/medislot
+          mkdir -p /opt/medislot/lib
 
           # The instance is disposable: the application is pulled from S3 on every boot.
           aws s3 cp s3://${ArtifactsBucketName}/${WebPackageKey} /tmp/web.zip --region ${AWS::Region}
           python3 -m zipfile -e /tmp/web.zip /opt/medislot
-          python3 -m pip install --no-cache-dir -r /opt/medislot/requirements.txt
+
+          # Install into a private directory. A plain "pip install" fails on Amazon Linux because
+          # requests/urllib3 are owned by the operating system's package manager.
+          python3 -m pip install --no-cache-dir --upgrade --target /opt/medislot/lib -r /opt/medislot/requirements.txt
           chown -R medislot:medislot /opt/medislot
 
           cat > /etc/medislot-web.env <<'ENVEOF'
           API_BASE_URL=${ApiBaseUrl}
           AWS_DEFAULT_REGION=${AWS::Region}
           SECRET_KEY_PARAMETER=/${ProjectName}/${EnvironmentName}/web/flask-secret-key
+          PYTHONPATH=/opt/medislot/lib
           ENVEOF
           chmod 600 /etc/medislot-web.env
 
+          # ONE gunicorn worker (many threads): sessions are kept in that process's memory.
           cat > /etc/systemd/system/medislot-web.service <<'UNITEOF'
           [Unit]
           Description=MediSlot web application (Flask via gunicorn)
@@ -152,7 +176,7 @@ Resources:
           User=medislot
           WorkingDirectory=/opt/medislot
           EnvironmentFile=/etc/medislot-web.env
-          ExecStart=/usr/local/bin/gunicorn --workers 2 --bind 0.0.0.0:80 --access-logfile - app:app
+          ExecStart=/usr/bin/python3 -m gunicorn --workers 1 --threads 8 --timeout 60 --bind 0.0.0.0:80 --access-logfile - --error-logfile - app:app
           AmbientCapabilities=CAP_NET_BIND_SERVICE
           NoNewPrivileges=true
           Restart=always
@@ -164,6 +188,14 @@ Resources:
 
           systemctl daemon-reload
           systemctl enable --now medislot-web.service
+
+          # Wait until the site really answers before reporting success.
+          for attempt in $(seq 1 40); do
+            if curl -fsS http://localhost/healthz; then break; fi
+            sleep 3
+          done
+          curl -fsS http://localhost/healthz
+          signal 0
 
   WebElasticIp:
     Type: AWS::EC2::EIP
@@ -189,3 +221,5 @@ Outputs:
     Value: !Sub 'http://${WebElasticIp}'
   WebInstanceId:
     Value: !Ref WebInstance
+  WebSecurityGroupId:
+    Value: !Ref WebSecurityGroup

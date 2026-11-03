@@ -1,8 +1,12 @@
 """Server-side sessions.
 
-The browser only receives a signed cookie holding a random session id. The JWT access token,
-the refresh token and the CSRF token stay on the server. The store lives in this process's
-memory, so gunicorn runs ONE worker (with threads). Restarting the service logs users out.
+The browser only receives a signed cookie holding a random session id. The JWT access token
+and the refresh token stay on the server. The store lives in this process's memory, so
+gunicorn MUST run exactly one worker (with threads): two workers would each hold different
+sessions and logins would appear to fail at random. Restarting the service logs users out.
+
+The CSRF token is NOT kept here. It lives in the signed Flask cookie, so it also protects the
+login and registration forms, which are submitted before any server-side session exists.
 """
 
 import base64
@@ -43,11 +47,13 @@ def create(tokens):
         "access_token": tokens["access_token"],
         "refresh_token": tokens.get("refresh_token"),
         "role": role_from_token(tokens["access_token"]),
-        "csrf": secrets.token_urlsafe(24),
         "expires": now + IDLE_SECONDS,
     }
+    previous = cookie.get("sid")
     with _LOCK:
         _purge(now)
+        if previous:
+            _STORE.pop(previous, None)  # a new login replaces any earlier session of this browser
         _STORE[sid] = data
     cookie.clear()
     cookie["sid"] = sid
@@ -76,9 +82,16 @@ def destroy():
     cookie.clear()
 
 
+def csrf_token():
+    """The CSRF token of this browser (created on first use, kept in the signed cookie)."""
+    if "csrf" not in cookie:
+        cookie["csrf"] = secrets.token_urlsafe(24)
+    return cookie["csrf"]
+
+
 def csrf_ok(submitted):
-    data = current()
-    return bool(data and submitted and hmac.compare_digest(str(submitted), data["csrf"]))
+    expected = cookie.get("csrf")
+    return bool(expected and submitted and hmac.compare_digest(str(submitted), str(expected)))
 
 
 def clear_all():

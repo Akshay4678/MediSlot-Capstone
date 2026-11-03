@@ -4,6 +4,7 @@
 <div class="card" style="max-width:520px;margin:2rem auto">
   <h2>Create a {{ role }} account</h2>
   <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% if role == 'patient' %}
     <div class="row"><div><label for="first_name">First name</label><input id="first_name" name="first_name" required></div>
     <div><label for="last_name">Last name</label><input id="last_name" name="last_name" required></div></div>

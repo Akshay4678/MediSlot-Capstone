@@ -93,8 +93,15 @@ def client(api):
     return create_app().test_client()
 
 
-def login(client, role):
-    return client.post(f"/{role}/login", data={"email": "a@b.co", "password": "Passw0rd123"})
+def page_token(client, path="/patient/register"):
+    """The CSRF token the browser would get from a form page (register pages never redirect)."""
+    html = client.get(path).get_data(as_text=True)
+    return re.search(r'name="csrf_token" value="([^"]+)"', html).group(1)
+
+
+def login(client, role, email="a@b.co"):
+    return client.post(f"/{role}/login", data={"email": email, "password": "Passw0rd123",
+                                               "csrf_token": page_token(client)})
 
 
 def csrf(client):
@@ -210,7 +217,59 @@ def test_week_view_requests_a_monday_to_sunday_range(client, api):
 
 
 def test_registration_forms_post_to_the_role_specific_api_route(client, api):
-    client.post("/patient/register", data={"email": "p@b.co", "password": "Passw0rd123", "first_name": "P", "last_name": "Q"})
-    client.post("/doctor/register", data={"email": "d@b.co", "password": "Passw0rd123"})
+    token = page_token(client)
+    client.post("/patient/register", data={"email": "p@b.co", "password": "Passw0rd123", "first_name": "P",
+                                           "last_name": "Q", "csrf_token": token})
+    client.post("/doctor/register", data={"email": "d@b.co", "password": "Passw0rd123", "csrf_token": token})
     paths = [c[1] for c in api.calls]
     assert "/auth/patients/register" in paths and "/auth/doctors/register" in paths
+
+
+# ------------------------------------------------------- login / CSRF regressions
+def test_login_and_register_forms_carry_a_csrf_token(client):
+    for path in ("/doctor/login", "/patient/login", "/doctor/register", "/patient/register"):
+        assert 'name="csrf_token"' in client.get(path).get_data(as_text=True), path
+
+
+def test_login_without_a_csrf_token_is_rejected_and_never_calls_the_api(client, api):
+    response = client.post("/doctor/login", data={"email": "a@b.co", "password": "Passw0rd123"})
+    assert response.status_code == 302 and response.headers["Location"].endswith("/doctor/login")
+    assert not [c for c in api.calls if c[1].endswith("/login")]
+
+
+def test_login_with_a_tampered_csrf_token_is_rejected(client, api):
+    page_token(client)
+    client.post("/doctor/login", data={"email": "a@b.co", "password": "Passw0rd123", "csrf_token": "forged"})
+    assert not [c for c in api.calls if c[1].endswith("/login")]
+
+
+def test_signing_in_works_when_the_browser_already_has_a_session(client, api):
+    """Regression: a leftover session used to make every later login fail with 'session form expired'."""
+    assert login(client, "doctor").headers["Location"].endswith("/doctor/")
+    assert client.get("/doctor/login").headers["Location"].endswith("/doctor/")   # already signed in
+    response = client.post("/doctor/login", data={"email": "a@b.co", "password": "Passw0rd123",
+                                                  "csrf_token": csrf(client)})
+    assert response.status_code == 302 and response.headers["Location"].endswith("/doctor/")
+    assert len(sessions._STORE) == 1                                               # old session replaced, not leaked
+
+
+def test_a_patient_can_sign_in_while_a_doctor_session_exists(client):
+    login(client, "doctor")
+    token = csrf(client)
+    response = client.post("/patient/login", data={"email": "p@b.co", "password": "Passw0rd123", "csrf_token": token})
+    assert response.headers["Location"].endswith("/patient/")
+
+
+def test_wrong_credentials_show_the_api_message_and_keep_the_form(client, api, monkeypatch):
+    real = api.__call__
+    monkeypatch.setattr(api_client.requests, "request", lambda m, u, **k: FakeResponse(
+        401, {"error": "INVALID_CREDENTIALS", "message": "Email or password is incorrect."}) if u.endswith("/doctors/login") else real(m, u, **k))
+    response = client.post("/doctor/login", data={"email": "a@b.co", "password": "bad", "csrf_token": page_token(client)})
+    assert "Email or password is incorrect." in response.get_data(as_text=True)
+
+
+def test_logout_then_login_again_works(client, api):
+    login(client, "doctor")
+    client.post("/doctor/logout", data={"csrf_token": csrf(client)})
+    assert client.get("/doctor/").headers["Location"].endswith("/doctor/login")
+    assert login(client, "doctor").headers["Location"].endswith("/doctor/")

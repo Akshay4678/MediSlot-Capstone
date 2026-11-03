@@ -50,6 +50,19 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
+  # Allow the web EC2 instance to retrieve its Flask secret from the SSM
+  # interface endpoint over HTTPS. The endpoint SG is exported by the Network stack.
+  WebToSsmEndpointIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-SecretsManagerEndpointSecurityGroupId'
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref WebSecurityGroup
+      Description: Allow HTTPS from MediSlot web EC2 to SSM and Secrets Manager endpoints
+
   WebInstanceRole:
     Type: AWS::IAM::Role
     Properties:

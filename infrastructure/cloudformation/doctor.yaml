@@ -1,4 +1,3 @@
-
 AWSTemplateFormatVersion: '2010-09-09'
 Description: MediSlot doctor domain - doctor API Lambda, slot materialiser Lambda and its daily EventBridge Scheduler schedule.
 
@@ -51,6 +50,7 @@ Resources:
   DoctorApiRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-doctor-api-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -97,6 +97,7 @@ Resources:
   DoctorApiFunction:
     Type: AWS::Lambda::Function
     Properties:
+      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-doctor-api'
       Runtime: python3.12
       Handler: application.doctor_api.handler.lambda_handler
       Role: !GetAtt DoctorApiRole.Arn
@@ -132,6 +133,7 @@ Resources:
   MaterialiserRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-materialiser-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -205,6 +207,7 @@ Resources:
   SchedulerInvokeRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-materialiser-scheduler-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -236,6 +239,7 @@ Resources:
   DailyMaterialiserSchedule:
     Type: AWS::Scheduler::Schedule
     Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-slot-materialiser-daily'
       Description: Rolls the 30-day slot window forward by one day.
       ScheduleExpression: !Ref MaterialiserScheduleExpression
       ScheduleExpressionTimezone: UTC

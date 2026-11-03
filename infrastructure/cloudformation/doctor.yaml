@@ -1,3 +1,4 @@
+
 AWSTemplateFormatVersion: '2010-09-09'
 Description: MediSlot doctor domain - doctor API Lambda, slot materialiser Lambda and its daily EventBridge Scheduler schedule.
 
@@ -5,34 +6,48 @@ Parameters:
   ProjectName:
     Type: String
     Default: medislot
+
   EnvironmentName:
     Type: String
     Default: dev
-    AllowedValues: [dev, test, prod]
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
   LambdaCodeS3Bucket:
     Type: String
+
   LambdaCodeS3Key:
     Type: String
+
   LambdaSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
+
   LambdaSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
+
   DatabaseSecretArn:
     Type: String
+
   DatabaseHost:
     Type: String
+
   DatabaseName:
     Type: String
     Default: medislot
+
   PhotoBucketName:
     Type: String
+
   MaterialiserScheduleExpression:
     Type: String
     Default: 'cron(15 0 * * ? *)'
-    Description: Daily at 00:15 UTC. The job is idempotent, so the exact time only matters for freshness.
+    Description: Daily at 00:15 UTC.
 
 Resources:
-  # ------------------------------------------------------------------ doctor API
+
+  # Doctor API Lambda execution role
   DoctorApiRole:
     Type: AWS::IAM::Role
     Properties:
@@ -43,9 +58,11 @@ Resources:
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
+
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
       Policies:
         - PolicyName: DoctorApiAccess
           PolicyDocument:
@@ -53,35 +70,44 @@ Resources:
             Statement:
               - Sid: ReadDatabaseCredentials
                 Effect: Allow
-                Action: secretsmanager:GetSecretValue
+                Action:
+                  - secretsmanager:GetSecretValue
                 Resource: !Ref DatabaseSecretArn
+
               - Sid: ReadBusinessRules
                 Effect: Allow
-                Action: ssm:GetParameter
+                Action:
+                  - ssm:GetParameter
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${EnvironmentName}/rules/*'
+
               - Sid: PhotoObjects
                 Effect: Allow
                 Action:
                   - s3:PutObject
                   - s3:GetObject
                 Resource: !Sub 'arn:${AWS::Partition}:s3:::${PhotoBucketName}/doctors/*'
+
       Tags:
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
 
+  # Doctor API Lambda
   DoctorApiFunction:
     Type: AWS::Lambda::Function
     Properties:
       Runtime: python3.12
       Handler: application.doctor_api.handler.lambda_handler
       Role: !GetAtt DoctorApiRole.Arn
+
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
+
       Timeout: 29
       MemorySize: 512
+
       Environment:
         Variables:
           ENVIRONMENT_NAME: !Ref EnvironmentName
@@ -90,17 +116,19 @@ Resources:
           DB_HOST: !Ref DatabaseHost
           DB_NAME: !Ref DatabaseName
           PHOTO_BUCKET: !Ref PhotoBucketName
+
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds
         SecurityGroupIds:
           - !Ref LambdaSecurityGroupId
+
       Tags:
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
 
-  # --------------------------------------------------------------- slot materialiser
+  # Slot materialiser Lambda execution role
   MaterialiserRole:
     Type: AWS::IAM::Role
     Properties:
@@ -111,9 +139,11 @@ Resources:
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
+
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
       Policies:
         - PolicyName: MaterialiserAccess
           PolicyDocument:
@@ -121,29 +151,37 @@ Resources:
             Statement:
               - Sid: ReadDatabaseCredentials
                 Effect: Allow
-                Action: secretsmanager:GetSecretValue
+                Action:
+                  - secretsmanager:GetSecretValue
                 Resource: !Ref DatabaseSecretArn
+
               - Sid: ReadBusinessRules
                 Effect: Allow
-                Action: ssm:GetParameter
+                Action:
+                  - ssm:GetParameter
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${EnvironmentName}/rules/*'
+
       Tags:
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
 
+  # Slot materialiser Lambda
   SlotMaterialiserFunction:
     Type: AWS::Lambda::Function
     Properties:
       Runtime: python3.12
       Handler: application.slot_materialiser.handler.lambda_handler
       Role: !GetAtt MaterialiserRole.Arn
+
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
+
       Timeout: 300
       MemorySize: 512
+
       Environment:
         Variables:
           ENVIRONMENT_NAME: !Ref EnvironmentName
@@ -151,16 +189,19 @@ Resources:
           DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
           DB_HOST: !Ref DatabaseHost
           DB_NAME: !Ref DatabaseName
+
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds
         SecurityGroupIds:
           - !Ref LambdaSecurityGroupId
+
       Tags:
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
 
+  # EventBridge Scheduler permission to invoke materialiser
   SchedulerInvokeRole:
     Type: AWS::IAM::Role
     Properties:
@@ -173,30 +214,36 @@ Resources:
             Action: sts:AssumeRole
             Condition:
               StringEquals:
-                'aws:SourceAccount': !Ref AWS::AccountId
+                aws:SourceAccount: !Ref AWS::AccountId
+
       Policies:
         - PolicyName: InvokeMaterialiser
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action: lambda:InvokeFunction
+                Action:
+                  - lambda:InvokeFunction
                 Resource: !GetAtt SlotMaterialiserFunction.Arn
+
       Tags:
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
 
+  # Daily slot materialisation schedule
   DailyMaterialiserSchedule:
     Type: AWS::Scheduler::Schedule
     Properties:
-      Description: Rolls the 30-day slot window forward by one day (idempotent).
+      Description: Rolls the 30-day slot window forward by one day.
       ScheduleExpression: !Ref MaterialiserScheduleExpression
       ScheduleExpressionTimezone: UTC
       State: ENABLED
+
       FlexibleTimeWindow:
         Mode: 'OFF'
+
       Target:
         Arn: !GetAtt SlotMaterialiserFunction.Arn
         RoleArn: !GetAtt SchedulerInvokeRole.Arn
@@ -207,12 +254,19 @@ Resources:
 
 Outputs:
   DoctorApiFunctionArn:
+    Description: Doctor API Lambda ARN
     Value: !GetAtt DoctorApiFunction.Arn
     Export:
       Name: !Sub '${ProjectName}-${EnvironmentName}-DoctorApiFunctionArn'
+
   SlotMaterialiserFunctionName:
+    Description: Slot materialiser Lambda function name
     Value: !Ref SlotMaterialiserFunction
+
   SlotMaterialiserFunctionArn:
+    Description: Slot materialiser Lambda ARN
     Value: !GetAtt SlotMaterialiserFunction.Arn
+
   DailyScheduleName:
+    Description: EventBridge Scheduler schedule name
     Value: !Ref DailyMaterialiserSchedule

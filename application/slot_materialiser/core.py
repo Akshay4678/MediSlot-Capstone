@@ -9,8 +9,6 @@ How it works
     the last slot must end at or before the pattern end.
   * Local times are converted to UTC with the doctor's IANA timezone (stored on the doctor);
     both the UTC instants and the originating timezone are stored on every slot.
-    Daylight-saving transitions are deliberately out of scope: use a timezone without
-    daylight saving (the default is Asia/Kolkata).
   * slot_id = doctor_id#availability_id#startUTC is deterministic and INSERT IGNORE is used,
     so running the job again for dates that already exist creates no duplicates.
 """

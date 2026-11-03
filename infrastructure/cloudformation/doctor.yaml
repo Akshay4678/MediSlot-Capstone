@@ -36,6 +36,7 @@ Resources:
   DoctorApiRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-doctor-api-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -46,6 +47,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
       Policies:
         - PolicyName: DoctorApiAccess
           PolicyDocument:
@@ -74,6 +76,7 @@ Resources:
   DoctorApiFunction:
     Type: AWS::Lambda::Function
     Properties:
+      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-doctor-api'
       Runtime: python3.12
       Handler: application.doctor_api.handler.lambda_handler
       Role: !GetAtt DoctorApiRole.Arn
@@ -82,6 +85,8 @@ Resources:
         S3Key: !Ref LambdaCodeS3Key
       Timeout: 29
       MemorySize: 512
+      TracingConfig:
+        Mode: Active
       Environment:
         Variables:
           ENVIRONMENT_NAME: !Ref EnvironmentName
@@ -104,6 +109,7 @@ Resources:
   MaterialiserRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-materialiser-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -114,6 +120,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
       Policies:
         - PolicyName: MaterialiserAccess
           PolicyDocument:
@@ -144,6 +151,8 @@ Resources:
         S3Key: !Ref LambdaCodeS3Key
       Timeout: 300
       MemorySize: 512
+      TracingConfig:
+        Mode: Active
       Environment:
         Variables:
           ENVIRONMENT_NAME: !Ref EnvironmentName
@@ -164,6 +173,7 @@ Resources:
   SchedulerInvokeRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-materialiser-scheduler-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -191,6 +201,7 @@ Resources:
   DailyMaterialiserSchedule:
     Type: AWS::Scheduler::Schedule
     Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-slot-materialiser-daily'
       Description: Rolls the 30-day slot window forward by one day (idempotent).
       ScheduleExpression: !Ref MaterialiserScheduleExpression
       ScheduleExpressionTimezone: UTC

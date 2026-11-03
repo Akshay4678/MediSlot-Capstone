@@ -8,13 +8,11 @@ body, query string and headers are never used to decide who is acting.
 import json
 import logging
 
-from application.common import tracing
 from application.common.api import ApiError
 from application.common.http import request_body, request_method, response
 from application.database.connection import get_connection
 from application.doctor_api import availability, blackouts, catalogue, consultation_types, photo, profile, schedule
 
-tracing.enable()
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 

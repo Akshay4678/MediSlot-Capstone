@@ -602,6 +602,32 @@ jobs:
             --region "${AWS_REGION}"
 
       # ==========================================
+      # Authentication stack, FIRST deployment only (fresh account).
+      # The API stack imports this stack's role exports, so on a brand-new account it must exist
+      # before the API stack. On later runs it is updated AFTER the API stack (see below).
+      # ==========================================
+      - name: Deploy Authentication Stack (first deployment only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth"
+          if aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+            echo "${STACK_NAME} already exists; it is updated after the API stack."
+            exit 0
+          fi
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/auth.yaml \
+            --stack-name "${STACK_NAME}" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              "ProjectName=${PROJECT_NAME}" \
+              "EnvironmentName=${ENVIRONMENT_NAME}" \
+              "RefreshTokenTableName=${REFRESH_TOKEN_TABLE_NAME}" \
+              "TokenActiveListTableName=${TOKEN_ACTIVELIST_TABLE_NAME}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
+
+      # ==========================================
       # Wait until the existing Authentication stack has finished rollback.
       # Its existing exports must remain available while the API stack is updated.
       # ==========================================
@@ -803,7 +829,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          FN="${PROJECT_NAME}-${ENVIRONMENT_NAME}-slot-materialiser"
+          FN="$(aws cloudformation describe-stacks --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-doctor" \
+            --query "Stacks[0].Outputs[?OutputKey=='SlotMaterialiserFunctionName'].OutputValue | [0]" \
+            --output text --region "${AWS_REGION}")"
           for run in 1 2; do
             aws lambda invoke --function-name "${FN}" --payload '{}' --cli-binary-format raw-in-base64-out \
               --cli-read-timeout 330 "${RUNNER_TEMP}/mat-${run}.json" --region "${AWS_REGION}" > "${RUNNER_TEMP}/mat-meta-${run}.json"

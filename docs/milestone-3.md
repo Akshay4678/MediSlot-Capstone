@@ -39,16 +39,21 @@ Identity is read only from the authorizer context; the body, query string and he
 
 ## Infrastructure added
 `storage.yaml` (private photo bucket), `doctor.yaml` (doctor API Lambda, slot materialiser Lambda, EventBridge Scheduler
-schedule `cron(15 0 * * ? *)`, IAM roles, X-Ray active tracing), `web.yaml` (one t2.micro running Flask with an Elastic IP;
+schedule `cron(15 0 * * ? *)`, IAM roles), `web.yaml` (one t2.micro running Flask with an Elastic IP;
 disposable: it pulls the app from S3 on boot), `api.yaml` rewritten as a REST API.
 
 ## How to demo the checkpoint
-1. Pipeline summary: lint, unit tests, deploy, **"Run slot materialiser twice"** (second run inserted 0), **"Smoke test"** (about 50 checks).
-2. DST: `python -m pytest tests/unit/test_materialiser.py -v` - worked cases for New York, London, the spring-forward gap and Kolkata.
-3. Idempotency by hand: invoke `medislot-<env>-slot-materialiser` twice (optionally with `{"as_of":"2026-10-30T00:00:00Z"}`) and compare `inserted`.
-4. Web: open the `WebUrl` stack output, Login as Doctor, edit profile (+ photo), add a consultation type, set availability, open Schedule.
+1. Pipeline summary: lint, unit tests, deploy, **"Verify slot materialiser idempotency"** (second run inserted 0), **"Smoke test"** (about 50 checks).
+2. Idempotency by hand: invoke the slot materialiser Lambda twice (output `SlotMaterialiserFunctionName` of the `-doctor` stack; optionally with `{"as_of":"2026-10-30T00:00:00Z"}`) and compare `inserted`.
+3. Unit tests: `python -m pytest tests/unit/test_materialiser.py -v` (alignment, UTC conversion, rolling 30-day window, idempotency, blackouts).
+4. Web: open the `WebUrl` stack output, Login as Doctor, edit the profile (+ photo), add a consultation type, set availability, open Schedule.
 
 ## Known limits / next milestones
+* **Where slots are stored.** The project ER diagram puts `MATERIALISED_SLOTS` in RDS, so the materialiser writes
+  to RDS (`INSERT IGNORE` on a deterministic `slot_id`). The brief's wording for this milestone says "into DynamoDB".
+  Confirm with your mentor which one they expect; the change is confined to
+  `application/slot_materialiser/core.py` (one insert function) and the schedule query.
+* Daylight-saving handling and X-Ray tracing are intentionally not included (mentor's instruction).
 * Web sessions are kept in memory (one gunicorn worker); restarting the service signs users out. The site is plain HTTP; put CloudFront or an ALB with a certificate in front for production.
 * Slot cancellation, appointment outcome marking and the booking engine are Milestones 5-6. Handlers under `application/booking`, `patient`, `availability`, `refund`, `waitlist`, `notification`, `doctor` are earlier placeholders that still use the pre-ER column names; they are not deployed.
 * The smoke test creates one throw-away patient and doctor per run (`@smoke.medislot.test`); delete them periodically in dev.

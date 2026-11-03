@@ -7,15 +7,16 @@ How it works
     local calendar) that matches the pattern's weekday and is not a blackout date, slot
     start times are generated from the pattern start in steps of the consultation duration;
     the last slot must end at or before the pattern end.
-  * Local wall-clock times are converted to UTC with the doctor's IANA timezone, so
-    09:00-17:00 local stays 09:00-17:00 local across a daylight-saving change while the
-    stored UTC values shift. Local times that do not exist (spring-forward gap) are skipped.
+  * Local times are converted to UTC with the doctor's IANA timezone (stored on the doctor);
+    both the UTC instants and the originating timezone are stored on every slot.
+    Daylight-saving transitions are deliberately out of scope: use a timezone without
+    daylight saving (the default is Asia/Kolkata).
   * slot_id = doctor_id#availability_id#startUTC is deterministic and INSERT IGNORE is used,
     so running the job again for dates that already exist creates no duplicates.
 """
 
 import logging
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from application.common import rules
@@ -33,12 +34,8 @@ INSERT_SQL = (
 
 
 def local_to_utc(naive_local, tz):
-    """Convert a naive wall-clock datetime to aware UTC; None if that local time does not exist."""
-    aware = naive_local.replace(tzinfo=tz)
-    as_utc = aware.astimezone(UTC)
-    if as_utc.astimezone(tz).replace(tzinfo=None) != naive_local:
-        return None  # inside a spring-forward gap
-    return as_utc
+    """Convert a naive local datetime in the doctor's timezone to an aware UTC datetime."""
+    return naive_local.replace(tzinfo=tz).astimezone(UTC)
 
 
 def build_slots(doctor_id, pattern, local_date, tz_name, now_utc=None):
@@ -53,7 +50,7 @@ def build_slots(doctor_id, pattern, local_date, tz_name, now_utc=None):
     while cursor + duration <= limit:
         following = cursor + duration
         start_utc = local_to_utc(cursor, tz)
-        if start_utc is not None and (now_utc is None or start_utc > now_utc):
+        if now_utc is None or start_utc > now_utc:
             end_utc = start_utc + duration
             slots.append({
                 "slot_id": f"{doctor_id}#{pattern['availability_id']}#{start_utc:%Y%m%dT%H%M}Z",
@@ -62,7 +59,7 @@ def build_slots(doctor_id, pattern, local_date, tz_name, now_utc=None):
                 "consultation_type_id": pattern["consultation_type_id"],
                 "date": local_date,
                 "start_time": cursor.time(),
-                "end_time": following.time() if following.date() == cursor.date() else time(23, 59),
+                "end_time": following.time(),
                 "start_utc": start_utc.replace(tzinfo=None),
                 "end_utc": end_utc.replace(tzinfo=None),
                 "timezone": tz_name,

@@ -1,5 +1,0 @@
--r requirements-auth.txt
--r web/requirements.txt
-pytest>=8.0,<9.0
-cfn-lint>=1.0
-flake8>=7.0

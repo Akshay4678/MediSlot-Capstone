@@ -1,4 +1,4 @@
-"""Slot materialisation: alignment, daylight-saving crossings, idempotency, blackouts."""
+"""Slot materialisation: alignment, UTC conversion, rolling window, idempotency, blackouts."""
 
 from datetime import date, datetime, time, timezone
 
@@ -46,39 +46,8 @@ def test_capacity_is_copied_from_the_pattern_and_ids_are_deterministic():
     assert first[0]["timezone"] == "Asia/Kolkata"
 
 
-# ------------------------------------------------------- daylight-saving time
-def test_new_york_dst_end_2026_keeps_09_00_local_while_utc_shifts():
-    """US clocks go back on Sunday 2026-11-01: 09:00 local is 13:00Z before and 14:00Z after."""
-    friday = core.build_slots(DOC, pattern(day=5), date(2026, 10, 30), "America/New_York", LONG_AGO)
-    monday = core.build_slots(DOC, pattern(day=1), date(2026, 11, 2), "America/New_York", LONG_AGO)
-    assert starts(friday)[0] == "2026-10-30 13:00"   # EDT, UTC-4
-    assert starts(monday)[0] == "2026-11-02 14:00"   # EST, UTC-5
-    for slots in (friday, monday):
-        assert slots[0]["start_time"] == time(9, 0) and slots[-1]["end_time"] == time(12, 0) and len(slots) == 6
-
-
-def test_new_york_9_to_5_is_9_to_5_local_on_both_sides_of_the_change():
-    before = core.build_slots(DOC, pattern("09:00", "17:00", 60), date(2026, 10, 31), "America/New_York", LONG_AGO)
-    after = core.build_slots(DOC, pattern("09:00", "17:00", 60), date(2026, 11, 2), "America/New_York", LONG_AGO)
-    assert starts(before)[0] == "2026-10-31 13:00" and starts(before)[-1] == "2026-10-31 20:00"
-    assert starts(after)[0] == "2026-11-02 14:00" and starts(after)[-1] == "2026-11-02 21:00"
-    assert len(before) == len(after) == 8
-
-
-def test_london_dst_end_2026():
-    bst = core.build_slots(DOC, pattern(day=6), date(2026, 10, 24), "Europe/London", LONG_AGO)
-    gmt = core.build_slots(DOC, pattern(day=1), date(2026, 10, 26), "Europe/London", LONG_AGO)
-    assert starts(bst)[0] == "2026-10-24 08:00" and starts(gmt)[0] == "2026-10-26 09:00"
-
-
-def test_spring_forward_gap_times_are_skipped_not_shifted():
-    """2026-03-08 02:00-03:00 does not exist in New York."""
-    slots = core.build_slots(DOC, pattern("01:30", "04:00", 30, day=7), date(2026, 3, 8), "America/New_York", LONG_AGO)
-    assert [s["start_time"].strftime("%H:%M") for s in slots] == ["01:30", "03:00", "03:30"]
-    assert starts(slots) == ["2026-03-08 06:30", "2026-03-08 07:00", "2026-03-08 07:30"]
-
-
-def test_kolkata_has_no_dst_and_is_utc_plus_5_30():
+# ------------------------------------------------------------ UTC conversion
+def test_kolkata_local_time_is_converted_to_utc():
     slots = core.build_slots(DOC, pattern(), date(2026, 10, 26), "Asia/Kolkata", LONG_AGO)
     assert starts(slots)[0] == "2026-10-26 03:30"
 
@@ -94,7 +63,7 @@ def test_window_is_30_local_dates_starting_today_in_the_doctors_timezone():
     now = datetime(2026, 10, 30, 20, 0, tzinfo=timezone.utc)  # already 31 Oct 01:30 in Kolkata
     dates = core.window_dates(now, "Asia/Kolkata", 30)
     assert len(dates) == 30 and dates[0] == date(2026, 10, 31) and dates[-1] == date(2026, 11, 29)
-    assert core.window_dates(now, "America/New_York", 30)[0] == date(2026, 10, 30)
+    assert core.window_dates(now, "UTC", 30)[0] == date(2026, 10, 30)
 
 
 class FakeDb:

@@ -2,7 +2,7 @@
 {% block title %}Availability - MediSlot{% endblock %}
 {% block content %}
 <h1>Weekly availability</h1>
-<p class="muted">Times are in your home timezone (<strong>{{ timezone }}</strong>). Slots are created for the next 30 days and follow these hours all year, including across daylight-saving changes.</p>
+<p class="muted">Times are in your home timezone (<strong>{{ timezone }}</strong>). Slots are created for the next 30 days from these weekly hours.</p>
 <div class="card">
   {% if not types %}<p class="muted">Add a <a href="{{ url_for('doctor.types') }}">consultation type</a> first.</p>{% endif %}
   <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="row_count" value="{{ rows|length }}">

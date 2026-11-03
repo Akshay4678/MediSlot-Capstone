@@ -136,8 +136,6 @@ Resources:
   SlotMaterialiserFunction:
     Type: AWS::Lambda::Function
     Properties:
-       The previous fixed
-      # name already exists in this AWS account and caused ResourceExistenceCheck.
       Runtime: python3.12
       Handler: application.slot_materialiser.handler.lambda_handler
       Role: !GetAtt MaterialiserRole.Arn

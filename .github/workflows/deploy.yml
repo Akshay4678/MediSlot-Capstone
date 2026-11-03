@@ -123,8 +123,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
-          flake8 application scripts web tests --select=E9,F --exclude=application/booking,application/notification,application/patient,application/availability,application/refund,application/waitlist,application/doctor
+          python -m pip install -r requirements-dev.txt flake8 pytest
+          python -m flake8 application scripts web tests --select=E9,F --exclude=application/booking,application/notification,application/patient,application/availability,application/refund,application/waitlist,application/doctor
           python -m pytest tests/unit -q
 
       # ==========================================

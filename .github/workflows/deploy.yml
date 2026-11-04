@@ -879,10 +879,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Build dependencies for the EC2 runtime (Amazon Linux 2023 Python 3.9).
-      # GitHub's hosted runner no longer provides a Python 3.9 setup-python build,
-      # so use the official Python 3.9 container for a compatible vendor package.
-
+      # Build dependencies in a Python 3.9 container to match Amazon Linux 2023.
+      # This avoids actions/setup-python trying to install an unavailable 3.9 runtime
+      # on newer GitHub-hosted Ubuntu runners.
       - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -927,8 +926,7 @@ jobs:
           cp -R web/. "${WEB_DIR}/web/"
           printf 'from web.app import create_app\napp = create_app()\n' > "${WEB_DIR}/app.py"
 
-          # Build dependencies with the same Python minor version as EC2.
-          # Python 3.12 wheels may not load in the EC2 Python 3.9 runtime.
+          # Build dependencies using the same Python minor version as EC2.
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             -e HOME=/tmp \
@@ -957,7 +955,6 @@ jobs:
           aws cloudformation deploy \
             --template-file infrastructure/cloudformation/web.yaml \
             --stack-name "${STACK_NAME}" \
-            --capabilities CAPABILITY_IAM \
             --parameter-overrides \
               "ProjectName=${PROJECT_NAME}" \
               "EnvironmentName=${ENVIRONMENT_NAME}" \
@@ -966,6 +963,7 @@ jobs:
               "ArtifactsBucketName=${LAMBDA_ARTIFACTS_BUCKET}" \
               "WebPackageKey=${WEB_PACKAGE_KEY}" \
               "ApiBaseUrl=${API_ENDPOINT}" \
+            --capabilities CAPABILITY_IAM \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
 

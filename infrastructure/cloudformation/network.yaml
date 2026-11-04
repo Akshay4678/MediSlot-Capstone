@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   MediSlot Network Stack - VPC, public and private subnets, routing,
-  security groups, optional NAT Gateway, and optional S3 Gateway Endpoint.
+  security groups, optional NAT Gateway, S3 and DynamoDB Gateway Endpoints, and private interface endpoints for Secrets Manager and Systems Manager.
 
 Parameters:
   ProjectName:
@@ -71,6 +71,11 @@ Parameters:
       - 'true'
       - 'false'
     Description: Create an S3 Gateway VPC endpoint for private route tables.
+
+  WebInstanceSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Default: sg-0f0543c61e7980d4c
+    Description: Existing MediSlot web EC2 security group allowed to reach private SSM interface endpoints.
 
   WorkbenchInstanceType:
     Type: String
@@ -393,6 +398,142 @@ Resources:
           Value: !Ref EnvironmentName
 
   # ----------------------------------------------------------
+  # PRIVATE AWS SERVICE ENDPOINTS
+  # ----------------------------------------------------------
+
+  # Endpoint SG: allow HTTPS from Lambda/application resources.
+  # If an existing EC2 instance (for example the web dashboard) also needs
+  # to use these endpoints, add its security group as an additional ingress
+  # source without removing this AppSecurityGroup rule.
+  AwsServiceEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTPS from MediSlot application resources to AWS VPC endpoints
+      VpcId: !Ref MediSlotVPC
+      SecurityGroupIngress:
+        - Description: HTTPS from MediSlot application resources
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+        - Description: HTTPS from the existing MediSlot web EC2 instance for Session Manager
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref WebInstanceSecurityGroupId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-aws-endpoint-sg'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Secrets Manager: required by application/database/connection.py.
+  SecretsManagerInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.secretsmanager'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateAppSubnet1
+        - !Ref PrivateAppSubnet2
+      SecurityGroupIds:
+        - !Ref AwsServiceEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-secretsmanager-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Systems Manager Parameter Store: required by Lambdas reading SSM parameters.
+  SsmInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssm'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateAppSubnet1
+        - !Ref PrivateAppSubnet2
+      SecurityGroupIds:
+        - !Ref AwsServiceEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-ssm-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Session Manager message channel endpoint.
+  SsmMessagesInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssmmessages'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateAppSubnet1
+        - !Ref PrivateAppSubnet2
+      SecurityGroupIds:
+        - !Ref AwsServiceEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-ssmmessages-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Legacy SSM agent messaging endpoint, used by some SSM agent workflows.
+  Ec2MessagesInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2messages'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateAppSubnet1
+        - !Ref PrivateAppSubnet2
+      SecurityGroupIds:
+        - !Ref AwsServiceEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-ec2messages-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # DynamoDB Gateway Endpoint: keeps DynamoDB traffic inside AWS without NAT.
+  DynamoDbGatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.dynamodb'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateAppRouteTable
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-dynamodb-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ----------------------------------------------------------
   # EC2 MYSQL WORKBENCH ACCESS HOST (SSM, NO INBOUND SSH)
   # ----------------------------------------------------------
 
@@ -588,3 +729,21 @@ Outputs:
     Condition: CreateS3Endpoint
     Description: S3 Gateway VPC Endpoint ID, if enabled.
     Value: !Ref S3GatewayEndpoint
+
+  AwsServiceEndpointSecurityGroupId:
+    Description: Security group attached to the private AWS service interface endpoints.
+    Value: !Ref AwsServiceEndpointSecurityGroup
+    Export:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-AwsServiceEndpointSecurityGroupId'
+
+  SecretsManagerInterfaceEndpointId:
+    Description: Secrets Manager interface endpoint ID.
+    Value: !Ref SecretsManagerInterfaceEndpoint
+
+  SsmInterfaceEndpointId:
+    Description: Systems Manager interface endpoint ID.
+    Value: !Ref SsmInterfaceEndpoint
+
+  DynamoDbGatewayEndpointId:
+    Description: DynamoDB gateway endpoint ID.
+    Value: !Ref DynamoDbGatewayEndpoint

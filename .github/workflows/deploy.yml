@@ -958,6 +958,7 @@ jobs:
           aws cloudformation deploy \
             --template-file infrastructure/cloudformation/web.yaml \
             --stack-name "${STACK_NAME}" \
+            --capabilities CAPABILITY_IAM \
             --parameter-overrides \
               "ProjectName=${PROJECT_NAME}" \
               "EnvironmentName=${ENVIRONMENT_NAME}" \

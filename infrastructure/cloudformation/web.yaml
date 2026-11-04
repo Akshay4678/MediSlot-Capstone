@@ -32,6 +32,10 @@ Parameters:
     Type: String
     Description: API Gateway base URL including the stage.
 
+  SsmEndpointSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group attached to the Systems Manager interface endpoints.
+
   InstanceType:
     Type: String
     Default: t2.micro
@@ -62,6 +66,16 @@ Resources:
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
+
+  WebToSsmEndpointIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SsmEndpointSecurityGroupId
+      Description: Allow HTTPS from the current MediSlot web EC2 security group to Systems Manager endpoints
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref WebSecurityGroup
 
   WebInstanceRole:
     Type: AWS::IAM::Role
@@ -132,32 +146,25 @@ Resources:
 
           echo "Starting MediSlot web bootstrap at $(date -Is)"
 
-          # Amazon Linux 2023 system packages.
           dnf install -y python3 python3-pip
 
-          # Create the application user and directories.
           id medislot >/dev/null 2>&1 || useradd --system --home-dir /opt/medislot --shell /sbin/nologin medislot
           install -d -o medislot -g medislot -m 0755 /opt/medislot
 
-          # Download and extract the versioned application package.
-          aws s3 cp             's3://${ArtifactsBucketName}/${WebPackageKey}'             /tmp/medislot-web.zip             --region '${AWS::Region}'
+          aws s3 cp 's3://${ArtifactsBucketName}/${WebPackageKey}' /tmp/medislot-web.zip --region '${AWS::Region}'
 
           python3 -m zipfile -e /tmp/medislot-web.zip /opt/medislot
           test -f /opt/medislot/app.py
-          test -f /opt/medislot/requirements.txt
+          test -f /opt/medislot/web/app.py
 
-          # Use an isolated virtual environment. This avoids pip trying to
-          # uninstall RPM-managed system packages such as requests.
           python3 -m venv /opt/medislot/venv
-          /opt/medislot/venv/bin/python -m pip install             --disable-pip-version-check             --no-cache-dir             -r /opt/medislot/requirements.txt
+          /opt/medislot/venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir -r /opt/medislot/requirements.txt
 
-          # Verify imports before configuring systemd.
           /opt/medislot/venv/bin/python -c "import flask, gunicorn, requests, boto3; print('MediSlot Python dependencies verified')"
 
           chown -R medislot:medislot /opt/medislot
           chmod -R a+rX /opt/medislot
 
-          # Application runtime configuration.
           cat > /etc/medislot-web.env <<'ENVEOF'
           API_BASE_URL=${ApiBaseUrl}
           AWS_DEFAULT_REGION=${AWS::Region}
@@ -166,8 +173,6 @@ Resources:
           chown root:medislot /etc/medislot-web.env
           chmod 0640 /etc/medislot-web.env
 
-          # One worker is intentional because the current web session store
-          # is process-local. Multiple workers would have separate session stores.
           cat > /etc/systemd/system/medislot-web.service <<'UNITEOF'
           [Unit]
           Description=MediSlot Flask web application
@@ -195,14 +200,13 @@ Resources:
           systemctl enable medislot-web.service
           systemctl restart medislot-web.service
 
-          # Wait up to 60 seconds for Flask to answer its local health endpoint.
           healthy=0
           for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error --max-time 3 http://127.0.0.1/healthz; then
               healthy=1
               break
             fi
-            echo "Health check attempt $attempt of 30 did not pass yet."
+            echo "Local health check attempt $attempt of 30 did not pass yet."
             sleep 2
           done
 

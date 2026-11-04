@@ -72,11 +72,6 @@ Parameters:
       - 'false'
     Description: Create an S3 Gateway VPC endpoint for private route tables.
 
-  WebInstanceSecurityGroupId:
-    Type: AWS::EC2::SecurityGroup::Id
-    Default: sg-0f0543c61e7980d4c
-    Description: Existing MediSlot web EC2 security group allowed to reach private SSM interface endpoints.
-
   WorkbenchInstanceType:
     Type: String
     Default: t3.micro
@@ -402,9 +397,8 @@ Resources:
   # ----------------------------------------------------------
 
   # Endpoint SG: allow HTTPS from Lambda/application resources.
-  # If an existing EC2 instance (for example the web dashboard) also needs
-  # to use these endpoints, add its security group as an additional ingress
-  # source without removing this AppSecurityGroup rule.
+  # The current web EC2 security group is added by the Web stack so that
+  # replacing the web instance/security group never leaves a stale source rule.
   AwsServiceEndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -416,11 +410,6 @@ Resources:
           FromPort: 443
           ToPort: 443
           SourceSecurityGroupId: !Ref AppSecurityGroup
-        - Description: HTTPS from the existing MediSlot web EC2 instance for Session Manager
-          IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          SourceSecurityGroupId: !Ref WebInstanceSecurityGroupId
       SecurityGroupEgress:
         - IpProtocol: '-1'
           CidrIp: 0.0.0.0/0

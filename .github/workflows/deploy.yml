@@ -903,9 +903,10 @@ jobs:
           LAMBDA_ARTIFACTS_BUCKET="$(output data ArtifactsBucketName)"
           VPC_ID="$(output network VpcId)"
           PUBLIC_SUBNET_ID="$(output network PublicSubnet1Id)"
+          SSM_ENDPOINT_SECURITY_GROUP_ID="$(output network AwsServiceEndpointSecurityGroupId)"
           API_ENDPOINT="$(output api ApiEndpoint)"
 
-          for name in LAMBDA_ARTIFACTS_BUCKET VPC_ID PUBLIC_SUBNET_ID API_ENDPOINT; do
+          for name in LAMBDA_ARTIFACTS_BUCKET VPC_ID PUBLIC_SUBNET_ID SSM_ENDPOINT_SECURITY_GROUP_ID API_ENDPOINT; do
             value="${!name}"
             if [[ -z "${value}" || "${value}" == "None" ]]; then
               echo "::error::Missing required CloudFormation output: ${name}"
@@ -960,6 +961,7 @@ jobs:
               "EnvironmentName=${ENVIRONMENT_NAME}" \
               "VpcId=${VPC_ID}" \
               "PublicSubnetId=${PUBLIC_SUBNET_ID}" \
+              "SsmEndpointSecurityGroupId=${SSM_ENDPOINT_SECURITY_GROUP_ID}" \
               "ArtifactsBucketName=${LAMBDA_ARTIFACTS_BUCKET}" \
               "WebPackageKey=${WEB_PACKAGE_KEY}" \
               "ApiBaseUrl=${API_ENDPOINT}" \

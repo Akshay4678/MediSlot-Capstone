@@ -229,7 +229,7 @@ Resources:
               healthy=1
               break
             fi
-            echo "Health check attempt ${attempt}/30 did not pass yet."
+            echo "Health check attempt ${!attempt}/30 did not pass yet."
             sleep 2
           done
           if [[ "$healthy" -ne 1 ]]; then

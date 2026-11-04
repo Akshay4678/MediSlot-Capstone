@@ -149,12 +149,22 @@ Resources:
           REGION='${AWS::Region}'
           signal() {
             local result="$1"
-            aws cloudformation signal-resource \
-              --stack-name "$STACK_NAME" \
-              --logical-resource-id WebInstance \
-              --unique-id "$(hostname)-$(date +%s)" \
-              --status "$result" \
-              --region "$REGION"
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              if aws cloudformation signal-resource \
+                --stack-name "$STACK_NAME" \
+                --logical-resource-id WebInstance \
+                --unique-id "$(hostname)-$(date +%s)" \
+                --status "$result" \
+                --region "$REGION"; then
+                echo "CloudFormation ${result} signal sent."
+                return 0
+              fi
+              echo "CloudFormation signal attempt ${!attempt}/5 failed; retrying."
+              sleep 3
+            done
+            echo "ERROR: Could not send CloudFormation ${result} signal."
+            return 1
           }
           on_error() {
             local rc=$?
@@ -169,8 +179,9 @@ Resources:
           command -v python3
           command -v curl
           command -v systemctl
+          aws sts get-caller-identity --region "$REGION"
 
-          # The GitHub Actions package already contains Python dependencies in vendor/.
+          # The GitHub Actions package contains dependencies built for Python 3.9.
           # No dnf, pip, compiler, or internet package installation is needed on EC2.
           install -d -o root -g root -m 0755 /opt/medislot
           aws s3 cp \
@@ -181,6 +192,13 @@ Resources:
           python3 -m zipfile -e /tmp/medislot-web.zip /opt/medislot
           test -f /opt/medislot/app.py
           test -d /opt/medislot/vendor
+
+          PYTHONPATH=/opt/medislot/vendor:/opt/medislot /usr/bin/python3 - <<'PY'
+          import sys
+          print("EC2 Python runtime:", sys.version)
+          import flask, gunicorn, requests, boto3
+          print("Verified Flask, Gunicorn, Requests and Boto3 imports.")
+          PY
 
           id medislot >/dev/null 2>&1 || \
             useradd --system --home-dir /opt/medislot --shell /sbin/nologin medislot

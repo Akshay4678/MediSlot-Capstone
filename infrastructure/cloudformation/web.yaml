@@ -252,7 +252,7 @@ Resources:
               break
             fi
 
-            echo "Health check attempt ${attempt}/30 failed."
+            echo "Health check attempt ${!attempt}/30 failed."
             sleep 3
           done
 

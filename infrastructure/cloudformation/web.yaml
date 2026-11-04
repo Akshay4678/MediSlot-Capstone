@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: MediSlot web application - one disposable EC2 t2.micro running the Flask dashboards (doctor and patient portals).
+Description: MediSlot Flask doctor and patient dashboards on one EC2 instance.
 
 Parameters:
   ProjectName:
@@ -15,13 +15,13 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
   ArtifactsBucketName:
     Type: String
-    Description: Bucket that holds the packaged web application (web/ prefix).
+    Description: S3 bucket containing the self-contained web application ZIP.
   WebPackageKey:
     Type: String
-    Description: S3 key of the web application ZIP. A new key replaces the instance (it is disposable).
+    Description: Versioned S3 key of the web application ZIP.
   ApiBaseUrl:
     Type: String
-    Description: Base URL of the MediSlot REST API, including the stage.
+    Description: API Gateway base URL including the stage.
   InstanceType:
     Type: String
     Default: t2.micro
@@ -29,10 +29,7 @@ Parameters:
   InstanceConnectCidr:
     Type: String
     Default: 13.233.177.0/29
-    Description: >
-      Source range of the browser-based EC2 Instance Connect service for this region (default: ap-south-1).
-      Find other regions in https://ip-ranges.amazonaws.com/ip-ranges.json (service EC2_INSTANCE_CONNECT).
-      Leave empty to close port 22 completely (Session Manager keeps working without any inbound rule).
+    Description: EC2 Instance Connect source CIDR for ap-south-1; set empty to disable SSH ingress.
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
@@ -44,21 +41,21 @@ Resources:
   WebSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: MediSlot web app - HTTP from the internet, SSH only from EC2 Instance Connect
+      GroupDescription: MediSlot web app - HTTP from internet, EC2 Instance Connect only for SSH
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
-          Description: HTTP
+          Description: HTTP dashboard access
         - !If
           - AllowInstanceConnect
           - IpProtocol: tcp
             FromPort: 22
             ToPort: 22
             CidrIp: !Ref InstanceConnectCidr
-            Description: EC2 Instance Connect (browser based SSH)
+            Description: EC2 Instance Connect
           - !Ref AWS::NoValue
       Tags:
         - Key: Name
@@ -81,23 +78,28 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       Policies:
-        - PolicyName: WebAppBootstrap
+        - PolicyName: WebAppRuntimeAndBootstrap
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Sid: ReadApplicationPackage
                 Effect: Allow
-                Action: s3:GetObject
+                Action:
+                  - s3:GetObject
                 Resource: !Sub 'arn:${AWS::Partition}:s3:::${ArtifactsBucketName}/web/*'
               - Sid: ReadWebSettings
                 Effect: Allow
-                Action: ssm:GetParameter
+                Action:
+                  - ssm:GetParameter
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${EnvironmentName}/web/*'
-              - Sid: ReportBootstrapResult
+              - Sid: SignalCloudFormation
                 Effect: Allow
-                Action: cloudformation:SignalResource
+                Action:
+                  - cloudformation:SignalResource
                 Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*'
       Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-web-role'
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
@@ -111,8 +113,6 @@ Resources:
 
   WebInstance:
     Type: AWS::EC2::Instance
-    # The stack only succeeds once the application answers /healthz (see the end of UserData).
-    # A broken boot therefore fails the deployment instead of leaving a silent dead website.
     CreationPolicy:
       ResourceSignal:
         Count: 1
@@ -121,10 +121,6 @@ Resources:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
       IamInstanceProfile: !Ref WebInstanceProfile
-      # IMPORTANT: changing UserData on an existing instance only stops and starts it, and the boot
-      # script never runs again. Changing NetworkInterfaces REPLACES the instance, so the description
-      # below carries the package key: every new application package gets a brand-new instance that
-      # runs the bootstrap from scratch (the old one is deleted only after the new one is healthy).
       NetworkInterfaces:
         - DeviceIndex: '0'
           AssociatePublicIpAddress: true
@@ -132,9 +128,10 @@ Resources:
           SubnetId: !Ref PublicSubnetId
           GroupSet:
             - !Ref WebSecurityGroup
-          Description: !Sub 'MediSlot web ${WebPackageKey}'
+          Description: !Sub 'MediSlot web package ${WebPackageKey}'
       MetadataOptions:
         HttpTokens: required
+        HttpEndpoint: enabled
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${EnvironmentName}-web'
@@ -145,50 +142,77 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          set -euxo pipefail
+          set -Eeuo pipefail
           exec > >(tee /var/log/medislot-bootstrap.log) 2>&1
 
-          # Tell CloudFormation whether the boot worked (a failure rolls the stack back with a clear reason).
-          dnf install -y aws-cfn-bootstrap || true
-          signal() { /opt/aws/bin/cfn-signal -e "$1" --stack ${AWS::StackName} --resource WebInstance --region ${AWS::Region} || true; }
-          trap 'signal 1' ERR
+          STACK_NAME='${AWS::StackName}'
+          REGION='${AWS::Region}'
+          signal() {
+            local result="$1"
+            aws cloudformation signal-resource \
+              --stack-name "$STACK_NAME" \
+              --logical-resource-id WebInstance \
+              --unique-id "$(hostname)-$(date +%s)" \
+              --status "$result" \
+              --region "$REGION"
+          }
+          on_error() {
+            local rc=$?
+            echo "Bootstrap failed at line $BASH_LINENO (exit $rc)"
+            signal FAILURE || true
+            exit "$rc"
+          }
+          trap on_error ERR
 
-          dnf install -y python3-pip
-          useradd --system --home-dir /opt/medislot --shell /sbin/nologin medislot || true
-          mkdir -p /opt/medislot/lib
+          echo "Starting MediSlot web bootstrap at $(date -Is)"
+          command -v aws
+          command -v python3
+          command -v curl
+          command -v systemctl
 
-          # The instance is disposable: the application is pulled from S3 on every boot.
-          aws s3 cp s3://${ArtifactsBucketName}/${WebPackageKey} /tmp/web.zip --region ${AWS::Region}
-          python3 -m zipfile -e /tmp/web.zip /opt/medislot
+          # The GitHub Actions package already contains Python dependencies in vendor/.
+          # No dnf, pip, compiler, or internet package installation is needed on EC2.
+          install -d -o root -g root -m 0755 /opt/medislot
+          aws s3 cp \
+            's3://${ArtifactsBucketName}/${WebPackageKey}' \
+            /tmp/medislot-web.zip \
+            --region "$REGION"
 
-          # Install into a private directory. A plain "pip install" fails on Amazon Linux because
-          # requests/urllib3 are owned by the operating system's package manager.
-          python3 -m pip install --no-cache-dir --upgrade --target /opt/medislot/lib -r /opt/medislot/requirements.txt
-          chown -R medislot:medislot /opt/medislot
+          python3 -m zipfile -e /tmp/medislot-web.zip /opt/medislot
+          test -f /opt/medislot/app.py
+          test -d /opt/medislot/vendor
+
+          id medislot >/dev/null 2>&1 || \
+            useradd --system --home-dir /opt/medislot --shell /sbin/nologin medislot
+          chown -R root:root /opt/medislot
+          chmod -R a+rX /opt/medislot
 
           cat > /etc/medislot-web.env <<'ENVEOF'
           API_BASE_URL=${ApiBaseUrl}
           AWS_DEFAULT_REGION=${AWS::Region}
           SECRET_KEY_PARAMETER=/${ProjectName}/${EnvironmentName}/web/flask-secret-key
-          PYTHONPATH=/opt/medislot/lib
+          PYTHONPATH=/opt/medislot/vendor:/opt/medislot
           ENVEOF
-          chmod 600 /etc/medislot-web.env
+          chmod 0640 /etc/medislot-web.env
+          chown root:medislot /etc/medislot-web.env
 
-          # ONE gunicorn worker (many threads): sessions are kept in that process's memory.
           cat > /etc/systemd/system/medislot-web.service <<'UNITEOF'
           [Unit]
-          Description=MediSlot web application (Flask via gunicorn)
-          After=network-online.target
+          Description=MediSlot web application (Flask/Gunicorn)
           Wants=network-online.target
+          After=network-online.target
 
           [Service]
+          Type=simple
           User=medislot
+          Group=medislot
           WorkingDirectory=/opt/medislot
           EnvironmentFile=/etc/medislot-web.env
           ExecStart=/usr/bin/python3 -m gunicorn --workers 1 --threads 8 --timeout 60 --bind 0.0.0.0:80 --access-logfile - --error-logfile - app:app
           AmbientCapabilities=CAP_NET_BIND_SERVICE
+          CapabilityBoundingSet=CAP_NET_BIND_SERVICE
           NoNewPrivileges=true
-          Restart=always
+          Restart=on-failure
           RestartSec=3
 
           [Install]
@@ -196,15 +220,28 @@ Resources:
           UNITEOF
 
           systemctl daemon-reload
-          systemctl enable --now medislot-web.service
+          systemctl enable medislot-web.service
+          systemctl restart medislot-web.service
 
-          # Wait until the site really answers before reporting success.
-          for attempt in $(seq 1 40); do
-            if curl -fsS http://localhost/healthz; then break; fi
-            sleep 3
+          healthy=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 3 http://127.0.0.1/healthz; then
+              healthy=1
+              break
+            fi
+            echo "Health check attempt ${attempt}/30 did not pass yet."
+            sleep 2
           done
-          curl -fsS http://localhost/healthz
-          signal 0
+          if [[ "$healthy" -ne 1 ]]; then
+            systemctl status medislot-web.service --no-pager || true
+            journalctl -u medislot-web.service -n 100 --no-pager || true
+            exit 1
+          fi
+
+          echo "MediSlot web application is healthy."
+          trap - ERR
+          signal SUCCESS
+          echo "CloudFormation success signal sent at $(date -Is)"
 
   WebElasticIp:
     Type: AWS::EC2::EIP
@@ -229,6 +266,8 @@ Outputs:
     Description: Public URL of the MediSlot web application.
     Value: !Sub 'http://${WebElasticIp}'
   WebInstanceId:
+    Description: EC2 instance hosting the MediSlot dashboards.
     Value: !Ref WebInstance
   WebSecurityGroupId:
+    Description: Security group attached to the web instance.
     Value: !Ref WebSecurityGroup

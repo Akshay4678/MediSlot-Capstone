@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  deploy-infrastructure:
     name: Deploy MediSlot Infrastructure
     runs-on: ubuntu-latest
 
@@ -863,140 +863,162 @@ jobs:
             --query Parameter.Value --output text --region "${AWS_REGION}" 2>/dev/null || true)"
           python scripts/smoke_test.py
 
-      # ==========================================
-      # STEP 13E: Web application (Flask on one disposable EC2 instance)
-      # ==========================================
-      - name: Package and upload the web application
+  deploy-web:
+    name: Package and Deploy MediSlot Web
+    runs-on: ubuntu-latest
+    needs: deploy-infrastructure
+    environment:
+      name: ${{ github.event.inputs.environment || 'dev' }}
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/heads/milestone-')
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      PROJECT_NAME: medislot
+      ENVIRONMENT_NAME: ${{ github.event.inputs.environment || 'dev' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Build dependencies on the runner, not on EC2. Amazon Linux 2023 uses
+      # Python 3.9 by default; build a compatible vendor directory here.
+      - name: Set up Python 3.9 for EC2-compatible package
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: pip
+          cache-dependency-path: web/requirements.txt
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: MediSlotWebDeployment
+
+      - name: Read required stack outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          output() {
+            aws cloudformation describe-stacks \
+              --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-$1" \
+              --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue | [0]" \
+              --output text --region "${AWS_REGION}"
+          }
+
+          LAMBDA_ARTIFACTS_BUCKET="$(output data ArtifactsBucketName)"
+          VPC_ID="$(output network VpcId)"
+          PUBLIC_SUBNET_ID="$(output network PublicSubnet1Id)"
+          API_ENDPOINT="$(output api ApiEndpoint)"
+
+          for name in LAMBDA_ARTIFACTS_BUCKET VPC_ID PUBLIC_SUBNET_ID API_ENDPOINT; do
+            value="${!name}"
+            if [[ -z "${value}" || "${value}" == "None" ]]; then
+              echo "::error::Missing required CloudFormation output: ${name}"
+              exit 1
+            fi
+            echo "${name}=${value}" >> "${GITHUB_ENV}"
+          done
+
+      - name: Build self-contained web application package
         shell: bash
         run: |
           set -euo pipefail
           WEB_DIR="${RUNNER_TEMP}/web-package"
-          rm -rf "${WEB_DIR}" && mkdir -p "${WEB_DIR}"
-          cp -r web "${WEB_DIR}/web"
-          cp web/requirements.txt "${WEB_DIR}/requirements.txt"
+          ZIP_FILE="${RUNNER_TEMP}/medislot-web.zip"
+          rm -rf "${WEB_DIR}" "${ZIP_FILE}"
+          mkdir -p "${WEB_DIR}/web" "${WEB_DIR}/vendor"
+
+          cp -R web/. "${WEB_DIR}/web/"
           printf 'from web.app import create_app\napp = create_app()\n' > "${WEB_DIR}/app.py"
+
+          # Install dependencies into the artifact on GitHub's runner.
+          # EC2 no longer runs pip/dnf during every deployment.
+          python -m pip install --disable-pip-version-check --no-cache-dir \
+            --target "${WEB_DIR}/vendor" \
+            -r web/requirements.txt
+
           find "${WEB_DIR}" -name '__pycache__' -type d -prune -exec rm -rf {} +
-          ( cd "${WEB_DIR}" && zip -qr "${RUNNER_TEMP}/medislot-web.zip" . )
+          find "${WEB_DIR}" -name '*.pyc' -delete
+          (cd "${WEB_DIR}" && zip -qr "${ZIP_FILE}" .)
+          test -s "${ZIP_FILE}"
+          echo "Prepared web package size: $(du -h "${ZIP_FILE}" | cut -f1)"
+
           WEB_KEY="web/${ENVIRONMENT_NAME}/${GITHUB_SHA}/medislot-web.zip"
-          aws s3 cp "${RUNNER_TEMP}/medislot-web.zip" "s3://${LAMBDA_ARTIFACTS_BUCKET}/${WEB_KEY}" --region "${AWS_REGION}"
+          aws s3 cp "${ZIP_FILE}" "s3://${LAMBDA_ARTIFACTS_BUCKET}/${WEB_KEY}" \
+            --region "${AWS_REGION}"
           echo "WEB_PACKAGE_KEY=${WEB_KEY}" >> "${GITHUB_ENV}"
 
-      - name: Deploy Web Stack
+      - name: Deploy Web CloudFormation Stack
         shell: bash
         run: |
           set -euo pipefail
-          NET="${PROJECT_NAME}-${ENVIRONMENT_NAME}-network"
-          net_output() {
-            aws cloudformation describe-stacks --stack-name "${NET}" \
-              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" --output text --region "${AWS_REGION}"
-          }
-          API_ENDPOINT="$(aws cloudformation describe-stacks \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-api" \
-            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
+          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-web"
           aws cloudformation deploy \
             --template-file infrastructure/cloudformation/web.yaml \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web" \
-            --capabilities CAPABILITY_NAMED_IAM \
+            --stack-name "${STACK_NAME}" \
             --parameter-overrides \
               "ProjectName=${PROJECT_NAME}" \
               "EnvironmentName=${ENVIRONMENT_NAME}" \
-              "VpcId=$(net_output VpcId)" \
-              "PublicSubnetId=$(net_output PublicSubnet1Id)" \
+              "VpcId=${VPC_ID}" \
+              "PublicSubnetId=${PUBLIC_SUBNET_ID}" \
               "ArtifactsBucketName=${LAMBDA_ARTIFACTS_BUCKET}" \
               "WebPackageKey=${WEB_PACKAGE_KEY}" \
               "ApiBaseUrl=${API_ENDPOINT}" \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
-          WEB_URL="$(aws cloudformation describe-stacks --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web" \
-            --query "Stacks[0].Outputs[?OutputKey=='WebUrl'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
+
+          WEB_URL="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" \
+            --query "Stacks[0].Outputs[?OutputKey=='WebUrl'].OutputValue | [0]" \
+            --output text --region "${AWS_REGION}")"
           echo "WEB_URL=${WEB_URL}" >> "${GITHUB_ENV}"
-          echo "Web application: ${WEB_URL} (allow about two minutes for the instance to boot)"
+          echo "Web application URL: ${WEB_URL}"
 
-      # ==========================================
-      # STEP 13F: The deployed website must answer (no manual checks or port changes needed)
-      # ==========================================
-      - name: Check the web application responds
+      - name: Verify web health and login pages
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 30); do
-            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${WEB_URL}/healthz" || true)"
-            if [[ "${code}" == "200" ]]; then break; fi
-            echo "Waiting for ${WEB_URL}/healthz (attempt ${attempt}, HTTP ${code})"
-            sleep 10
+          code=""
+          for attempt in $(seq 1 18); do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
+              "${WEB_URL}/healthz" || true)"
+            if [[ "${code}" == "200" ]]; then
+              break
+            fi
+            echo "Health check attempt ${attempt}/18 returned HTTP ${code:-no response}"
+            sleep 5
           done
+
           if [[ "${code}" != "200" ]]; then
-            echo "::error::The web application did not answer at ${WEB_URL}/healthz"
-            # Show why, so nobody has to log in to the instance to find out.
-            INSTANCE_ID="$(aws cloudformation describe-stacks --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web" \
-              --query "Stacks[0].Outputs[?OutputKey=='WebInstanceId'].OutputValue | [0]" --output text --region "${AWS_REGION}" || true)"
-            echo "Instance: ${INSTANCE_ID}"
-            aws ec2 describe-instances --instance-ids "${INSTANCE_ID}" --region "${AWS_REGION}" \
-              --query "Reservations[0].Instances[0].[State.Name,PublicIpAddress,LaunchTime]" --output text || true
-            echo "----- last lines of the instance console (cloud-init / bootstrap output) -----"
-            aws ec2 get-console-output --instance-id "${INSTANCE_ID}" --latest --region "${AWS_REGION}" --output text | tail -n 80 || true
+            STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-web"
+            INSTANCE_ID="$(aws cloudformation describe-stacks --stack-name "${STACK}" \
+              --query "Stacks[0].Outputs[?OutputKey=='WebInstanceId'].OutputValue | [0]" \
+              --output text --region "${AWS_REGION}" || true)"
+            echo "::error::Web health check failed. Instance: ${INSTANCE_ID}"
+            if [[ -n "${INSTANCE_ID}" && "${INSTANCE_ID}" != "None" ]]; then
+              aws ec2 get-console-output --instance-id "${INSTANCE_ID}" --latest \
+                --output text --region "${AWS_REGION}" | tail -n 100 || true
+            fi
             exit 1
           fi
+
           for portal in doctor patient; do
-            page="$(curl -sS --max-time 15 "${WEB_URL}/${portal}/login")"
-            grep -q 'name="csrf_token"' <<<"${page}" || { echo "::error::${portal} login page is missing its CSRF field"; exit 1; }
+            page="$(curl -fsS --max-time 15 "${WEB_URL}/${portal}/login")"
+            grep -q 'name="csrf_token"' <<<"${page}" || {
+              echo "::error::${portal} login page did not contain its CSRF field"
+              exit 1
+            }
           done
-          echo "Web application is up and both login pages render: ${WEB_URL}"
+          echo "Web health and doctor/patient login page checks passed."
 
-      # ==========================================
-      # STEP 14: Display API endpoint
-      # ==========================================
-      - name: Display API endpoint
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-api"
-
-          API_ENDPOINT="$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
-            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue | [0]" \
-            --output text \
-            --region "${AWS_REGION}")"
-
-          if [[ -z "${API_ENDPOINT}" || "${API_ENDPOINT}" == "None" ]]; then
-            echo "::error::ApiEndpoint output was not found."
-            exit 1
-          fi
-
-          echo "========================================"
-          echo "MediSlot API Deployment"
-          echo "========================================"
-          echo "Environment: ${ENVIRONMENT_NAME}"
-          echo "API endpoint: ${API_ENDPOINT}"
-          echo ""
-          echo "Base API endpoint: ${API_ENDPOINT}"
-          echo "Exact routes are defined by infrastructure/cloudformation/api.yaml."
-
-      # ==========================================
-      # STEP 15: Display deployment status
-      # ==========================================
-      - name: Deployment Summary
+      - name: Deployment summary
         if: always()
         shell: bash
         run: |
-          echo "========================================"
-          echo "MediSlot CloudFormation Deployment"
-          echo "========================================"
-
-          echo "Environment: ${ENVIRONMENT_NAME}"
-          echo "Region: ${AWS_REGION}"
-
+          echo "MediSlot deployment summary"
           for stack in network data dynamodb storage auth doctor api web; do
-            stack_name="${PROJECT_NAME}-${ENVIRONMENT_NAME}-${stack}"
-
-            echo ""
-            echo "Stack: ${stack_name}"
-
-            aws cloudformation describe-stacks \
-              --stack-name "${stack_name}" \
-              --query "Stacks[0].StackStatus" \
-              --output text \
-              --region "${AWS_REGION}" 2>/dev/null \
-              || echo "Stack does not exist or could not be described."
+            name="${PROJECT_NAME}-${ENVIRONMENT_NAME}-${stack}"
+            status="$(aws cloudformation describe-stacks --stack-name "${name}" \
+              --query 'Stacks[0].StackStatus' --output text --region "${AWS_REGION}" 2>/dev/null || true)"
+            echo "${name}: ${status:-NOT_FOUND}"
           done

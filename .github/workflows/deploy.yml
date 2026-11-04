@@ -963,7 +963,7 @@ jobs:
               "ArtifactsBucketName=${LAMBDA_ARTIFACTS_BUCKET}" \
               "WebPackageKey=${WEB_PACKAGE_KEY}" \
               "ApiBaseUrl=${API_ENDPOINT}" \
-            --capabilities CAPABILITY_IAM \
+            --capabilities CAPABILITY_NAMED_IAM \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
 

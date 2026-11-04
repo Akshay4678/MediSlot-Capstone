@@ -879,12 +879,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Build dependencies on the runner, not on EC2. Amazon Linux 2023 uses
-      # Python 3.9 by default; build a compatible vendor directory here.
-      - name: Set up Python 3.9 for EC2-compatible package
+      # Build dependencies on the runner, not on EC2. The requirements are
+      # pure-Python packages compatible with the EC2 Python 3.9 runtime.
+      # Python 3.12 is available on the current GitHub-hosted runner image.
+      - name: Set up Python 3.12 for web package build
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.12'
           cache: pip
           cache-dependency-path: web/requirements.txt
 

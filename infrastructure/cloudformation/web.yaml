@@ -157,13 +157,13 @@ Resources:
                 --unique-id "$(hostname)-$(date +%s)" \
                 --status "$result" \
                 --region "$REGION"; then
-                echo "CloudFormation ${result} signal sent."
+                echo "CloudFormation ${!result} signal sent."
                 return 0
               fi
               echo "CloudFormation signal attempt ${!attempt}/5 failed; retrying."
               sleep 3
             done
-            echo "ERROR: Could not send CloudFormation ${result} signal."
+            echo "ERROR: Could not send CloudFormation ${!result} signal."
             return 1
           }
           on_error() {

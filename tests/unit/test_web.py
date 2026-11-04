@@ -96,7 +96,17 @@ def client(api):
 def page_token(client, path="/patient/register"):
     """The CSRF token the browser would get from a form page (register pages never redirect)."""
     html = client.get(path).get_data(as_text=True)
-    return re.search(r'name="csrf_token" value="([^"]+)"', html).group(1)
+    match = re.search(
+        r'<input\\b(?=[^>]*\\bname=["\\']csrf_token["\\'])'
+        r'(?=[^>]*\\bvalue=["\\']([^"\\']+)["\\'])[^>]*>',
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None, (
+        "CSRF input was not found in the rendered HTML. "
+        f"HTML begins with: {html[:500]!r}"
+    )
+    return match.group(1)
 
 
 def login(client, role, email="a@b.co"):
@@ -106,7 +116,17 @@ def login(client, role, email="a@b.co"):
 
 def csrf(client):
     html = client.get("/doctor/profile").get_data(as_text=True)
-    return re.search(r'name="csrf_token" value="([^"]+)"', html).group(1)
+    match = re.search(
+        r'<input\\b(?=[^>]*\\bname=["\\']csrf_token["\\'])'
+        r'(?=[^>]*\\bvalue=["\\']([^"\\']+)["\\'])[^>]*>',
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None, (
+        "CSRF input was not found in the rendered HTML. "
+        f"HTML begins with: {html[:500]!r}"
+    )
+    return match.group(1)
 
 
 def test_landing_offers_both_roles(client):

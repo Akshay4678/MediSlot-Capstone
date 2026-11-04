@@ -1033,14 +1033,21 @@ jobs:
                   self.in_form = False
 
               def handle_starttag(self, tag, attrs):
-                  attrs = dict(attrs)
-                  if tag == "form":
-                      self.in_form = True
-                      if attrs.get("method", "").lower() == "post":
-                          self.has_login_form = True
-                  elif tag == "input" and self.in_form:
-                      if attrs.get("name") == "csrf_token" and attrs.get("type", "").lower() == "hidden":
-                          self.has_csrf = True
+                attrs = dict(attrs)
+
+                if tag == "form":
+                    self.in_form = True
+
+                    if attrs.get("method", "").lower() == "post":
+                        self.has_login_form = True
+
+                elif tag == "input" and self.in_form:
+                    if (
+                        attrs.get("name") == "csrf_token"
+                        and attrs.get("type", "").lower() == "hidden"
+                        and attrs.get("value", "").strip()
+                    ):
+                        self.has_csrf = True
 
               def handle_endtag(self, tag):
                   if tag == "form":

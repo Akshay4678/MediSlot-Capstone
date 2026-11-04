@@ -120,10 +120,19 @@ Resources:
     Properties:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
-      SubnetId: !Ref PublicSubnetId
-      SecurityGroupIds:
-        - !Ref WebSecurityGroup
       IamInstanceProfile: !Ref WebInstanceProfile
+      # IMPORTANT: changing UserData on an existing instance only stops and starts it, and the boot
+      # script never runs again. Changing NetworkInterfaces REPLACES the instance, so the description
+      # below carries the package key: every new application package gets a brand-new instance that
+      # runs the bootstrap from scratch (the old one is deleted only after the new one is healthy).
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+          SubnetId: !Ref PublicSubnetId
+          GroupSet:
+            - !Ref WebSecurityGroup
+          Description: !Sub 'MediSlot web ${WebPackageKey}'
       MetadataOptions:
         HttpTokens: required
       Tags:

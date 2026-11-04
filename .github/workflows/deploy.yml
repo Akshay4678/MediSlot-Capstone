@@ -925,7 +925,18 @@ jobs:
             echo "Waiting for ${WEB_URL}/healthz (attempt ${attempt}, HTTP ${code})"
             sleep 10
           done
-          [[ "${code}" == "200" ]] || { echo "::error::The web application did not answer at ${WEB_URL}/healthz"; exit 1; }
+          if [[ "${code}" != "200" ]]; then
+            echo "::error::The web application did not answer at ${WEB_URL}/healthz"
+            # Show why, so nobody has to log in to the instance to find out.
+            INSTANCE_ID="$(aws cloudformation describe-stacks --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-web" \
+              --query "Stacks[0].Outputs[?OutputKey=='WebInstanceId'].OutputValue | [0]" --output text --region "${AWS_REGION}" || true)"
+            echo "Instance: ${INSTANCE_ID}"
+            aws ec2 describe-instances --instance-ids "${INSTANCE_ID}" --region "${AWS_REGION}" \
+              --query "Reservations[0].Instances[0].[State.Name,PublicIpAddress,LaunchTime]" --output text || true
+            echo "----- last lines of the instance console (cloud-init / bootstrap output) -----"
+            aws ec2 get-console-output --instance-id "${INSTANCE_ID}" --latest --region "${AWS_REGION}" --output text | tail -n 80 || true
+            exit 1
+          fi
           for portal in doctor patient; do
             page="$(curl -sS --max-time 15 "${WEB_URL}/${portal}/login")"
             grep -q 'name="csrf_token"' <<<"${page}" || { echo "::error::${portal} login page is missing its CSRF field"; exit 1; }

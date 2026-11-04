@@ -11,6 +11,13 @@ the CloudFormation events of the `-web` stack, then on the instance (Session Man
     sudo journalctl -u medislot-web -n 80 --no-pager    # application errors
     curl -i http://localhost/healthz
 
+## Why every deployment gets a new web instance
+Changing `UserData` on an existing EC2 instance only stops and starts it; the boot script never runs again. So
+`web.yaml` puts the application package key into the instance's `NetworkInterfaces` description - a change there
+REPLACES the instance. Each pipeline run therefore creates a fresh instance, waits for it to answer `/healthz`
+(CreationPolicy + cfn-signal), and only then deletes the old one. The Elastic IP moves to the new instance, so the
+URL stays the same. If the pipeline's website check fails it prints the instance console output.
+
 ## Connecting to the instance
 * Preferred: EC2 console -> Connect -> **Session Manager** (works with no inbound rules).
 * EC2 Instance Connect works because of the port 22 rule above. If your region is not `ap-south-1`, set

@@ -58,7 +58,6 @@ def add_auth_routes(bp, role):
                     render_template(
                         "login.html",
                         role=role,
-                        csrf_value=sessions.csrf_token(),
                     ),
                     401 if exc.status == 401 else 200,
                 )
@@ -83,7 +82,6 @@ def add_auth_routes(bp, role):
         return render_template(
             "login.html",
             role=role,
-            csrf_value=sessions.csrf_token(),
         )
 
     @bp.route("/register", methods=["GET", "POST"], endpoint="register")
@@ -123,7 +121,6 @@ def add_auth_routes(bp, role):
                 return render_template(
                     "register.html",
                     role=role,
-                    csrf_value=sessions.csrf_token(),
                 )
 
             flash("Account created. Please sign in.", "success")
@@ -132,7 +129,6 @@ def add_auth_routes(bp, role):
         return render_template(
             "register.html",
             role=role,
-            csrf_value=sessions.csrf_token(),
         )
 
     @bp.route("/logout", methods=["POST"], endpoint="logout")

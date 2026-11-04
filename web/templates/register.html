@@ -1,20 +1,13 @@
 
 {% extends "base.html" %}
-
 {% block title %}{{ role|capitalize }} registration - MediSlot{% endblock %}
 
 {% block content %}
 <div class="card" style="max-width:520px;margin:2rem auto">
-
     <h2>Create a {{ role }} account</h2>
 
     <form method="post">
-
-        <input
-            type="hidden"
-            name="csrf_token"
-            value="{{ csrf_value }}"
-        >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
         {% if role == 'patient' %}
         <div class="row">
@@ -65,16 +58,12 @@
         </p>
         {% endif %}
 
-        <p>
-            <button type="submit">Create account</button>
-        </p>
-
+        <p><button type="submit">Create account</button></p>
     </form>
 
     <p class="small">
         Already registered?
         <a href="{{ url_for(role ~ '.login') }}">Sign in</a>
     </p>
-
 </div>
 {% endblock %}

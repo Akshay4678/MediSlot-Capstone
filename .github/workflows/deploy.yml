@@ -903,10 +903,9 @@ jobs:
           LAMBDA_ARTIFACTS_BUCKET="$(output data ArtifactsBucketName)"
           VPC_ID="$(output network VpcId)"
           PUBLIC_SUBNET_ID="$(output network PublicSubnet1Id)"
-          SSM_ENDPOINT_SECURITY_GROUP_ID="$(output network AwsServiceEndpointSecurityGroupId)"
           API_ENDPOINT="$(output api ApiEndpoint)"
 
-          for name in LAMBDA_ARTIFACTS_BUCKET VPC_ID PUBLIC_SUBNET_ID SSM_ENDPOINT_SECURITY_GROUP_ID API_ENDPOINT; do
+          for name in LAMBDA_ARTIFACTS_BUCKET VPC_ID PUBLIC_SUBNET_ID API_ENDPOINT; do
             value="${!name}"
             if [[ -z "${value}" || "${value}" == "None" ]]; then
               echo "::error::Missing required CloudFormation output: ${name}"
@@ -961,7 +960,6 @@ jobs:
               "EnvironmentName=${ENVIRONMENT_NAME}" \
               "VpcId=${VPC_ID}" \
               "PublicSubnetId=${PUBLIC_SUBNET_ID}" \
-              "SsmEndpointSecurityGroupId=${SSM_ENDPOINT_SECURITY_GROUP_ID}" \
               "ArtifactsBucketName=${LAMBDA_ARTIFACTS_BUCKET}" \
               "WebPackageKey=${WEB_PACKAGE_KEY}" \
               "ApiBaseUrl=${API_ENDPOINT}" \
@@ -979,6 +977,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           code=""
           for attempt in $(seq 1 18); do
             code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
@@ -1003,13 +1002,68 @@ jobs:
             exit 1
           fi
 
+          # Keep cookies: Flask creates the CSRF token in its signed session cookie.
           for portal in doctor patient; do
-            page="$(curl -fsS --max-time 15 "${WEB_URL}/${portal}/login")"
-            grep -q 'name="csrf_token"' <<<"${page}" || {
-              echo "::error::${portal} login page did not contain its CSRF field"
+            page_file="${RUNNER_TEMP}/${portal}-login.html"
+            cookie_file="${RUNNER_TEMP}/${portal}-cookies.txt"
+            headers_file="${RUNNER_TEMP}/${portal}-headers.txt"
+
+            status="$(curl -sS --max-time 20 \
+              -c "${cookie_file}" -b "${cookie_file}" \
+              -D "${headers_file}" -o "${page_file}" \
+              -w '%{http_code}' "${WEB_URL}/${portal}/login")"
+
+            if [[ "${status}" != "200" ]]; then
+              echo "::error::${portal} login page returned HTTP ${status}"
+              cat "${headers_file}" || true
+              head -c 1500 "${page_file}" || true
               exit 1
-            }
+            fi
+
+            # Parse HTML attributes rather than relying on exact quote/attribute formatting.
+            python - "${page_file}" "${portal}" <<'PY'
+          import sys
+          from html.parser import HTMLParser
+
+          class LoginFormParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.has_login_form = False
+                  self.has_csrf = False
+                  self.in_form = False
+
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  if tag == "form":
+                      self.in_form = True
+                      if attrs.get("method", "").lower() == "post":
+                          self.has_login_form = True
+                  elif tag == "input" and self.in_form:
+                      if attrs.get("name") == "csrf_token" and attrs.get("type", "").lower() == "hidden":
+                          self.has_csrf = True
+
+              def handle_endtag(self, tag):
+                  if tag == "form":
+                      self.in_form = False
+
+          path, portal = sys.argv[1], sys.argv[2]
+          with open(path, encoding="utf-8") as stream:
+              html = stream.read()
+
+          parser = LoginFormParser()
+          parser.feed(html)
+          if not parser.has_login_form:
+              print(f"::error::{portal} login page did not render a POST login form")
+              print(html[:1500])
+              raise SystemExit(1)
+          if not parser.has_csrf:
+              print(f"::error::{portal} login form is missing its hidden CSRF input")
+              print(html[:1500])
+              raise SystemExit(1)
+          print(f"{portal.capitalize()} login form and CSRF field verified.")
+          PY
           done
+
           echo "Web health and doctor/patient login page checks passed."
 
       - name: Deployment summary

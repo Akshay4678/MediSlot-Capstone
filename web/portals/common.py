@@ -34,7 +34,7 @@ def add_auth_routes(bp, role):
                     "email": request.form.get("email", "").strip(), "password": request.form.get("password", "")})
             except api_client.ApiError as exc:
                 flash(exc.message, "error")
-                return render_template("login.html", role=role), 401 if exc.status == 401 else 200
+                return render_template("login.html", role=role, csrf_value=sessions.csrf_token()), 401 if exc.status == 401 else 200
             data = sessions.create(tokens)
             if data["role"] != role:  # defensive: the API only issues a matching role
                 api_client.logout()
@@ -44,7 +44,7 @@ def add_auth_routes(bp, role):
         current = sessions.current()
         if current and current.get("role") == role:
             return redirect(url_for(f"{role}.home"))
-        return render_template("login.html", role=role)
+        return render_template("login.html", role=role, csrf_value=sessions.csrf_token())
 
     @bp.route("/register", methods=["GET", "POST"], endpoint="register")
     def register():

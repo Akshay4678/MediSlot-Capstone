@@ -14,12 +14,12 @@ def role_required(role):
     def decorator(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
-            session = sessions.current()
+            current = sessions.current()
 
-            if not session:
+            if not current:
                 return redirect(url_for(f"{role}.login"))
 
-            if session.get("role") != role:
+            if current.get("role") != role:
                 flash(
                     "That area is not available for your account type.",
                     "error",
@@ -119,15 +119,21 @@ def add_auth_routes(bp, role):
 
             except api_client.ApiError as exc:
                 flash(exc.message, "error")
+
                 return render_template(
                     "register.html",
                     role=role,
+                    csrf_value=sessions.csrf_token(),
                 )
 
             flash("Account created. Please sign in.", "success")
             return redirect(url_for(f"{role}.login"))
 
-        return render_template("register.html", role=role)
+        return render_template(
+            "register.html",
+            role=role,
+            csrf_value=sessions.csrf_token(),
+        )
 
     @bp.route("/logout", methods=["POST"], endpoint="logout")
     @role_required(role)

@@ -1,24 +1,80 @@
+
 {% extends "base.html" %}
+
 {% block title %}{{ role|capitalize }} registration - MediSlot{% endblock %}
+
 {% block content %}
 <div class="card" style="max-width:520px;margin:2rem auto">
-  <h2>Create a {{ role }} account</h2>
-  <form method="post">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    {% if role == 'patient' %}
-    <div class="row"><div><label for="first_name">First name</label><input id="first_name" name="first_name" required></div>
-    <div><label for="last_name">Last name</label><input id="last_name" name="last_name" required></div></div>
-    <label for="phone">Phone (optional)</label><input id="phone" name="phone">
-    {% endif %}
-    <label for="email">Email</label><input id="email" name="email" type="email" required>
-    <label for="password">Password</label><input id="password" name="password" type="password" minlength="10" required>
-    <p class="muted small">At least 10 characters with a letter and a digit.</p>
-    {% if role == 'doctor' %}
-    <label for="registration_code">Registration code (if your administrator gave you one)</label><input id="registration_code" name="registration_code" autocomplete="off">
-    <p class="muted small">After signing in you will complete your professional profile (licence, hospital, specialisation).</p>
-    {% endif %}
-    <p><button type="submit">Create account</button></p>
-  </form>
-  <p class="small">Already registered? <a href="{{ url_for(role ~ '.login') }}">Sign in</a></p>
+
+    <h2>Create a {{ role }} account</h2>
+
+    <form method="post">
+
+        <input
+            type="hidden"
+            name="csrf_token"
+            value="{{ csrf_value }}"
+        >
+
+        {% if role == 'patient' %}
+        <div class="row">
+            <div>
+                <label for="first_name">First name</label>
+                <input id="first_name" name="first_name" required>
+            </div>
+
+            <div>
+                <label for="last_name">Last name</label>
+                <input id="last_name" name="last_name" required>
+            </div>
+        </div>
+
+        <label for="phone">Phone (optional)</label>
+        <input id="phone" name="phone">
+        {% endif %}
+
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" required>
+
+        <label for="password">Password</label>
+        <input
+            id="password"
+            name="password"
+            type="password"
+            minlength="10"
+            required
+        >
+
+        <p class="muted small">
+            At least 10 characters with a letter and a digit.
+        </p>
+
+        {% if role == 'doctor' %}
+        <label for="registration_code">
+            Registration code (if your administrator gave you one)
+        </label>
+        <input
+            id="registration_code"
+            name="registration_code"
+            autocomplete="off"
+        >
+
+        <p class="muted small">
+            After signing in you will complete your professional profile
+            (licence, hospital, specialisation).
+        </p>
+        {% endif %}
+
+        <p>
+            <button type="submit">Create account</button>
+        </p>
+
+    </form>
+
+    <p class="small">
+        Already registered?
+        <a href="{{ url_for(role ~ '.login') }}">Sign in</a>
+    </p>
+
 </div>
 {% endblock %}

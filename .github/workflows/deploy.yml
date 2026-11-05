@@ -904,8 +904,9 @@ jobs:
           VPC_ID="$(output network VpcId)"
           PUBLIC_SUBNET_ID="$(output network PublicSubnet1Id)"
           API_ENDPOINT="$(output api ApiEndpoint)"
+          SSM_ENDPOINT_SG_ID="$(output network AwsServiceEndpointSecurityGroupId)"
 
-          for name in LAMBDA_ARTIFACTS_BUCKET VPC_ID PUBLIC_SUBNET_ID API_ENDPOINT; do
+          for name in LAMBDA_ARTIFACTS_BUCKET VPC_ID PUBLIC_SUBNET_ID API_ENDPOINT SSM_ENDPOINT_SG_ID; do
             value="${!name}"
             if [[ -z "${value}" || "${value}" == "None" ]]; then
               echo "::error::Missing required CloudFormation output: ${name}"
@@ -963,6 +964,7 @@ jobs:
               "ArtifactsBucketName=${LAMBDA_ARTIFACTS_BUCKET}" \
               "WebPackageKey=${WEB_PACKAGE_KEY}" \
               "ApiBaseUrl=${API_ENDPOINT}" \
+              "SsmEndpointSecurityGroupId=${SSM_ENDPOINT_SG_ID}" \
             --capabilities CAPABILITY_NAMED_IAM \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
@@ -972,6 +974,7 @@ jobs:
             --output text --region "${AWS_REGION}")"
           echo "WEB_URL=${WEB_URL}" >> "${GITHUB_ENV}"
           echo "Web application URL: ${WEB_URL}"
+          echo "Deployed web package: ${WEB_PACKAGE_KEY}"
 
       - name: Verify web health and login pages
         shell: bash
@@ -979,13 +982,13 @@ jobs:
           set -euo pipefail
 
           code=""
-          for attempt in $(seq 1 18); do
+          for attempt in $(seq 1 60); do
             code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
               "${WEB_URL}/healthz" || true)"
             if [[ "${code}" == "200" ]]; then
               break
             fi
-            echo "Health check attempt ${attempt}/18 returned HTTP ${code:-no response}"
+            echo "Health check attempt ${attempt}/60 returned HTTP ${code:-no response}"
             sleep 5
           done
 

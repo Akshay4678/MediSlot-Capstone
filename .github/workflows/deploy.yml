@@ -948,6 +948,28 @@ jobs:
             --region "${AWS_REGION}"
           echo "WEB_PACKAGE_KEY=${WEB_KEY}" >> "${GITHUB_ENV}"
 
+      # A stack whose first creation failed sits in ROLLBACK_COMPLETE and cannot be updated.
+      # It holds no live resources, so print why it failed, delete it and let the deploy recreate it.
+      - name: Clear a failed web stack (ROLLBACK_COMPLETE only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-web"
+
+          STATUS="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" \
+            --query 'Stacks[0].StackStatus' --output text --region "${AWS_REGION}" 2>/dev/null || echo NOT_FOUND)"
+          echo "Web stack status: ${STATUS}"
+
+          if [[ "${STATUS}" == "ROLLBACK_COMPLETE" ]]; then
+            echo "Why the earlier creation failed:"
+            aws cloudformation describe-stack-events --stack-name "${STACK_NAME}" \
+              --query "StackEvents[?contains(ResourceStatus,'FAILED')].[LogicalResourceId,ResourceStatusReason]" \
+              --output text --region "${AWS_REGION}" || true
+            aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
+            aws cloudformation wait stack-delete-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
+            echo "Deleted ${STACK_NAME}; it will be created fresh."
+          fi
+
       - name: Deploy Web CloudFormation Stack
         shell: bash
         run: |
@@ -1067,10 +1089,10 @@ jobs:
               print(html[:1500])
               raise SystemExit(1)
           if not parser.has_csrf:
-              print(f"::warning::{portal} login form is missing its hidden CSRF input")
-              print("CSRF HTML assertion is being ignored for this deployment.")
-          else:
-              print(f"{portal.capitalize()} login form and CSRF field verified.")
+              print(f"::error::{portal} login form is missing its hidden CSRF input")
+              print(html[:1500])
+              raise SystemExit(1)
+          print(f"{portal.capitalize()} login form and CSRF field verified.")
           PY
           done
 

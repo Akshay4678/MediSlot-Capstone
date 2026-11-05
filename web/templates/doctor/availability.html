@@ -5,9 +5,12 @@
 <p class="muted">Times are in your home timezone (<strong>{{ timezone }}</strong>). Slots are created for the next 30 days from these weekly hours.</p>
 <div class="card">
   {% if not types %}<p class="muted">Add a <a href="{{ url_for('doctor.types') }}">consultation type</a> first.</p>{% endif %}
-  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="row_count" value="{{ rows|length }}">
+  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" id="row_count" name="row_count" value="{{ rows|length }}">
     <table>
-      <tr><th>Day</th><th>Consultation type</th><th>From</th><th>To</th><th>Seats</th><th>Remove</th></tr>
+      <thead>
+        <tr><th>Day</th><th>Consultation type</th><th>From</th><th>To</th><th>Seats</th><th>Remove</th><th></th></tr>
+      </thead>
+      <tbody id="rows">
       {% for r in rows %}{% set i = loop.index0 %}
       <tr>
         <td><input type="hidden" name="p{{ i }}_id" value="{{ r.availability_id or '' }}">
@@ -17,10 +20,82 @@
         <td><input name="p{{ i }}_end" type="time" value="{{ r.end_time }}"></td>
         <td><input name="p{{ i }}_capacity" type="number" min="1" max="10" value="{{ r.capacity }}" style="max-width:80px"></td>
         <td>{% if r.availability_id %}<input type="checkbox" name="p{{ i }}_remove" style="width:auto">{% endif %}</td>
+        <td class="nowrap">
+          <button type="button" class="secondary" data-action="dup" title="Copy this row so you can change the day or time">Duplicate</button>
+          {% if not r.availability_id %}<button type="button" class="secondary" data-action="del" title="Delete this unsaved row">&times;</button>{% endif %}
+        </td>
       </tr>{% endfor %}
+      </tbody>
     </table>
-    <p class="muted small">Seats above 1 are only allowed for Health Camp Sessions (2 to 10). Leave unused rows empty.</p>
+
+    <p class="actions">
+      <button type="button" class="secondary" id="add-row">+ Add row</button>
+    </p>
+    <p class="muted small">Each row is one time block on one day, so the same day can appear in several rows (for example, different consultation types at different times). Use Duplicate to copy a row, then change its day. Seats above 1 are only allowed for Health Camp Sessions (2 to 10). Leave unused rows empty.</p>
     <p><button type="submit">Save availability</button></p>
   </form>
 </div>
+
+<template id="row-tpl">
+  <tr>
+    <td><input type="hidden" name="p__I___id" value="">
+      <select name="p__I___day"><option value=""></option>{% for n, name in days %}<option value="{{ n }}">{{ name }}</option>{% endfor %}</select></td>
+    <td><select name="p__I___type"><option value=""></option>{% for t in types %}<option value="{{ t.consultation_type_id }}">{{ t.type_name }}</option>{% endfor %}</select></td>
+    <td><input name="p__I___start" type="time" value=""></td>
+    <td><input name="p__I___end" type="time" value=""></td>
+    <td><input name="p__I___capacity" type="number" min="1" max="10" value="1" style="max-width:80px"></td>
+    <td></td>
+    <td class="nowrap">
+      <button type="button" class="secondary" data-action="dup" title="Copy this row so you can change the day or time">Duplicate</button>
+      <button type="button" class="secondary" data-action="del" title="Delete this unsaved row">&times;</button>
+    </td>
+  </tr>
+</template>
+
+<script>
+(function () {
+  var body = document.getElementById('rows');
+  var tpl = document.getElementById('row-tpl');
+  var count = document.getElementById('row_count');
+  var next = parseInt(count.value, 10) || 0;
+  var fields = ['day', 'type', 'start', 'end', 'capacity'];
+
+  function field(row, name) {
+    return row.querySelector('[name$="_' + name + '"]');
+  }
+
+  function addRow(source) {
+    var holder = document.createElement('tbody');
+    holder.innerHTML = tpl.innerHTML.replace(/__I__/g, String(next)).trim();
+    var row = holder.firstElementChild;
+    if (source) {
+      fields.forEach(function (name) {
+        field(row, name).value = field(source, name).value;
+      });
+      source.parentNode.insertBefore(row, source.nextSibling);
+    } else {
+      body.appendChild(row);
+    }
+    next += 1;
+    // row_count is the highest index + 1; gaps left by deleted rows are skipped by the server.
+    count.value = String(next);
+    return row;
+  }
+
+  document.getElementById('add-row').addEventListener('click', function () {
+    addRow(null);
+  });
+
+  body.addEventListener('click', function (event) {
+    var button = event.target.closest('button[data-action]');
+    if (!button) { return; }
+    var row = button.closest('tr');
+    if (button.getAttribute('data-action') === 'dup') {
+      addRow(row);
+    } else if (button.getAttribute('data-action') === 'del') {
+      row.parentNode.removeChild(row);
+    }
+  });
+})();
+</script>
 {% endblock %}

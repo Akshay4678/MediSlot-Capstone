@@ -450,166 +450,124 @@ Availability - MediSlot
 
   function updateSlots(row) {
 
-    var select =
-      row.querySelector(
-        "[data-type-select]"
-      );
+  var select =
+    row.querySelector(
+      "[data-type-select]"
+    );
 
-    var start =
-      row.querySelector(
-        "[data-time-start]"
-      );
+  var start =
+    row.querySelector(
+      "[data-time-start]"
+    );
 
-    var end =
-      row.querySelector(
-        "[data-time-end]"
-      );
+  var end =
+    row.querySelector(
+      "[data-time-end]"
+    );
 
-    var preview =
-      row.querySelector(
-        "[data-slot-preview]"
-      );
-
-
-    if (
-      !select ||
-      !start ||
-      !end ||
-      !preview
-    ) {
-      return;
-    }
+  var preview =
+    row.querySelector(
+      "[data-slot-preview]"
+    );
 
 
-    var option =
-      select.options[
-        select.selectedIndex
-      ];
+  if (
+    !select ||
+    !start ||
+    !end ||
+    !preview
+  ) {
+    return;
+  }
 
 
-    var duration =
-      option
-        ? parseInt(
-            option.getAttribute(
-              "data-duration"
-            ) || "0",
-            10
-          )
-        : 0;
+  var option =
+    select.options[
+      select.selectedIndex
+    ];
 
 
-    var startMinutes =
-      minutes(start.value);
-
-    var endMinutes =
-      minutes(end.value);
-
-
-    /*
-     * Missing information.
-     */
-
-    if (
-      !duration ||
-      startMinutes === null ||
-      endMinutes === null
-    ) {
-
-      preview.innerHTML =
-        '<span class="muted small">' +
-        'Select time and consultation type' +
-        '</span>';
-
-      return;
-
-    }
+  var duration =
+    option
+      ? parseInt(
+          option.getAttribute(
+            "data-duration"
+          ) || "0",
+          10
+        )
+      : 0;
 
 
-    /*
-     * Invalid time range.
-     */
+  var startMinutes =
+    minutes(start.value);
 
-    if (endMinutes <= startMinutes) {
-
-      preview.innerHTML =
-        '<span class="muted small">' +
-        'End time must be after start time' +
-        '</span>';
-
-      return;
-
-    }
+  var endMinutes =
+    minutes(end.value);
 
 
-    /*
-     * Generate complete slots only.
-     */
+  /*
+   * Missing information.
+   */
 
-    var totalMinutes =
-      endMinutes - startMinutes;
-
-    var slotCount =
-      Math.floor(
-        totalMinutes / duration
-      );
-
-
-    if (slotCount <= 0) {
-
-      preview.innerHTML =
-        '<span class="muted small">' +
-        'No complete slots' +
-        '</span>';
-
-      return;
-
-    }
-
-
-    var html = "";
-
-
-    /*
-     * Generate every appointment slot.
-     */
-
-    for (
-      var i = 0;
-      i < slotCount;
-      i++
-    ) {
-
-      var slotStart =
-        startMinutes +
-        (i * duration);
-
-      var slotEnd =
-        slotStart +
-        duration;
-
-
-      html +=
-        '<div class="generated-slot">' +
-          formatTime(slotStart) +
-          ' - ' +
-          formatTime(slotEnd) +
-        '</div>';
-
-    }
-
+  if (
+    !duration ||
+    startMinutes === null ||
+    endMinutes === null
+  ) {
 
     preview.innerHTML =
-      '<strong>' +
-      slotCount +
-      ' slot' +
-      (slotCount === 1 ? '' : 's') +
-      '</strong>' +
-      '<div class="slot-list">' +
-      html +
-      '</div>';
+      '<span class="muted small">' +
+      '—' +
+      '</span>';
+
+    return;
 
   }
 
+
+  /*
+   * Invalid time range.
+   */
+
+  if (endMinutes <= startMinutes) {
+
+    preview.innerHTML =
+      '<span class="muted small">' +
+      'Invalid time' +
+      '</span>';
+
+    return;
+
+  }
+
+
+  /*
+   * Calculate the number of
+   * complete appointment slots.
+   */
+
+  var totalMinutes =
+    endMinutes - startMinutes;
+
+  var slotCount =
+    Math.floor(
+      totalMinutes / duration
+    );
+
+
+  /*
+   * Display only the number
+   * of generated slots.
+   */
+
+  preview.innerHTML =
+    '<strong>' +
+    slotCount +
+    ' slot' +
+    (slotCount === 1 ? '' : 's') +
+    '</strong>';
+
+}
 
   /*
    * Attach listeners to a row.

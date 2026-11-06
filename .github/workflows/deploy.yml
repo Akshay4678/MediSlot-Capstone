@@ -284,6 +284,44 @@ jobs:
 
 
       # ==========================================
+      # STEP 8: Milestone 4 notification infrastructure
+      # ==========================================
+      - name: Deploy Notification SNS and SQS Stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/sns.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-sns" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              "ProjectName=${PROJECT_NAME}" \
+              "EnvironmentName=${ENVIRONMENT_NAME}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
+
+          NOTIFICATION_TOPIC_ARN="$(aws cloudformation describe-stacks \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-sns" \
+            --query "Stacks[0].Outputs[?OutputKey=='NotificationTopicArn'].OutputValue | [0]" \
+            --output text \
+            --region "${AWS_REGION}")"
+          echo "NOTIFICATION_TOPIC_ARN=${NOTIFICATION_TOPIC_ARN}" >> "${GITHUB_ENV}"
+
+      - name: Deploy EventBridge Notification Rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/eventbridge.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-eventbridge" \
+            --parameter-overrides \
+              "ProjectName=${PROJECT_NAME}" \
+              "EnvironmentName=${ENVIRONMENT_NAME}" \
+              "NotificationTopicArn=${NOTIFICATION_TOPIC_ARN}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
+
+      # ==========================================
       # STEP 8A: Deploy Authentication DynamoDB Tables
       # ==========================================
       - name: Deploy Authentication DynamoDB Tables
@@ -374,6 +412,12 @@ jobs:
             --output text \
             --region "${AWS_REGION}")"
 
+          HOLD_OFFERS_TABLE_NAME="$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_NAME}" \
+            --query "Stacks[0].Outputs[?OutputKey=='HoldOffersTableName'].OutputValue | [0]" \
+            --output text \
+            --region "${AWS_REGION}")"
+
           # Read authentication state table names from the DynamoDB stack.
           AUTH_DDB_STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-dynamodb"
 
@@ -389,7 +433,7 @@ jobs:
             --output text \
             --region "${AWS_REGION}")"
 
-          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME; do
+          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME HOLD_OFFERS_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME; do
             value="${!name}"
             if [[ -z "${value}" || "${value}" == "None" ]]; then
               echo "::error::Required Data Stack output '${name}' is missing from ${STACK_NAME}."
@@ -406,6 +450,7 @@ jobs:
             echo "SLOT_CAPACITY_TABLE_NAME=${SLOT_CAPACITY_TABLE_NAME}"
             echo "WAITLIST_TABLE_NAME=${WAITLIST_TABLE_NAME}"
             echo "NOTIFICATION_DISPATCH_TABLE_NAME=${NOTIFICATION_DISPATCH_TABLE_NAME}"
+            echo "HOLD_OFFERS_TABLE_NAME=${HOLD_OFFERS_TABLE_NAME}"
             echo "REFRESH_TOKEN_TABLE_NAME=${REFRESH_TOKEN_TABLE_NAME}"
             echo "TOKEN_ACTIVELIST_TABLE_NAME=${TOKEN_ACTIVELIST_TABLE_NAME}"
           } >> "${GITHUB_ENV}"
@@ -491,6 +536,14 @@ jobs:
           put_if_missing "${P}/rules/health-camp-max-capacity" 10
           put_if_missing "${P}/rules/booking-window-days" 30
           put_if_missing "${P}/rules/photo-max-bytes" 5242880
+          put_if_missing "${P}/rules/idempotency-ttl-hours" 24
+          put_if_missing "${P}/rules/waitlist-max-size" 5
+          put_if_missing "${P}/rules/hold-offer-minutes" 15
+          put_if_missing "${P}/rules/max-reschedules" 2
+          put_if_missing "${P}/rules/min-reschedule-hours" 6
+          put_if_missing "${P}/rules/refund-full-hours" 48
+          put_if_missing "${P}/rules/refund-75-hours" 24
+          put_if_missing "${P}/rules/refund-50-hours" 6
           if ! aws ssm get-parameter --name "${P}/web/flask-secret-key" --region "${AWS_REGION}" >/dev/null 2>&1; then
             aws ssm put-parameter --name "${P}/web/flask-secret-key" --type SecureString \
               --value "$(openssl rand -hex 32)" --region "${AWS_REGION}" >/dev/null
@@ -598,6 +651,33 @@ jobs:
               "DatabaseHost=${DB_HOST}" \
               "DatabaseName=${DB_NAME}" \
               "PhotoBucketName=${PHOTO_BUCKET}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
+
+      # ==========================================
+      # STEP 12C: Patient domain stack (Milestone 4)
+      # ==========================================
+      - name: Deploy Patient Domain Stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/patient.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-patient" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              "ProjectName=${PROJECT_NAME}" \
+              "EnvironmentName=${ENVIRONMENT_NAME}" \
+              "LambdaCodeS3Bucket=${LAMBDA_CODE_S3_BUCKET}" \
+              "LambdaCodeS3Key=${LAMBDA_CODE_S3_KEY}" \
+              "LambdaSubnetIds=${LAMBDA_SUBNET_1_ID},${LAMBDA_SUBNET_2_ID}" \
+              "LambdaSecurityGroupId=${LAMBDA_SECURITY_GROUP_ID}" \
+              "DatabaseSecretArn=${DB_SECRET_ARN}" \
+              "DatabaseHost=${DB_HOST}" \
+              "DatabaseName=${DB_NAME}" \
+              "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
+              "WaitlistTableName=${WAITLIST_TABLE_NAME}" \
+              "HoldOffersTableName=${HOLD_OFFERS_TABLE_NAME}" \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
 

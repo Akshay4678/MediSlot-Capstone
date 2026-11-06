@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Available slots - MediSlot{% endblock %}
+{% block content %}
+<h1>Available slots</h1>
+<p class="muted">Doctor timezone: <strong>{{ data.timezone }}</strong></p>
+
+<div class="card">
+  <form method="get" class="form-grid">
+    <label>Date
+      <input type="date" name="date" value="{{ date }}">
+    </label>
+    <div class="actions"><button type="submit">Show slots</button></div>
+  </form>
+</div>
+
+<div class="card">
+  {% if data.slots %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Consultation</th><th>Time</th><th>Fee</th><th>Seats</th><th>Action</th></tr></thead>
+        <tbody>
+        {% for s in data.slots %}
+          <tr>
+            <td>{{ s.type_name }} ({{ s.duration_minutes }} min)</td>
+            <td>{{ s.start_time }} - {{ s.end_time }}</td>
+            <td>₹{{ s.fee }}</td>
+            <td>{{ s.available_seats }}</td>
+            <td>
+              <form method="post" action="{{ url_for('patient.book') }}" class="inline-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="doctor_id" value="{{ doctor_id }}">
+                <input type="hidden" name="consultation_type_id" value="{{ s.consultation_type_id }}">
+                <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
+                <button type="submit">Book</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No open slots for this date.</p>
+  {% endif %}
+</div>
+{% endblock %}

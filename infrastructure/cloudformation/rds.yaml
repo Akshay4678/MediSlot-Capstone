@@ -304,6 +304,45 @@ Resources:
           Value: !Ref EnvironmentName
 
   # ----------------------------------------------------------
+  # DYNAMODB: WAITLIST HOLD OFFERS
+  # ----------------------------------------------------------
+
+  HoldOffersTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+
+      AttributeDefinitions:
+        - AttributeName: offer_id
+          AttributeType: S
+
+      KeySchema:
+        - AttributeName: offer_id
+          KeyType: HASH
+
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
+      SSESpecification:
+        SSEEnabled: true
+
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If
+          - IsProd
+          - true
+          - false
+
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ----------------------------------------------------------
   # DYNAMODB: NOTIFICATION DISPATCH
   # ----------------------------------------------------------
 
@@ -463,6 +502,18 @@ Outputs:
     Value: !Ref NotificationDispatchTable
     Export:
       Name: !Sub '${ProjectName}-${EnvironmentName}-NotificationDispatchTableName'
+
+  NotificationDispatchTableArn:
+    Description: DynamoDB notification dispatch table ARN.
+    Value: !GetAtt NotificationDispatchTable.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-NotificationDispatchTableArn'
+
+  HoldOffersTableName:
+    Description: DynamoDB waitlist hold-offer table name.
+    Value: !Ref HoldOffersTable
+    Export:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-HoldOffersTableName'
 
   ArtifactsBucketName:
     Description: Private S3 artifacts bucket name.

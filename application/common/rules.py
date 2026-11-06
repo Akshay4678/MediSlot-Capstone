@@ -2,7 +2,10 @@
 
 Parameter names (under $SSM_PREFIX): rules/quick-consult-minutes, rules/standard-consult-minutes,
 rules/detailed-consult-minutes, rules/health-camp-minutes, rules/health-camp-min-capacity,
-rules/health-camp-max-capacity, rules/booking-window-days, rules/photo-max-bytes.
+rules/health-camp-max-capacity, rules/booking-window-days, rules/photo-max-bytes,
+rules/idempotency-ttl-hours, rules/waitlist-max-size, rules/hold-offer-minutes,
+rules/max-reschedules, rules/min-reschedule-hours, rules/refund-full-hours,
+rules/refund-75-hours, rules/refund-50-hours.
 The numbers below are only fallbacks used when a parameter is missing (a warning is logged).
 """
 
@@ -45,3 +48,31 @@ def booking_window_days():
 
 def photo_max_bytes():
     return config.get_int("rules/photo-max-bytes", 5 * 1024 * 1024)
+
+
+def idempotency_ttl_hours():
+    return max(1, config.get_int("rules/idempotency-ttl-hours", 24))
+
+
+def waitlist_max_size():
+    return max(1, config.get_int("rules/waitlist-max-size", 5))
+
+
+def hold_offer_minutes():
+    return max(1, config.get_int("rules/hold-offer-minutes", 15))
+
+
+def max_reschedules():
+    return max(0, config.get_int("rules/max-reschedules", 2))
+
+
+def min_reschedule_hours():
+    return max(0, config.get_int("rules/min-reschedule-hours", 6))
+
+
+def refund_bands():
+    return (
+        config.get_int("rules/refund-full-hours", 48),
+        config.get_int("rules/refund-75-hours", 24),
+        config.get_int("rules/refund-50-hours", 6),
+    )

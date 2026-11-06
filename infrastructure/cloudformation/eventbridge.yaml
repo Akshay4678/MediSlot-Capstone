@@ -1,1 +1,46 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MediSlot Milestone 4 EventBridge rules for appointment and reminder notifications.
 
+Parameters:
+  ProjectName:
+    Type: String
+    Default: medislot
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  NotificationTopicArn:
+    Type: String
+
+Resources:
+  AppointmentNotificationRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-appointment-notifications'
+      EventPattern:
+        source:
+          - medislot.appointments
+        detail-type:
+          - AppointmentCreated
+          - AppointmentCancelled
+          - AppointmentRescheduled
+          - SlotSeatFreed
+          - WaitlistHoldOffered
+      State: ENABLED
+      Targets:
+        - Id: NotificationTopic
+          Arn: !Ref NotificationTopicArn
+
+  ReminderNotificationRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-reminder-notifications'
+      EventPattern:
+        source:
+          - medislot.notifications
+        detail-type:
+          - ReminderDue
+      State: ENABLED
+      Targets:
+        - Id: NotificationTopic
+          Arn: !Ref NotificationTopicArn

@@ -1,6 +1,79 @@
 {% extends "base.html" %}
+{% block title %}Patient - MediSlot{% endblock %}
 {% block content %}
 <h1>Patient portal</h1>
-<div class="card"><h2>You are signed in</h2>
-<p class="muted">Doctor search, slot browsing, booking, waitlists and refunds are added in the next milestones.</p></div>
+
+<div class="card">
+  <h2>Find a doctor</h2>
+  <form method="get" action="{{ url_for('patient.home') }}" class="form-grid">
+    <label>Doctor or hospital
+      <input name="search" value="{{ search }}" placeholder="Search">
+    </label>
+    <label>City
+      <input name="city" value="{{ city }}" placeholder="Hyderabad">
+    </label>
+    <label>Specialisation
+      <input name="specialisation" value="{{ specialisation }}" placeholder="Cardiology">
+    </label>
+    <div class="actions">
+      <button type="submit">Search</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Doctors</h2>
+  {% if doctors %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Doctor</th><th>Specialisation</th><th>Hospital</th><th>Experience</th><th></th></tr></thead>
+        <tbody>
+        {% for d in doctors %}
+          <tr>
+            <td>Dr. {{ d.first_name }} {{ d.last_name }}</td>
+            <td>{{ d.specialisation }}</td>
+            <td>{{ d.hospital_name }}, {{ d.city }}</td>
+            <td>{{ d.experience_years }} years</td>
+            <td><a class="button-link" href="{{ url_for('patient.slots', doctor_id=d.doctor_id) }}">View slots</a></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No active doctors matched your search.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>My appointments</h2>
+  {% if appointments %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Doctor</th><th>Consultation</th><th>Date</th><th>Time</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>
+        {% for a in appointments %}
+          <tr>
+            <td>Dr. {{ a.doctor_first_name }} {{ a.doctor_last_name }}</td>
+            <td>{{ a.type_name }}</td>
+            <td>{{ a.date }}</td>
+            <td>{{ a.start_time }} - {{ a.end_time }}</td>
+            <td>{{ a.status }}</td>
+            <td>
+              {% if a.status == 'CONFIRMED' %}
+                <form method="post" action="{{ url_for('patient.cancel', appointment_id=a.appointment_id) }}" class="inline-form">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="secondary">Cancel</button>
+                </form>
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No appointments yet.</p>
+  {% endif %}
+</div>
 {% endblock %}

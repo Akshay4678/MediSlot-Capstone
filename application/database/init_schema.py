@@ -144,7 +144,7 @@ def split_sql_statements(sql_text):
     return statements
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Dependency order does not matter for DROP because foreign key checks are disabled,
 # but the list must name every application table.
@@ -200,6 +200,22 @@ def initialize_database():
             version = _current_version(cursor)
             legacy = version is None and _table_exists(cursor, "users")
             outdated = version is not None and version < SCHEMA_VERSION
+
+            # Milestone 3 -> 4 is a small additive migration. Keep production data intact.
+            # Older/unversioned layouts are still rebuilt only when explicitly allowed.
+            if version == 3:
+                logger.info("Applying schema migration 3 -> 4")
+                if _table_exists(cursor, "appointments"):
+                    cursor.execute(
+                        "ALTER TABLE appointments ADD COLUMN reschedule_count TINYINT UNSIGNED NOT NULL DEFAULT 0"
+                    )
+                version = 4
+                cursor.execute(
+                    "UPDATE schema_meta SET version = 4, applied_at = CURRENT_TIMESTAMP WHERE id = 1"
+                )
+                connection.commit()
+                return
+
             if legacy or outdated:
                 if os.environ.get("ALLOW_SCHEMA_REBUILD", "").lower() != "true":
                     raise RuntimeError(

@@ -1,5 +1,5 @@
 -- =====================================================================
--- MediSlot RDS MySQL schema  (SCHEMA_VERSION 3, aligned to the project ER diagram)
+-- MediSlot RDS MySQL schema  (SCHEMA_VERSION 4, aligned to the project ER diagram)
 -- Run by application/database/init_schema.py (idempotent: CREATE ... IF NOT EXISTS,
 -- seed rows use ON DUPLICATE KEY UPDATE).
 --
@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS appointments (
     notes TEXT NULL,
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    reschedule_count TINYINT UNSIGNED NOT NULL DEFAULT 0,
     PRIMARY KEY (appointment_id),
     KEY ix_appointments_patient_status (patient_id, status),
     KEY ix_appointments_doctor_status (doctor_id, status),

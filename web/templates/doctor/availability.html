@@ -15,6 +15,7 @@ Availability - MediSlot
   appointment slots using the consultation duration.
 </p>
 
+
 <div class="card">
 
   {% if not types %}
@@ -30,10 +31,21 @@ Availability - MediSlot
   {% endif %}
 
 
-  {# Only keep actual saved availability rows.
-     Blank placeholder rows must not be rendered. #}
+  {#
+    IMPORTANT:
+    Only render rows that actually exist in the database.
 
-  {% set saved_rows = rows|selectattr('availability_id')|list %}
+    This prevents blank placeholder rows from appearing
+    when the availability page is opened or reloaded.
+  #}
+
+  {% set saved_rows = [] %}
+
+  {% for r in rows %}
+    {% if r.availability_id %}
+      {% set _ = saved_rows.append(r) %}
+    {% endif %}
+  {% endfor %}
 
 
   <form method="post">
@@ -73,7 +85,12 @@ Availability - MediSlot
 
       <tbody id="rows">
 
-        {# Render ONLY saved availability rows #}
+        {#
+          Render ONLY real saved availability records.
+
+          If there are no saved records, this tbody
+          will be completely empty.
+        #}
 
         {% for r in saved_rows %}
 
@@ -86,17 +103,13 @@ Availability - MediSlot
             <input
               type="hidden"
               name="p{{ i }}_id"
-              value="{{ r.availability_id or '' }}">
+              value="{{ r.availability_id }}">
 
-
-            {% if r.availability_id %}
 
             <input
               type="hidden"
               name="p{{ i }}_remove"
               value="">
-
-            {% endif %}
 
 
             <select
@@ -111,8 +124,9 @@ Availability - MediSlot
 
               <option
                 value="{{ n }}"
-                {{ 'selected'
-                   if r.day_of_week|string == n|string }}>
+                {% if r.day_of_week|string == n|string %}
+                  selected
+                {% endif %}>
 
                 {{ name }}
 
@@ -141,8 +155,9 @@ Availability - MediSlot
               <option
                 value="{{ t.consultation_type_id }}"
                 data-duration="{{ t.duration_minutes }}"
-                {{ 'selected'
-                   if r.consultation_type_id == t.consultation_type_id }}>
+                {% if r.consultation_type_id == t.consultation_type_id %}
+                  selected
+                {% endif %}>
 
                 {{ t.type_name }}
                 ({{ t.duration_minutes }} min)
@@ -231,6 +246,8 @@ Availability - MediSlot
     </table>
 
 
+    <!-- ADD ROW -->
+
     <p class="actions">
 
       <button
@@ -244,6 +261,8 @@ Availability - MediSlot
 
     </p>
 
+
+    <!-- HELP -->
 
     <div class="availability-help">
 
@@ -271,6 +290,8 @@ Availability - MediSlot
     </div>
 
 
+    <!-- SAVE -->
+
     <p>
 
       <button type="submit">
@@ -284,7 +305,9 @@ Availability - MediSlot
 </div>
 
 
-<!-- TEMPLATE FOR NEW ROWS -->
+<!-- ========================================================= -->
+<!-- TEMPLATE FOR NEW ROWS                                    -->
+<!-- ========================================================= -->
 
 <template id="row-tpl">
 
@@ -295,6 +318,12 @@ Availability - MediSlot
       <input
         type="hidden"
         name="p__I___id"
+        value="">
+
+
+      <input
+        type="hidden"
+        name="p__I___remove"
         value="">
 
 
@@ -478,12 +507,13 @@ Availability - MediSlot
 
 
   /*
-   * Generate appointment slots
-   * based on:
+   * Generate appointment slots based on:
    *
    *     From time
    *     To time
    *     Consultation duration
+   *
+   * Only the number of slots is displayed.
    */
 
   function updateSlots(row) {
@@ -554,9 +584,7 @@ Availability - MediSlot
     ) {
 
       preview.innerHTML =
-        '<span class="muted small">' +
-        '—' +
-        '</span>';
+        '<span class="muted small">—</span>';
 
       return;
 
@@ -666,6 +694,15 @@ Availability - MediSlot
 
   /*
    * Add a new row.
+   *
+   * New rows are created ONLY when
+   * the user clicks:
+   *
+   *     + Add row
+   *
+   * or:
+   *
+   *     Duplicate
    */
 
   function addRow(source) {
@@ -688,6 +725,15 @@ Availability - MediSlot
     var row =
       holder.firstElementChild;
 
+
+    if (!row) {
+      return null;
+    }
+
+
+    /*
+     * Duplicate existing row values.
+     */
 
     if (source) {
 
@@ -717,6 +763,29 @@ Availability - MediSlot
       });
 
 
+      /*
+       * A duplicated row is a NEW record.
+       *
+       * Therefore its ID must remain empty.
+       * It must not copy the original availability ID.
+       */
+
+      var newIdField =
+        field(row, "id");
+
+      if (newIdField) {
+        newIdField.value = "";
+      }
+
+
+      var newRemoveField =
+        field(row, "remove");
+
+      if (newRemoveField) {
+        newRemoveField.value = "";
+      }
+
+
       source.parentNode.insertBefore(
         row,
         source.nextSibling
@@ -737,6 +806,7 @@ Availability - MediSlot
 
     wireRow(row);
 
+
     return row;
 
   }
@@ -745,24 +815,30 @@ Availability - MediSlot
   /*
    * Wire existing saved rows.
    *
-   * Empty rows are never rendered
-   * by the template, so only real
-   * availability records reach here.
+   * There should be ZERO blank rows here
+   * because the Jinja template renders
+   * only saved_rows.
    */
 
   Array.prototype.forEach.call(
     body.querySelectorAll("tr"),
-    wireRow
+    function (row) {
+      wireRow(row);
+    }
   );
 
 
   /*
-   * Add row.
+   * Add row button.
    */
 
-  document
-    .getElementById("add-row")
-    .addEventListener(
+  var addRowButton =
+    document.getElementById("add-row");
+
+
+  if (addRowButton) {
+
+    addRowButton.addEventListener(
       "click",
       function () {
 
@@ -770,6 +846,8 @@ Availability - MediSlot
 
       }
     );
+
+  }
 
 
   /*
@@ -829,9 +907,7 @@ Availability - MediSlot
           field(row, "id");
 
         var removeField =
-          row.querySelector(
-            '[name$="_remove"]'
-          );
+          field(row, "remove");
 
 
         var availabilityId =
@@ -840,24 +916,67 @@ Availability - MediSlot
             : "";
 
 
+        /*
+         * Existing database record.
+         *
+         * Keep the row in the form as a hidden
+         * deletion request so the backend can
+         * delete the database record.
+         */
+
         if (
           availabilityId &&
           removeField
-      ){
-
-          /*
-           * Existing database record.
-           * Mark it for deletion.
-           */
+        ) {
 
           removeField.value = "1";
 
+
+          /*
+           * Disable the actual availability
+           * fields so browser validation does
+           * not interfere with deletion.
+           */
+
+          [
+            "day",
+            "type",
+            "start",
+            "end"
+          ].forEach(function (name) {
+
+            var input =
+              field(row, name);
+
+            if (input) {
+              input.disabled = true;
+            }
+
+          });
+
+
+          /*
+           * Hide the row from the user.
+           */
+
           row.style.display = "none";
+
+
+          /*
+           * Do NOT remove the row from the DOM.
+           *
+           * The hidden remove field must be
+           * submitted to the backend.
+           */
 
         } else {
 
           /*
            * New unsaved row.
+           *
+           * It has no database ID, so there is
+           * nothing to delete from the backend.
+           * Remove it completely.
            */
 
           row.parentNode.removeChild(row);
@@ -869,6 +988,7 @@ Availability - MediSlot
     }
 
   );
+
 
 })();
 

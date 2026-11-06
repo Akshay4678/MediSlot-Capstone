@@ -1,101 +1,811 @@
 {% extends "base.html" %}
-{% block title %}Availability - MediSlot{% endblock %}
+
+{% block title %}
+Availability - MediSlot
+{% endblock %}
+
 {% block content %}
+
 <h1>Weekly availability</h1>
-<p class="muted">Times are in your home timezone (<strong>{{ timezone }}</strong>). Slots are created for the next 30 days from these weekly hours.</p>
+
+<p class="muted">
+  Times are in your home timezone
+  (<strong>{{ timezone }}</strong>).
+
+  The system automatically divides each time window into
+  appointment slots using the consultation duration.
+</p>
+
+
 <div class="card">
-  {% if not types %}<p class="muted">Add a <a href="{{ url_for('doctor.types') }}">consultation type</a> first.</p>{% endif %}
-  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" id="row_count" name="row_count" value="{{ rows|length }}">
-    <table>
+
+  {% if not types %}
+
+    <p class="muted">
+      Add a
+      <a href="{{ url_for('doctor.types') }}">
+        consultation type
+      </a>
+      first.
+    </p>
+
+  {% endif %}
+
+
+  <form method="post">
+
+    <input type="hidden"
+           name="csrf_token"
+           value="{{ csrf_token() }}">
+
+    <input type="hidden"
+           id="row_count"
+           name="row_count"
+           value="{{ rows|length }}">
+
+
+    <table class="availability-table">
+
       <thead>
-        <tr><th>Day</th><th>Consultation type</th><th>From</th><th>To</th><th>Seats</th><th>Remove</th><th></th></tr>
+
+        <tr>
+
+          <th>Day</th>
+
+          <th>
+            Consultation type
+          </th>
+
+          <th>
+            From
+          </th>
+
+          <th>
+            To
+          </th>
+
+          <th>
+            Generated slots
+          </th>
+
+          <th>
+            Seats
+          </th>
+
+          <th>
+            Remove
+          </th>
+
+          <th></th>
+
+        </tr>
+
       </thead>
+
+
       <tbody id="rows">
-      {% for r in rows %}{% set i = loop.index0 %}
-      <tr>
-        <td><input type="hidden" name="p{{ i }}_id" value="{{ r.availability_id or '' }}">
-          <select name="p{{ i }}_day"><option value=""></option>{% for n, name in days %}<option value="{{ n }}" {{ 'selected' if r.day_of_week|string == n|string }}>{{ name }}</option>{% endfor %}</select></td>
-        <td><select name="p{{ i }}_type"><option value=""></option>{% for t in types %}<option value="{{ t.consultation_type_id }}" {{ 'selected' if r.consultation_type_id == t.consultation_type_id }}>{{ t.type_name }}</option>{% endfor %}</select></td>
-        <td><input name="p{{ i }}_start" type="time" value="{{ r.start_time }}"></td>
-        <td><input name="p{{ i }}_end" type="time" value="{{ r.end_time }}"></td>
-        <td><input name="p{{ i }}_capacity" type="number" min="1" max="10" value="{{ r.capacity }}" style="max-width:80px"></td>
-        <td>{% if r.availability_id %}<input type="checkbox" name="p{{ i }}_remove" style="width:auto">{% endif %}</td>
-        <td class="nowrap">
-          <button type="button" class="secondary" data-action="dup" title="Copy this row so you can change the day or time">Duplicate</button>
-          {% if not r.availability_id %}<button type="button" class="secondary" data-action="del" title="Delete this unsaved row">&times;</button>{% endif %}
-        </td>
-      </tr>{% endfor %}
+
+      {% for r in rows %}
+
+        {% set i = loop.index0 %}
+
+        <tr>
+
+          <td>
+
+            <input type="hidden"
+                   name="p{{ i }}_id"
+                   value="{{ r.availability_id or '' }}">
+
+
+            <select name="p{{ i }}_day">
+
+              <option value=""></option>
+
+              {% for n, name in days %}
+
+              <option value="{{ n }}"
+                {{ 'selected'
+                   if r.day_of_week|string == n|string }}>
+
+                {{ name }}
+
+              </option>
+
+              {% endfor %}
+
+            </select>
+
+          </td>
+
+
+          <td>
+
+            <select name="p{{ i }}_type"
+                    data-type-select>
+
+              <option value=""></option>
+
+              {% for t in types %}
+
+              <option
+                value="{{ t.consultation_type_id }}"
+                data-duration="{{ t.duration_minutes }}"
+                data-health-camp="{{ '1' if t.type_name == 'Health Camp Session' else '0' }}"
+                {{ 'selected'
+                   if r.consultation_type_id == t.consultation_type_id }}>
+
+                {{ t.type_name }}
+                ({{ t.duration_minutes }} min)
+
+              </option>
+
+              {% endfor %}
+
+            </select>
+
+          </td>
+
+
+          <td>
+
+            <input
+              name="p{{ i }}_start"
+              type="time"
+              value="{{ r.start_time }}"
+              data-time-start>
+
+          </td>
+
+
+          <td>
+
+            <input
+              name="p{{ i }}_end"
+              type="time"
+              value="{{ r.end_time }}"
+              data-time-end>
+
+          </td>
+
+
+          <td>
+
+            <span
+              class="slot-preview"
+              data-slot-preview>
+
+              —
+
+            </span>
+
+          </td>
+
+
+          <td>
+
+            <input
+              name="p{{ i }}_capacity"
+              type="number"
+              min="1"
+              max="10"
+              value="{{ r.capacity }}"
+              data-capacity
+              style="max-width:80px">
+
+            <span
+              class="muted tiny"
+              data-capacity-help>
+            </span>
+
+          </td>
+
+
+          <td>
+
+            {% if r.availability_id %}
+
+            <input
+              type="checkbox"
+              name="p{{ i }}_remove"
+              style="width:auto">
+
+            {% endif %}
+
+          </td>
+
+
+          <td class="nowrap">
+
+            <button
+              type="button"
+              class="secondary"
+              data-action="dup">
+
+              Duplicate
+
+            </button>
+
+            {% if not r.availability_id %}
+
+            <button
+              type="button"
+              class="secondary"
+              data-action="del">
+
+              &times;
+
+            </button>
+
+            {% endif %}
+
+          </td>
+
+        </tr>
+
+      {% endfor %}
+
       </tbody>
+
     </table>
 
+
     <p class="actions">
-      <button type="button" class="secondary" id="add-row">+ Add row</button>
+
+      <button
+        type="button"
+        class="secondary"
+        id="add-row">
+
+        + Add row
+
+      </button>
+
     </p>
-    <p class="muted small">Each row is one time block on one day, so the same day can appear in several rows (for example, different consultation types at different times). Use Duplicate to copy a row, then change its day. Seats above 1 are only allowed for Health Camp Sessions (2 to 10). Leave unused rows empty.</p>
-    <p><button type="submit">Save availability</button></p>
+
+
+    <div class="availability-help">
+
+      <strong>
+        How slots are calculated
+      </strong>
+
+      <span>
+        Example:
+        09:00–10:00 with a 15-minute Quick Consult
+        creates 4 slots.
+      </span>
+
+      <span>
+        Regular consultation types always have 1 seat.
+        Only Health Camp Session allows 2–10 seats.
+      </span>
+
+      <span>
+        Two active rows on the same day cannot overlap.
+        Adjacent rows such as 09:00–10:00 and
+        10:00–11:00 are allowed.
+      </span>
+
+    </div>
+
+
+    <p>
+
+      <button type="submit">
+        Save availability
+      </button>
+
+    </p>
+
   </form>
+
 </div>
 
+
 <template id="row-tpl">
-  <tr>
-    <td><input type="hidden" name="p__I___id" value="">
-      <select name="p__I___day"><option value=""></option>{% for n, name in days %}<option value="{{ n }}">{{ name }}</option>{% endfor %}</select></td>
-    <td><select name="p__I___type"><option value=""></option>{% for t in types %}<option value="{{ t.consultation_type_id }}">{{ t.type_name }}</option>{% endfor %}</select></td>
-    <td><input name="p__I___start" type="time" value=""></td>
-    <td><input name="p__I___end" type="time" value=""></td>
-    <td><input name="p__I___capacity" type="number" min="1" max="10" value="1" style="max-width:80px"></td>
-    <td></td>
-    <td class="nowrap">
-      <button type="button" class="secondary" data-action="dup" title="Copy this row so you can change the day or time">Duplicate</button>
-      <button type="button" class="secondary" data-action="del" title="Delete this unsaved row">&times;</button>
-    </td>
-  </tr>
+
+<tr>
+
+  <td>
+
+    <input
+      type="hidden"
+      name="p__I___id"
+      value="">
+
+    <select name="p__I___day">
+
+      <option value=""></option>
+
+      {% for n, name in days %}
+
+      <option value="{{ n }}">
+        {{ name }}
+      </option>
+
+      {% endfor %}
+
+    </select>
+
+  </td>
+
+
+  <td>
+
+    <select
+      name="p__I___type"
+      data-type-select>
+
+      <option value=""></option>
+
+      {% for t in types %}
+
+      <option
+        value="{{ t.consultation_type_id }}"
+        data-duration="{{ t.duration_minutes }}"
+        data-health-camp="{{ '1' if t.type_name == 'Health Camp Session' else '0' }}">
+
+        {{ t.type_name }}
+        ({{ t.duration_minutes }} min)
+
+      </option>
+
+      {% endfor %}
+
+    </select>
+
+  </td>
+
+
+  <td>
+
+    <input
+      name="p__I___start"
+      type="time"
+      value=""
+      data-time-start>
+
+  </td>
+
+
+  <td>
+
+    <input
+      name="p__I___end"
+      type="time"
+      value=""
+      data-time-end>
+
+  </td>
+
+
+  <td>
+
+    <span
+      class="slot-preview"
+      data-slot-preview>
+
+      —
+
+    </span>
+
+  </td>
+
+
+  <td>
+
+    <input
+      name="p__I___capacity"
+      type="number"
+      min="1"
+      max="10"
+      value="1"
+      data-capacity
+      style="max-width:80px">
+
+    <span
+      class="muted tiny"
+      data-capacity-help>
+    </span>
+
+  </td>
+
+
+  <td></td>
+
+
+  <td class="nowrap">
+
+    <button
+      type="button"
+      class="secondary"
+      data-action="dup">
+
+      Duplicate
+
+    </button>
+
+    <button
+      type="button"
+      class="secondary"
+      data-action="del">
+
+      &times;
+
+    </button>
+
+  </td>
+
+</tr>
+
 </template>
 
+
 <script>
+
 (function () {
-  var body = document.getElementById('rows');
-  var tpl = document.getElementById('row-tpl');
-  var count = document.getElementById('row_count');
-  var next = parseInt(count.value, 10) || 0;
-  var fields = ['day', 'type', 'start', 'end', 'capacity'];
+
+  var body =
+    document.getElementById("rows");
+
+  var tpl =
+    document.getElementById("row-tpl");
+
+  var count =
+    document.getElementById("row_count");
+
+  var next =
+    parseInt(count.value, 10) || 0;
+
+
+  function minutes(value) {
+
+    if (
+      !value ||
+      value.indexOf(":") === -1
+    ) {
+      return null;
+    }
+
+    var parts =
+      value.split(":");
+
+    return (
+      parseInt(parts[0], 10) * 60
+      +
+      parseInt(parts[1], 10)
+    );
+
+  }
+
+
+  function updateRow(row) {
+
+    var select =
+      row.querySelector(
+        "[data-type-select]"
+      );
+
+    var start =
+      row.querySelector(
+        "[data-time-start]"
+      );
+
+    var end =
+      row.querySelector(
+        "[data-time-end]"
+      );
+
+    var preview =
+      row.querySelector(
+        "[data-slot-preview]"
+      );
+
+    var capacity =
+      row.querySelector(
+        "[data-capacity]"
+      );
+
+    var help =
+      row.querySelector(
+        "[data-capacity-help]"
+      );
+
+
+    if (
+      !select ||
+      !start ||
+      !end ||
+      !preview ||
+      !capacity
+    ) {
+      return;
+    }
+
+
+    var option =
+      select.options[
+        select.selectedIndex
+      ];
+
+    var duration =
+      option
+        ? parseInt(
+            option.getAttribute(
+              "data-duration"
+            ) || "0",
+            10
+          )
+        : 0;
+
+
+    var isCamp =
+      option &&
+      option.getAttribute(
+        "data-health-camp"
+      ) === "1";
+
+
+    var startMin =
+      minutes(start.value);
+
+    var endMin =
+      minutes(end.value);
+
+
+    /*
+     * Calculate the number of complete
+     * appointment slots.
+     */
+    if (
+      !duration ||
+      startMin === null ||
+      endMin === null ||
+      endMin <= startMin
+    ) {
+
+      preview.textContent = "—";
+
+    } else {
+
+      var total =
+        endMin - startMin;
+
+      var slots =
+        Math.floor(
+          total / duration
+        );
+
+      var remainder =
+        total % duration;
+
+
+      if (slots > 0) {
+
+        preview.textContent =
+          String(slots) +
+          (
+            remainder
+              ? " (+ partial time)"
+              : ""
+          );
+
+      } else {
+
+        preview.textContent = "0";
+
+      }
+
+    }
+
+
+    /*
+     * Normal consultation:
+     * exactly one seat.
+     *
+     * Health Camp:
+     * doctor can choose 2–10 seats.
+     */
+    if (isCamp) {
+
+      capacity.readOnly = false;
+      capacity.min = "2";
+      capacity.max = "10";
+
+      if (
+        parseInt(
+          capacity.value || "0",
+          10
+        ) < 2
+      ) {
+        capacity.value = "2";
+      }
+
+      help.textContent =
+        "2–10 seats";
+
+    } else {
+
+      capacity.value = "1";
+      capacity.readOnly = true;
+      capacity.min = "1";
+      capacity.max = "1";
+
+      help.textContent =
+        "1 seat";
+
+    }
+
+  }
+
+
+  function wireRow(row) {
+
+    [
+      "[data-type-select]",
+      "[data-time-start]",
+      "[data-time-end]",
+      "[data-capacity]"
+    ].forEach(function (selector) {
+
+      var el =
+        row.querySelector(
+          selector
+        );
+
+      if (el) {
+
+        el.addEventListener(
+          "input",
+          function () {
+            updateRow(row);
+          }
+        );
+
+        el.addEventListener(
+          "change",
+          function () {
+            updateRow(row);
+          }
+        );
+
+      }
+
+    });
+
+    updateRow(row);
+
+  }
+
 
   function field(row, name) {
-    return row.querySelector('[name$="_' + name + '"]');
+
+    return row.querySelector(
+      '[name$="_' + name + '"]'
+    );
+
   }
+
 
   function addRow(source) {
-    var holder = document.createElement('tbody');
-    holder.innerHTML = tpl.innerHTML.replace(/__I__/g, String(next)).trim();
-    var row = holder.firstElementChild;
+
+    var holder =
+      document.createElement(
+        "tbody"
+      );
+
+    holder.innerHTML =
+      tpl.innerHTML
+        .replace(
+          /__I__/g,
+          String(next)
+        )
+        .trim();
+
+
+    var row =
+      holder.firstElementChild;
+
+
     if (source) {
-      fields.forEach(function (name) {
-        field(row, name).value = field(source, name).value;
+
+      [
+        "day",
+        "type",
+        "start",
+        "end",
+        "capacity"
+      ].forEach(function (name) {
+
+        field(row, name).value =
+          field(source, name).value;
+
       });
-      source.parentNode.insertBefore(row, source.nextSibling);
+
+      source.parentNode.insertBefore(
+        row,
+        source.nextSibling
+      );
+
     } else {
+
       body.appendChild(row);
+
     }
+
+
     next += 1;
-    // row_count is the highest index + 1; gaps left by deleted rows are skipped by the server.
-    count.value = String(next);
+
+    count.value =
+      String(next);
+
+    wireRow(row);
+
     return row;
+
   }
 
-  document.getElementById('add-row').addEventListener('click', function () {
-    addRow(null);
-  });
 
-  body.addEventListener('click', function (event) {
-    var button = event.target.closest('button[data-action]');
-    if (!button) { return; }
-    var row = button.closest('tr');
-    if (button.getAttribute('data-action') === 'dup') {
-      addRow(row);
-    } else if (button.getAttribute('data-action') === 'del') {
-      row.parentNode.removeChild(row);
+  Array.prototype.forEach.call(
+    body.querySelectorAll("tr"),
+    wireRow
+  );
+
+
+  document
+    .getElementById("add-row")
+    .addEventListener(
+      "click",
+      function () {
+        addRow(null);
+      }
+    );
+
+
+  body.addEventListener(
+    "click",
+    function (event) {
+
+      var button =
+        event.target.closest(
+          "button[data-action]"
+        );
+
+      if (!button) {
+        return;
+      }
+
+
+      var row =
+        button.closest("tr");
+
+
+      if (
+        button.getAttribute(
+          "data-action"
+        ) === "dup"
+      ) {
+
+        addRow(row);
+
+      } else if (
+        button.getAttribute(
+          "data-action"
+        ) === "del"
+      ) {
+
+        row.parentNode.removeChild(
+          row
+        );
+
+      }
+
     }
-  });
+  );
+
 })();
+
 </script>
+
 {% endblock %}

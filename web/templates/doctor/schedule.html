@@ -1,33 +1,307 @@
 {% extends "base.html" %}
-{% block title %}Schedule - MediSlot{% endblock %}
+
+{% block title %}
+Schedule - MediSlot
+{% endblock %}
+
 {% block content %}
-<h1>Schedule</h1>
-<div class="card actions">
-  <a class="btn secondary" href="{{ url_for('doctor.schedule', view=view, date=prev_date) }}">&larr; Previous</a>
-  <strong>{{ data.from }}{% if data.to != data.from %} to {{ data.to }}{% endif %}</strong>
-  <a class="btn secondary" href="{{ url_for('doctor.schedule', view=view, date=next_date) }}">Next &rarr;</a>
-  <span style="margin-left:auto" class="actions">
-    <a class="btn {{ '' if view == 'day' else 'secondary' }}" href="{{ url_for('doctor.schedule', view='day', date=anchor) }}">Day</a>
-    <a class="btn {{ '' if view == 'week' else 'secondary' }}" href="{{ url_for('doctor.schedule', view='week', date=anchor) }}">Week</a>
-    <form class="actions" method="get"><input type="hidden" name="view" value="{{ view }}"><input type="date" name="date" value="{{ anchor }}" style="width:auto"><button class="secondary" type="submit">Go</button></form>
-  </span>
+
+<h1>Doctor schedule</h1>
+
+<div class="card schedule-toolbar">
+
+  <div class="actions">
+
+    <a class="btn secondary"
+       href="{{ url_for('doctor.schedule', view='week', date=prev_date) }}">
+      &larr; Previous week
+    </a>
+
+    <strong>
+      {{ data.from }}
+      {% if data.to != data.from %}
+        to {{ data.to }}
+      {% endif %}
+    </strong>
+
+    <a class="btn secondary"
+       href="{{ url_for('doctor.schedule', view='week', date=next_date) }}">
+      Next week &rarr;
+    </a>
+
+  </div>
+
+  <form class="actions" method="get">
+
+    <input type="hidden"
+           name="view"
+           value="week">
+
+    <input type="date"
+           name="date"
+           value="{{ anchor }}"
+           style="width:auto">
+
+    <button class="secondary"
+            type="submit">
+      Go to date
+    </button>
+
+  </form>
+
 </div>
-<p class="muted small">Times shown in {{ data.timezone }}.</p>
+
+<p class="muted small">
+  Times shown in {{ data.timezone }}.
+  Select a date to see that day's slots and appointments below.
+</p>
+
+
+<!-- CALENDAR -->
+
+<div class="card calendar-card">
+
+  <div class="calendar-header">
+
+    <h2>Weekly calendar</h2>
+
+    <a class="btn secondary"
+       href="{{ url_for('doctor.schedule', view='day', date=anchor) }}">
+      Day view
+    </a>
+
+  </div>
+
+  <div class="calendar-grid">
+
+    {% for day in calendar_data.days %}
+
+    <a class="calendar-day
+       {{ 'selected' if day.date == anchor else '' }}
+       {{ 'blackout-day' if day.blackout else '' }}"
+       href="{{ url_for('doctor.schedule', view='day', date=day.date) }}">
+
+      <span class="calendar-weekday">
+        {{ day.weekday[:3] }}
+      </span>
+
+      <span class="calendar-date">
+        {{ day.date[8:10] }}
+      </span>
+
+      {% if day.blackout %}
+
+        <span class="calendar-badge blocked">
+          Blackout
+        </span>
+
+      {% elif day.slots %}
+
+        <span class="calendar-badge">
+          {{ day.slots|length }}
+          slot{{ '' if day.slots|length == 1 else 's' }}
+        </span>
+
+      {% else %}
+
+        <span class="calendar-badge muted-badge">
+          No slots
+        </span>
+
+      {% endif %}
+
+    </a>
+
+    {% endfor %}
+
+  </div>
+
+</div>
+
+
+<!-- SCHEDULE -->
+
 {% for day in data.days %}
-<div class="card">
-  <h2>{{ day.weekday }} {{ day.date }} {% if day.blackout %}<span class="tag blocked">Blackout{{ ': ' ~ day.blackout_reason if day.blackout_reason }}</span>{% endif %}</h2>
+
+<div class="card schedule-day
+     {{ 'selected-day' if day.date == anchor else '' }}">
+
+  <div class="schedule-day-header">
+
+    <div>
+
+      <h2>
+        {{ day.weekday }},
+        {{ day.date }}
+      </h2>
+
+      {% if day.blackout %}
+
+        <span class="tag blocked">
+
+          Blackout
+
+          {% if day.blackout_reason %}
+            : {{ day.blackout_reason }}
+          {% endif %}
+
+        </span>
+
+      {% endif %}
+
+    </div>
+
+    <span class="muted small">
+
+      {{ day.slots|length }}
+      slot{{ '' if day.slots|length == 1 else 's' }}
+
+    </span>
+
+  </div>
+
+
   {% if day.slots %}
-  <table>
-    <tr><th>Time</th><th>Type</th><th>Seats</th><th>Status</th><th>Booked patients</th></tr>
+
+  <div class="schedule-list">
+
     {% for s in day.slots %}
-    <tr>
-      <td class="nowrap">{{ s.start_time }} - {{ s.end_time }}</td><td>{{ s.type_name }}</td>
-      <td>{{ s.booked_count }} / {{ s.capacity }}</td>
-      <td><span class="tag {{ 'blocked' if s.status == 'BLOCKED' else ('full' if s.status == 'FULL' else '') }}">{{ s.status }}</span></td>
-      <td>{% for a in s.appointments %}{{ a.patient_name }}{% if a.patient_phone %} ({{ a.patient_phone }}){% endif %} <span class="tag">{{ a.status }}</span><br>{% else %}<span class="muted">-</span>{% endfor %}</td>
-    </tr>{% endfor %}
-  </table>
-  {% else %}<p class="muted">No slots.</p>{% endif %}
+
+    <div class="schedule-slot">
+
+      <!-- TIME -->
+
+      <div class="schedule-time">
+
+        <strong>
+          {{ s.start_time }}
+        </strong>
+
+        <span>
+          {{ s.end_time }}
+        </span>
+
+      </div>
+
+
+      <!-- CONSULTATION -->
+
+      <div class="schedule-main">
+
+        <strong>
+          {{ s.type_name }}
+        </strong>
+
+        <div class="muted small">
+
+          {{ s.duration_minutes }}
+          min
+
+          &middot;
+
+          Fee {{ s.fee }}
+
+        </div>
+
+
+        <div class="seat-summary">
+
+          <span class="tag
+                {{ 'full' if s.available_seats == 0 else '' }}">
+
+            {{ s.available_seats }}
+
+            seat{{ '' if s.available_seats == 1 else 's' }}
+
+            available
+
+          </span>
+
+
+          <span class="muted small">
+
+            {{ s.booked_count }}
+            /
+            {{ s.capacity }}
+
+            booked
+
+          </span>
+
+
+          <span class="tag
+                {{ 'blocked' if s.status == 'BLOCKED'
+                   else ('full' if s.status == 'FULL' else '') }}">
+
+            {{ s.status }}
+
+          </span>
+
+        </div>
+
+      </div>
+
+
+      <!-- PATIENTS -->
+
+      <div class="schedule-patients">
+
+        {% if s.appointments %}
+
+          <strong>
+            Appointments
+          </strong>
+
+          {% for a in s.appointments %}
+
+          <div class="patient-row">
+
+            <span>
+              {{ a.patient_name }}
+            </span>
+
+            {% if a.patient_phone %}
+
+            <span class="muted small">
+              {{ a.patient_phone }}
+            </span>
+
+            {% endif %}
+
+            <span class="tag">
+              {{ a.status }}
+            </span>
+
+          </div>
+
+          {% endfor %}
+
+        {% else %}
+
+          <span class="muted small">
+            No booked patients
+          </span>
+
+        {% endif %}
+
+      </div>
+
+    </div>
+
+    {% endfor %}
+
+  </div>
+
+  {% else %}
+
+    <p class="muted">
+      No appointment slots for this day.
+    </p>
+
+  {% endif %}
+
 </div>
+
 {% endfor %}
+
 {% endblock %}

@@ -13,28 +13,54 @@ def _secret_key():
     explicit = os.environ.get("SECRET_KEY")
     if explicit:
         return explicit
+
     parameter = os.environ.get("SECRET_KEY_PARAMETER")
     if parameter:
         import boto3  # imported lazily so local tests do not need AWS
-        return boto3.client("ssm").get_parameter(Name=parameter, WithDecryption=True)["Parameter"]["Value"]
-    if os.environ.get("ALLOW_EPHEMERAL_SECRET") == "1":  # local development only
+
+        return boto3.client("ssm").get_parameter(
+            Name=parameter,
+            WithDecryption=True,
+        )["Parameter"]["Value"]
+
+    if os.environ.get("ALLOW_EPHEMERAL_SECRET") == "1":
         return secrets.token_hex(32)
-    raise RuntimeError("Set SECRET_KEY or SECRET_KEY_PARAMETER (an SSM SecureString).")
+
+    raise RuntimeError(
+        "Set SECRET_KEY or SECRET_KEY_PARAMETER (an SSM SecureString)."
+    )
 
 
 def create_app():
     app = Flask(__name__)
+
     app.config.update(
         SECRET_KEY=_secret_key(),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         MAX_CONTENT_LENGTH=6 * 1024 * 1024,
     )
+
     app.register_blueprint(doctor.bp)
     app.register_blueprint(patient.bp)
 
     @app.route("/", endpoint="landing")
     def landing():
+        """
+        If the browser already has a valid session, never show the
+        doctor/patient login selection again.
+        """
+        current = sessions.current()
+
+        if current:
+            role = current.get("role")
+
+            if role == "doctor":
+                return redirect(url_for("doctor.home"))
+
+            if role == "patient":
+                return redirect(url_for("patient.home"))
+
         return render_template("landing.html")
 
     @app.route("/healthz")
@@ -43,20 +69,35 @@ def create_app():
 
     @app.before_request
     def csrf_protect():
-        """Every POST (including login and registration) must carry this browser's CSRF token."""
+        """Every POST must carry this browser's CSRF token."""
         if request.method == "POST" and request.endpoint != "static":
             if not sessions.csrf_ok(request.form.get("csrf_token")):
-                flash("The page was open too long. Please try again.", "error")
-                return redirect(request.path if request.path.endswith(("/login", "/register")) else url_for("landing"))
+                flash(
+                    "The page was open too long. Please try again.",
+                    "error",
+                )
+
+                return redirect(
+                    request.path
+                    if request.path.endswith(("/login", "/register"))
+                    else url_for("landing")
+                )
 
     @app.context_processor
     def inject():
         session = sessions.current()
-        return {"csrf_token": sessions.csrf_token, "session_role": session["role"] if session else None}
+
+        return {
+            "csrf_token": sessions.csrf_token,
+            "session_role": session["role"] if session else None,
+        }
 
     @app.errorhandler(api_client.SessionExpired)
     def session_expired(_):
-        flash("Your session has ended. Please sign in again.", "error")
+        flash(
+            "Your session has ended. Please sign in again.",
+            "error",
+        )
         return redirect(url_for("landing"))
 
     @app.errorhandler(413)
@@ -66,10 +107,23 @@ def create_app():
 
     @app.after_request
     def headers(response):
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("X-Frame-Options", "DENY")
-        response.headers.setdefault("Referrer-Policy", "same-origin")
-        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers.setdefault(
+            "X-Content-Type-Options",
+            "nosniff",
+        )
+        response.headers.setdefault(
+            "X-Frame-Options",
+            "DENY",
+        )
+        response.headers.setdefault(
+            "Referrer-Policy",
+            "same-origin",
+        )
+        response.headers.setdefault(
+            "Cache-Control",
+            "no-store",
+        )
+
         return response
 
     return app

@@ -1,4 +1,3 @@
-
 """Shared authentication routes and role guards for doctor and patient portals."""
 
 from functools import wraps
@@ -40,14 +39,33 @@ def add_auth_routes(bp, role):
 
     @bp.route("/login", methods=["GET", "POST"], endpoint="login")
     def login():
+
+        # If already logged in, never display another login page.
+        current = sessions.current()
+
+        if current:
+            current_role = current.get("role")
+
+            if current_role == role:
+                return redirect(url_for(f"{role}.home"))
+
+            if current_role in ("doctor", "patient"):
+                return redirect(url_for(f"{current_role}.home"))
+
         if request.method == "POST":
             try:
                 tokens = api_client.public(
                     "POST",
                     f"/auth/{role}s/login",
                     {
-                        "email": request.form.get("email", "").strip(),
-                        "password": request.form.get("password", ""),
+                        "email": request.form.get(
+                            "email",
+                            "",
+                        ).strip(),
+                        "password": request.form.get(
+                            "password",
+                            "",
+                        ),
                     },
                 )
 
@@ -66,17 +84,14 @@ def add_auth_routes(bp, role):
 
             if data["role"] != role:
                 api_client.logout()
+
                 flash(
                     "That account is not a " + role + " account.",
                     "error",
                 )
+
                 return redirect(url_for("landing"))
 
-            return redirect(url_for(f"{role}.home"))
-
-        current = sessions.current()
-
-        if current and current.get("role") == role:
             return redirect(url_for(f"{role}.home"))
 
         return render_template(
@@ -86,21 +101,43 @@ def add_auth_routes(bp, role):
 
     @bp.route("/register", methods=["GET", "POST"], endpoint="register")
     def register():
+
+        current = sessions.current()
+
+        if current and current.get("role") in (
+            "doctor",
+            "patient",
+        ):
+            return redirect(
+                url_for(f"{current['role']}.home")
+            )
+
         if request.method == "POST":
             payload = {
-                "email": request.form.get("email", "").strip(),
-                "password": request.form.get("password", ""),
+                "email": request.form.get(
+                    "email",
+                    "",
+                ).strip(),
+                "password": request.form.get(
+                    "password",
+                    "",
+                ),
             }
 
             if role == "patient":
                 payload["first_name"] = request.form.get(
-                    "first_name", ""
+                    "first_name",
+                    "",
                 ).strip()
+
                 payload["last_name"] = request.form.get(
-                    "last_name", ""
+                    "last_name",
+                    "",
                 ).strip()
+
                 payload["phone"] = request.form.get(
-                    "phone", ""
+                    "phone",
+                    "",
                 ).strip()
 
             elif request.form.get("registration_code"):
@@ -123,8 +160,14 @@ def add_auth_routes(bp, role):
                     role=role,
                 )
 
-            flash("Account created. Please sign in.", "success")
-            return redirect(url_for(f"{role}.login"))
+            flash(
+                "Account created. Please sign in.",
+                "success",
+            )
+
+            return redirect(
+                url_for(f"{role}.login")
+            )
 
         return render_template(
             "register.html",
@@ -135,7 +178,12 @@ def add_auth_routes(bp, role):
     @role_required(role)
     def logout():
         api_client.logout()
-        flash("You have been signed out.", "success")
+
+        flash(
+            "You have been signed out.",
+            "success",
+        )
+
         return redirect(url_for("landing"))
 
     bp.other_role = other

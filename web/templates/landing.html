@@ -1,11 +1,79 @@
 {% extends "base.html" %}
+
 {% block content %}
+
 <h1>Welcome to MediSlot</h1>
-<p class="muted">Doctor appointment booking and management.</p>
-<div class="hero">
-  <div class="card"><h2>I am a doctor</h2><p class="muted">Manage your profile, availability and schedule.</p>
-    <a class="btn" href="{{ url_for('doctor.login') }}">Login as Doctor</a></div>
-  <div class="card"><h2>I am a patient</h2><p class="muted">Find doctors and manage your appointments.</p>
-    <a class="btn" href="{{ url_for('patient.login') }}">Login as Patient</a></div>
+
+<p class="muted">
+  Doctor appointment booking and management.
+</p>
+
+{% if session_role == 'doctor' %}
+
+<div class="card landing-signed-in">
+
+  <h2>You are signed in as a doctor</h2>
+
+  <p class="muted">
+    Continue to your doctor dashboard.
+  </p>
+
+  <a class="btn" href="{{ url_for('doctor.home') }}">
+    Go to Doctor Dashboard
+  </a>
+
 </div>
+
+{% elif session_role == 'patient' %}
+
+<div class="card landing-signed-in">
+
+  <h2>You are signed in as a patient</h2>
+
+  <p class="muted">
+    Continue to your patient portal.
+  </p>
+
+  <a class="btn" href="{{ url_for('patient.home') }}">
+    Go to Patient Portal
+  </a>
+
+</div>
+
+{% else %}
+
+<div class="hero">
+
+  <div class="card">
+
+    <h2>I am a doctor</h2>
+
+    <p class="muted">
+      Manage your profile, availability and schedule.
+    </p>
+
+    <a class="btn" href="{{ url_for('doctor.login') }}">
+      Login as Doctor
+    </a>
+
+  </div>
+
+  <div class="card">
+
+    <h2>I am a patient</h2>
+
+    <p class="muted">
+      Find doctors and manage your appointments.
+    </p>
+
+    <a class="btn" href="{{ url_for('patient.login') }}">
+      Login as Patient
+    </a>
+
+  </div>
+
+</div>
+
+{% endif %}
+
 {% endblock %}

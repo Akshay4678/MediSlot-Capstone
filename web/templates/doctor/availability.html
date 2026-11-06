@@ -15,7 +15,6 @@ Availability - MediSlot
   appointment slots using the consultation duration.
 </p>
 
-
 <div class="card">
 
   {% if not types %}
@@ -30,17 +29,18 @@ Availability - MediSlot
 
   {% endif %}
 
+  <form method="post" id="availability-form">
 
-  <form method="post">
+    <input
+      type="hidden"
+      name="csrf_token"
+      value="{{ csrf_token() }}">
 
-    <input type="hidden"
-           name="csrf_token"
-           value="{{ csrf_token() }}">
-
-    <input type="hidden"
-           id="row_count"
-           name="row_count"
-           value="{{ rows|length }}">
+    <input
+      type="hidden"
+      id="row_count"
+      name="row_count"
+      value="0">
 
 
     <table class="availability-table">
@@ -70,138 +70,167 @@ Availability - MediSlot
 
         {% for r in rows %}
 
-        {% set i = loop.index0 %}
+          {# 
+             Only show rows that actually contain data.
+             This prevents empty placeholder rows from appearing
+             when the page is first opened.
 
-        <tr>
+             Partially filled rows are still shown so that
+             validation errors do not lose user input.
+          #}
 
-          <td>
+          {% if r.availability_id
+                or r.day_of_week is not none
+                or r.consultation_type_id
+                or r.start_time
+                or r.end_time %}
 
-            <input
-              type="hidden"
-              name="p{{ i }}_id"
-              value="{{ r.availability_id or '' }}">
+            {% set i = loop.index0 %}
 
-            {% if r.availability_id %}
+            <tr>
 
-            <input
-              type="hidden"
-              name="p{{ i }}_remove"
-              value="">
+              <td>
 
-            {% endif %}
+                <input
+                  type="hidden"
+                  name="p{{ i }}_id"
+                  value="{{ r.availability_id or '' }}">
 
+                {% if r.availability_id %}
 
-            <select name="p{{ i }}_day">
+                  <input
+                    type="hidden"
+                    name="p{{ i }}_remove"
+                    value="">
 
-              <option value=""></option>
-
-              {% for n, name in days %}
-
-              <option
-                value="{{ n }}"
-                {{ 'selected'
-                   if r.day_of_week|string == n|string }}>
-
-                {{ name }}
-
-              </option>
-
-              {% endfor %}
-
-            </select>
-
-          </td>
+                {% endif %}
 
 
-          <td>
+                <select
+                  name="p{{ i }}_day"
+                  required>
 
-            <select
-              name="p{{ i }}_type"
-              data-type-select>
+                  <option value="">Select day</option>
 
-              <option value=""></option>
+                  {% for n, name in days %}
 
-              {% for t in types %}
+                    <option
+                      value="{{ n }}"
+                      {{ 'selected'
+                         if r.day_of_week|string == n|string }}>
 
-              <option
-                value="{{ t.consultation_type_id }}"
-                data-duration="{{ t.duration_minutes }}"
-                {{ 'selected'
-                   if r.consultation_type_id == t.consultation_type_id }}>
+                      {{ name }}
 
-                {{ t.type_name }}
-                ({{ t.duration_minutes }} min)
+                    </option>
 
-              </option>
+                  {% endfor %}
 
-              {% endfor %}
+                </select>
 
-            </select>
-
-          </td>
+              </td>
 
 
-          <td>
+              <td>
 
-            <input
-              name="p{{ i }}_start"
-              type="time"
-              value="{{ r.start_time }}"
-              data-time-start>
+                <select
+                  name="p{{ i }}_type"
+                  data-type-select
+                  required>
 
-          </td>
+                  <option value="">
+                    Select consultation type
+                  </option>
 
+                  {% for t in types %}
 
-          <td>
+                    <option
+                      value="{{ t.consultation_type_id }}"
+                      data-duration="{{ t.duration_minutes }}"
+                      {{ 'selected'
+                         if r.consultation_type_id
+                            == t.consultation_type_id }}>
 
-            <input
-              name="p{{ i }}_end"
-              type="time"
-              value="{{ r.end_time }}"
-              data-time-end>
+                      {{ t.type_name }}
+                      ({{ t.duration_minutes }} min)
 
-          </td>
+                    </option>
 
+                  {% endfor %}
 
-          <!-- GENERATED SLOTS -->
+                </select>
 
-          <td>
-
-            <div
-              class="generated-slots"
-              data-slot-preview>
-
-              <span class="muted small">
-                Select time and consultation type
-              </span>
-
-            </div>
-
-          </td>
+              </td>
 
 
-          <!-- ACTIONS -->
+              <td>
 
-          <td class="nowrap">
+                <input
+                  name="p{{ i }}_start"
+                  type="time"
+                  value="{{ r.start_time }}"
+                  data-time-start
+                  required>
 
-            <button
-              type="button"
-              class="secondary"
-              data-action="dup">
-              Duplicate
-            </button>
+              </td>
 
 
-            <button
-              type="button"
-              class="secondary"
-              data-action="del">
-              &times;
-            </button>
+              <td>
 
-          </td>
+                <input
+                  name="p{{ i }}_end"
+                  type="time"
+                  value="{{ r.end_time }}"
+                  data-time-end
+                  required>
 
-        </tr>
+              </td>
+
+
+              <!-- GENERATED SLOTS -->
+
+              <td>
+
+                <div
+                  class="generated-slots"
+                  data-slot-preview>
+
+                  <span class="muted small">
+                    —
+                  </span>
+
+                </div>
+
+              </td>
+
+
+              <!-- ACTIONS -->
+
+              <td class="nowrap">
+
+                <button
+                  type="button"
+                  class="secondary"
+                  data-action="dup">
+
+                  Duplicate
+
+                </button>
+
+
+                <button
+                  type="button"
+                  class="secondary"
+                  data-action="del">
+
+                  &times;
+
+                </button>
+
+              </td>
+
+            </tr>
+
+          {% endif %}
 
         {% endfor %}
 
@@ -216,7 +245,9 @@ Availability - MediSlot
         type="button"
         class="secondary"
         id="add-row">
+
         + Add row
+
       </button>
 
     </p>
@@ -274,15 +305,19 @@ Availability - MediSlot
         name="p__I___id"
         value="">
 
-      <select name="p__I___day">
+      <select
+        name="p__I___day"
+        required>
 
-        <option value=""></option>
+        <option value="">
+          Select day
+        </option>
 
         {% for n, name in days %}
 
-        <option value="{{ n }}">
-          {{ name }}
-        </option>
+          <option value="{{ n }}">
+            {{ name }}
+          </option>
 
         {% endfor %}
 
@@ -295,20 +330,23 @@ Availability - MediSlot
 
       <select
         name="p__I___type"
-        data-type-select>
+        data-type-select
+        required>
 
-        <option value=""></option>
+        <option value="">
+          Select consultation type
+        </option>
 
         {% for t in types %}
 
-        <option
-          value="{{ t.consultation_type_id }}"
-          data-duration="{{ t.duration_minutes }}">
+          <option
+            value="{{ t.consultation_type_id }}"
+            data-duration="{{ t.duration_minutes }}">
 
-          {{ t.type_name }}
-          ({{ t.duration_minutes }} min)
+            {{ t.type_name }}
+            ({{ t.duration_minutes }} min)
 
-        </option>
+          </option>
 
         {% endfor %}
 
@@ -323,7 +361,8 @@ Availability - MediSlot
         name="p__I___start"
         type="time"
         value=""
-        data-time-start>
+        data-time-start
+        required>
 
     </td>
 
@@ -334,7 +373,8 @@ Availability - MediSlot
         name="p__I___end"
         type="time"
         value=""
-        data-time-end>
+        data-time-end
+        required>
 
     </td>
 
@@ -346,7 +386,7 @@ Availability - MediSlot
         data-slot-preview>
 
         <span class="muted small">
-          Select time and consultation type
+          —
         </span>
 
       </div>
@@ -360,14 +400,19 @@ Availability - MediSlot
         type="button"
         class="secondary"
         data-action="dup">
+
         Duplicate
+
       </button>
+
 
       <button
         type="button"
         class="secondary"
         data-action="del">
+
         &times;
+
       </button>
 
     </td>
@@ -390,21 +435,43 @@ Availability - MediSlot
   var count =
     document.getElementById("row_count");
 
+  var form =
+    document.getElementById("availability-form");
+
+  /*
+   * Start the next row index from the number
+   * of rows currently displayed.
+   */
   var next =
-    parseInt(count.value, 10) || 0;
+    body.querySelectorAll("tr").length;
+
+
+  /*
+   * Keep row_count synchronized with
+   * the actual number of rows.
+   */
+  function updateRowCount() {
+
+    count.value =
+      String(
+        body.querySelectorAll("tr").length
+      );
+
+  }
 
 
   /*
    * Convert HH:MM into total minutes.
    */
-
   function minutes(value) {
 
     if (
       !value ||
       value.indexOf(":") === -1
     ) {
+
       return null;
+
     }
 
     var parts =
@@ -421,19 +488,18 @@ Availability - MediSlot
   /*
    * Convert total minutes back to HH:MM.
    */
-
   function formatTime(totalMinutes) {
 
     var hours =
       Math.floor(totalMinutes / 60);
 
-    var minutes =
+    var mins =
       totalMinutes % 60;
 
     return (
       String(hours).padStart(2, "0") +
       ":" +
-      String(minutes).padStart(2, "0")
+      String(mins).padStart(2, "0")
     );
 
   }
@@ -447,132 +513,127 @@ Availability - MediSlot
    *     To time
    *     Consultation duration
    */
-
   function updateSlots(row) {
 
-  var select =
-    row.querySelector(
-      "[data-type-select]"
-    );
+    var select =
+      row.querySelector(
+        "[data-type-select]"
+      );
 
-  var start =
-    row.querySelector(
-      "[data-time-start]"
-    );
+    var start =
+      row.querySelector(
+        "[data-time-start]"
+      );
 
-  var end =
-    row.querySelector(
-      "[data-time-end]"
-    );
+    var end =
+      row.querySelector(
+        "[data-time-end]"
+      );
 
-  var preview =
-    row.querySelector(
-      "[data-slot-preview]"
-    );
-
-
-  if (
-    !select ||
-    !start ||
-    !end ||
-    !preview
-  ) {
-    return;
-  }
+    var preview =
+      row.querySelector(
+        "[data-slot-preview]"
+      );
 
 
-  var option =
-    select.options[
-      select.selectedIndex
-    ];
+    if (
+      !select ||
+      !start ||
+      !end ||
+      !preview
+    ) {
+
+      return;
+
+    }
 
 
-  var duration =
-    option
-      ? parseInt(
-          option.getAttribute(
-            "data-duration"
-          ) || "0",
-          10
-        )
-      : 0;
+    var option =
+      select.options[
+        select.selectedIndex
+      ];
 
 
-  var startMinutes =
-    minutes(start.value);
+    var duration =
+      option
+        ? parseInt(
+            option.getAttribute(
+              "data-duration"
+            ) || "0",
+            10
+          )
+        : 0;
 
-  var endMinutes =
-    minutes(end.value);
+
+    var startMinutes =
+      minutes(start.value);
+
+    var endMinutes =
+      minutes(end.value);
 
 
-  /*
-   * Missing information.
-   */
+    /*
+     * Missing information.
+     */
+    if (
+      !duration ||
+      startMinutes === null ||
+      endMinutes === null
+    ) {
 
-  if (
-    !duration ||
-    startMinutes === null ||
-    endMinutes === null
-  ) {
+      preview.innerHTML =
+        '<span class="muted small">—</span>';
 
+      return;
+
+    }
+
+
+    /*
+     * Invalid time range.
+     */
+    if (endMinutes <= startMinutes) {
+
+      preview.innerHTML =
+        '<span class="muted small">' +
+        'Invalid time' +
+        '</span>';
+
+      return;
+
+    }
+
+
+    /*
+     * Calculate the number of
+     * complete appointment slots.
+     */
+    var totalMinutes =
+      endMinutes - startMinutes;
+
+    var slotCount =
+      Math.floor(
+        totalMinutes / duration
+      );
+
+
+    /*
+     * Display only the number
+     * of generated slots.
+     */
     preview.innerHTML =
-      '<span class="muted small">' +
-      '—' +
-      '</span>';
-
-    return;
-
-  }
-
-
-  /*
-   * Invalid time range.
-   */
-
-  if (endMinutes <= startMinutes) {
-
-    preview.innerHTML =
-      '<span class="muted small">' +
-      'Invalid time' +
-      '</span>';
-
-    return;
+      '<strong>' +
+      slotCount +
+      ' slot' +
+      (slotCount === 1 ? '' : 's') +
+      '</strong>';
 
   }
 
-
-  /*
-   * Calculate the number of
-   * complete appointment slots.
-   */
-
-  var totalMinutes =
-    endMinutes - startMinutes;
-
-  var slotCount =
-    Math.floor(
-      totalMinutes / duration
-    );
-
-
-  /*
-   * Display only the number
-   * of generated slots.
-   */
-
-  preview.innerHTML =
-    '<strong>' +
-    slotCount +
-    ' slot' +
-    (slotCount === 1 ? '' : 's') +
-    '</strong>';
-
-}
 
   /*
    * Attach listeners to a row.
    */
-
   function wireRow(row) {
 
     [
@@ -582,9 +643,7 @@ Availability - MediSlot
     ].forEach(function (selector) {
 
       var element =
-        row.querySelector(
-          selector
-        );
+        row.querySelector(selector);
 
       if (element) {
 
@@ -615,7 +674,6 @@ Availability - MediSlot
   /*
    * Find a field inside a row.
    */
-
   function field(row, name) {
 
     return row.querySelector(
@@ -628,13 +686,10 @@ Availability - MediSlot
   /*
    * Add a new row.
    */
-
   function addRow(source) {
 
     var holder =
-      document.createElement(
-        "tbody"
-      );
+      document.createElement("tbody");
 
 
     holder.innerHTML =
@@ -665,6 +720,7 @@ Availability - MediSlot
         var targetField =
           field(row, name);
 
+
         if (
           sourceField &&
           targetField
@@ -692,11 +748,12 @@ Availability - MediSlot
 
     next += 1;
 
-    count.value =
-      String(next);
+
+    updateRowCount();
 
 
     wireRow(row);
+
 
     return row;
 
@@ -706,7 +763,6 @@ Availability - MediSlot
   /*
    * Wire existing rows.
    */
-
   Array.prototype.forEach.call(
     body.querySelectorAll("tr"),
     wireRow
@@ -714,9 +770,14 @@ Availability - MediSlot
 
 
   /*
+   * Set the correct initial row count.
+   */
+  updateRowCount();
+
+
+  /*
    * Add row.
    */
-
   document
     .getElementById("add-row")
     .addEventListener(
@@ -732,7 +793,6 @@ Availability - MediSlot
   /*
    * Duplicate / delete buttons.
    */
-
   body.addEventListener(
     "click",
     function (event) {
@@ -744,7 +804,9 @@ Availability - MediSlot
 
 
       if (!button) {
+
         return;
+
       }
 
 
@@ -753,7 +815,9 @@ Availability - MediSlot
 
 
       if (!row) {
+
         return;
+
       }
 
 
@@ -766,7 +830,6 @@ Availability - MediSlot
       /*
        * Duplicate.
        */
-
       if (action === "dup") {
 
         addRow(row);
@@ -779,7 +842,6 @@ Availability - MediSlot
       /*
        * Delete.
        */
-
       if (action === "del") {
 
         var idField =
@@ -806,7 +868,6 @@ Availability - MediSlot
            * Existing database record.
            * Mark it for deletion.
            */
-
           removeField.value = "1";
 
           row.style.display = "none";
@@ -816,12 +877,232 @@ Availability - MediSlot
           /*
            * New unsaved row.
            */
-
           row.parentNode.removeChild(row);
 
         }
 
+
+        updateRowCount();
+
       }
+
+    }
+
+  );
+
+
+  /*
+   * Final validation before submitting.
+   *
+   * This provides an additional check
+   * besides the HTML "required" attribute.
+   */
+  form.addEventListener(
+    "submit",
+    function (event) {
+
+      var rows =
+        body.querySelectorAll("tr");
+
+      var hasError = false;
+
+
+      Array.prototype.forEach.call(
+        rows,
+        function (row) {
+
+          /*
+           * Ignore rows that have been
+           * hidden for deletion.
+           */
+          if (
+            row.style.display === "none"
+          ) {
+
+            return;
+
+          }
+
+
+          var day =
+            field(row, "day");
+
+          var type =
+            field(row, "type");
+
+          var start =
+            field(row, "start");
+
+          var end =
+            field(row, "end");
+
+
+          if (
+            !day ||
+            !type ||
+            !start ||
+            !end
+          ) {
+
+            return;
+
+          }
+
+
+          /*
+           * All four fields are mandatory.
+           */
+          if (
+            !day.value ||
+            !type.value ||
+            !start.value ||
+            !end.value
+          ) {
+
+            hasError = true;
+
+            if (!day.value) {
+              day.focus();
+            } else if (!type.value) {
+              type.focus();
+            } else if (!start.value) {
+              start.focus();
+            } else if (!end.value) {
+              end.focus();
+            }
+
+            return;
+
+          }
+
+
+          /*
+           * End time must be after start time.
+           */
+          var startMinutes =
+            minutes(start.value);
+
+          var endMinutes =
+            minutes(end.value);
+
+
+          if (
+            startMinutes === null ||
+            endMinutes === null
+          ) {
+
+            hasError = true;
+
+            return;
+
+          }
+
+
+          if (
+            endMinutes <= startMinutes
+          ) {
+
+            hasError = true;
+
+            end.focus();
+
+            alert(
+              "The To time must be later than the From time."
+            );
+
+            return;
+
+          }
+
+
+          /*
+           * Consultation type must have
+           * a valid duration.
+           */
+          var selectedOption =
+            type.options[
+              type.selectedIndex
+            ];
+
+
+          var duration =
+            selectedOption
+              ? parseInt(
+                  selectedOption.getAttribute(
+                    "data-duration"
+                  ) || "0",
+                  10
+                )
+              : 0;
+
+
+          if (!duration) {
+
+            hasError = true;
+
+            type.focus();
+
+            return;
+
+          }
+
+
+          /*
+           * Make sure at least one complete
+           * appointment slot can be generated.
+           */
+          var totalMinutes =
+            endMinutes - startMinutes;
+
+          var slotCount =
+            Math.floor(
+              totalMinutes / duration
+            );
+
+
+          if (slotCount < 1) {
+
+            hasError = true;
+
+            end.focus();
+
+            alert(
+              "The selected time range is too short for the consultation duration."
+            );
+
+            return;
+
+          }
+
+        }
+      );
+
+
+      if (hasError) {
+
+        event.preventDefault();
+
+        if (
+          !document.activeElement ||
+          document.activeElement === document.body
+        ) {
+
+          alert(
+            "Please complete all required availability fields."
+          );
+
+        }
+
+        return;
+
+      }
+
+
+      /*
+       * Make sure row_count is correct
+       * immediately before submitting.
+       */
+      updateRowCount();
 
     }
 

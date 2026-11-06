@@ -1,7 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
+
 Description: MediSlot Flask doctor and patient dashboards on one EC2 instance.
 
 Parameters:
+
   ProjectName:
     Type: String
     Default: medislot
@@ -46,21 +48,50 @@ Parameters:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
 
+
 Resources:
+
+  # ----------------------------------------------------------
+  # WEB EC2 SECURITY GROUP
+  # ----------------------------------------------------------
 
   WebSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+
     Properties:
-      GroupDescription: MediSlot web application HTTP access
+
+      GroupDescription: MediSlot web application HTTP and EC2 Instance Connect SSH access
+
       VpcId: !Ref VpcId
+
       SecurityGroupIngress:
+
+        # Public HTTP access to the MediSlot dashboard
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
           Description: HTTP dashboard access
 
+        # SSH access from AWS EC2 Instance Connect service
+        #
+        # Mumbai / ap-south-1:
+        # com.amazonaws.ap-south-1.ec2-instance-connect
+        #
+        # This is an AWS-managed prefix list.
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourcePrefixListId: pl-9aa247f3
+          Description: SSH access from EC2 Instance Connect
+
+      SecurityGroupEgress:
+
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+
       Tags:
+
         - Key: Name
           Value: !Sub '${ProjectName}-${EnvironmentName}-web-sg'
 
@@ -71,54 +102,92 @@ Resources:
           Value: !Ref EnvironmentName
 
 
+  # ----------------------------------------------------------
+  # ALLOW WEB EC2 TO ACCESS SSM INTERFACE ENDPOINT
+  # ----------------------------------------------------------
+
   WebToSsmEndpointIngress:
     Type: AWS::EC2::SecurityGroupIngress
+
     Properties:
+
       GroupId: !Ref SsmEndpointSecurityGroupId
+
       Description: Allow HTTPS from MediSlot web EC2 to SSM endpoints
+
       IpProtocol: tcp
+
       FromPort: 443
+
       ToPort: 443
+
       SourceSecurityGroupId: !Ref WebSecurityGroup
 
 
+  # ----------------------------------------------------------
+  # WEB EC2 IAM ROLE
+  # ----------------------------------------------------------
+
   WebInstanceRole:
     Type: AWS::IAM::Role
+
     Properties:
+
       RoleName: !Sub '${ProjectName}-${EnvironmentName}-web-instance-role'
 
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
+
         Statement:
+
           - Effect: Allow
+
             Principal:
               Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
+
+            Action:
+              - sts:AssumeRole
+
 
       ManagedPolicyArns:
+
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
 
+
       Policies:
+
         - PolicyName: MediSlotWebRuntime
 
           PolicyDocument:
+
             Version: '2012-10-17'
 
             Statement:
 
+              # Read web application ZIP from S3
               - Sid: ReadWebPackage
+
                 Effect: Allow
+
                 Action:
                   - s3:GetObject
+
                 Resource: !Sub 'arn:${AWS::Partition}:s3:::${ArtifactsBucketName}/web/*'
 
+
+              # Read web application settings from SSM
               - Sid: ReadWebSettings
+
                 Effect: Allow
+
                 Action:
                   - ssm:GetParameter
+
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${EnvironmentName}/web/*'
 
+
       Tags:
+
         - Key: Name
           Value: !Sub '${ProjectName}-${EnvironmentName}-web-instance-role'
 
@@ -129,15 +198,26 @@ Resources:
           Value: !Ref EnvironmentName
 
 
+  # ----------------------------------------------------------
+  # WEB EC2 INSTANCE PROFILE
+  # ----------------------------------------------------------
+
   WebInstanceProfile:
     Type: AWS::IAM::InstanceProfile
+
     Properties:
+
       Roles:
         - !Ref WebInstanceRole
 
 
+  # ----------------------------------------------------------
+  # WEB EC2 INSTANCE
+  # ----------------------------------------------------------
+
   WebInstanceV2:
     Type: AWS::EC2::Instance
+
     Properties:
 
       ImageId: !Ref LatestAmiId
@@ -156,6 +236,7 @@ Resources:
         HttpEndpoint: enabled
 
       Tags:
+
         - Key: Name
           Value: !Sub '${ProjectName}-${EnvironmentName}-web'
 
@@ -165,15 +246,23 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
-      # How a new release reaches the instance:
-      #  - CloudFormation changes UserData (new WebPackageKey) -> the instance is stopped and started.
-      #  - cloud-init does NOT re-run user-data on a restart, but it DOES run scripts in
-      #    /var/lib/cloud/scripts/per-boot on every boot.
-      #  - The per-boot script reads the current package key from the instance's own user-data
-      #    (the "# MEDISLOT_..." marker lines below), so it always installs the newest package.
+
+      # ------------------------------------------------------
+      # WEB APPLICATION DEPLOYMENT
+      # ------------------------------------------------------
+      #
+      # CloudFormation changes UserData when WebPackageKey
+      # changes.
+      #
+      # cloud-init does not rerun normal UserData on restart.
+      #
+      # Therefore we install a per-boot script which reads the
+      # current package information from instance UserData and
+      # deploys the application on every boot.
 
       UserData:
         Fn::Base64: !Sub |
+
           #!/bin/bash
 
           # MEDISLOT_WEB_PACKAGE_KEY=${WebPackageKey}
@@ -183,7 +272,9 @@ Resources:
 
           install -d -m 0755 /var/lib/cloud/scripts/per-boot
 
+
           cat > /var/lib/cloud/scripts/per-boot/medislot-deploy.sh <<'DEPLOYEOF'
+
           #!/bin/bash
 
           set -Eeuo pipefail
@@ -192,90 +283,165 @@ Resources:
 
           echo "Starting MediSlot deploy: $(date -Is)"
 
+
           REGION='${AWS::Region}'
+
           BUCKET='${ArtifactsBucketName}'
 
-          # Read the current release settings from this instance's user-data (IMDSv2).
+
+          # ----------------------------------------------------
+          # Read current release settings from instance UserData
+          # ----------------------------------------------------
 
           imds_token() {
-            curl -fsS -X PUT http://169.254.169.254/latest/api/token \
+
+            curl -fsS \
+              -X PUT \
+              http://169.254.169.254/latest/api/token \
               -H 'X-aws-ec2-metadata-token-ttl-seconds: 60'
+
           }
+
 
           userdata_value() {
-            curl -fsS -H "X-aws-ec2-metadata-token: $(imds_token)" \
+
+            curl -fsS \
+              -H "X-aws-ec2-metadata-token: $(imds_token)" \
               http://169.254.169.254/latest/user-data \
-              | sed -n "s/^# $1=//p" | head -n 1
+              | sed -n "s/^# $1=//p" \
+              | head -n 1
+
           }
 
+
           PACKAGE_KEY="$(userdata_value MEDISLOT_WEB_PACKAGE_KEY)"
+
           API_BASE_URL="$(userdata_value MEDISLOT_API_BASE_URL)"
 
+
           if [ -z "$PACKAGE_KEY" ] || [ -z "$API_BASE_URL" ]; then
+
             echo "Could not read release settings from instance user-data."
+
             exit 1
+
           fi
+
 
           echo "Deploying package: $PACKAGE_KEY"
 
-          # Operating system packages.
-          # python3 and curl are already on Amazon Linux 2023.
 
-          rpm -q python3 unzip >/dev/null 2>&1 || dnf install -y python3 unzip
+          # ----------------------------------------------------
+          # Operating system packages
+          # ----------------------------------------------------
 
-          # Application user and directory.
+          rpm -q python3 unzip >/dev/null 2>&1 || \
+            dnf install -y python3 unzip
+
+
+          # ----------------------------------------------------
+          # Application user
+          # ----------------------------------------------------
 
           id medislot >/dev/null 2>&1 || \
-            useradd --system --home-dir /opt/medislot --shell /sbin/nologin medislot
+            useradd \
+              --system \
+              --home-dir /opt/medislot \
+              --shell /sbin/nologin \
+              medislot
 
-          install -d -o medislot -g medislot -m 0755 /opt/medislot
 
-          # Stop the old version and clear old files so nothing stale remains.
+          install \
+            -d \
+            -o medislot \
+            -g medislot \
+            -m 0755 \
+            /opt/medislot
+
+
+          # ----------------------------------------------------
+          # Stop previous application
+          # ----------------------------------------------------
 
           systemctl stop medislot-web.service 2>/dev/null || true
 
-          find /opt/medislot -mindepth 1 -delete
 
-          # Download and extract the exact release package.
+          find /opt/medislot \
+            -mindepth 1 \
+            -delete
+
+
+          # ----------------------------------------------------
+          # Download application package
+          # ----------------------------------------------------
 
           rm -f /tmp/medislot-web.zip
+
 
           aws s3 cp \
             "s3://$BUCKET/$PACKAGE_KEY" \
             /tmp/medislot-web.zip \
             --region "$REGION"
 
+
           test -s /tmp/medislot-web.zip
+
+
+          # ----------------------------------------------------
+          # Extract application
+          # ----------------------------------------------------
 
           python3 -m zipfile \
             -e /tmp/medislot-web.zip \
             /opt/medislot
 
-          # Verify the package structure.
+
+          # ----------------------------------------------------
+          # Verify package structure
+          # ----------------------------------------------------
 
           test -f /opt/medislot/app.py
+
           test -f /opt/medislot/web/app.py
+
           test -f /opt/medislot/web/requirements.txt
+
           test -f /opt/medislot/web/templates/login.html
+
           test -d /opt/medislot/vendor
 
-          # Verify the shipped template contains the CSRF field.
+
+          # ----------------------------------------------------
+          # Verify CSRF protection
+          # ----------------------------------------------------
 
           grep -q 'csrf_token' \
             /opt/medislot/web/templates/login.html
 
-          # Verify dependencies with the EC2 Python runtime.
+
+          # ----------------------------------------------------
+          # Verify Python dependencies
+          # ----------------------------------------------------
 
           export PYTHONPATH=/opt/medislot/vendor:/opt/medislot
 
+
           python3 -c \
             "import flask, gunicorn, requests, boto3; print('MediSlot dependencies verified successfully')"
+
+
+          # ----------------------------------------------------
+          # Permissions
+          # ----------------------------------------------------
 
           chown -R medislot:medislot /opt/medislot
 
           chmod -R a+rX /opt/medislot
 
-          # Application environment.
+
+          # ----------------------------------------------------
+          # Application environment
+          # ----------------------------------------------------
 
           cat > /etc/medislot-web.env <<ENVEOF
 
@@ -289,11 +455,15 @@ Resources:
 
           ENVEOF
 
+
           chown root:medislot /etc/medislot-web.env
 
           chmod 0640 /etc/medislot-web.env
 
-          # systemd service.
+
+          # ----------------------------------------------------
+          # systemd service
+          # ----------------------------------------------------
 
           cat > /etc/systemd/system/medislot-web.service <<'UNITEOF'
 
@@ -302,12 +472,17 @@ Resources:
           Wants=network-online.target
           After=network-online.target
 
+
           [Service]
           Type=simple
+
           User=medislot
           Group=medislot
+
           WorkingDirectory=/opt/medislot
+
           EnvironmentFile=/etc/medislot-web.env
+
 
           ExecStart=/usr/bin/python3 -m gunicorn \
             --workers 1 \
@@ -318,17 +493,24 @@ Resources:
             --error-logfile - \
             app:app
 
+
           AmbientCapabilities=CAP_NET_BIND_SERVICE
+
           CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
           NoNewPrivileges=true
 
+
           Restart=on-failure
+
           RestartSec=5
+
 
           [Install]
           WantedBy=multi-user.target
 
           UNITEOF
+
 
           systemctl daemon-reload
 
@@ -336,9 +518,13 @@ Resources:
 
           systemctl restart medislot-web.service
 
-          # Local health check.
+
+          # ----------------------------------------------------
+          # Local health check
+          # ----------------------------------------------------
 
           healthy=0
+
 
           for attempt in $(seq 1 30); do
 
@@ -351,10 +537,13 @@ Resources:
               healthy=1
 
               echo
+
               echo "MediSlot health check passed."
 
               break
+
             fi
+
 
             echo "Health check attempt $attempt/30 failed."
 
@@ -362,40 +551,55 @@ Resources:
 
           done
 
+
           if [ "$healthy" -ne 1 ]; then
 
             echo "MediSlot application failed to start."
 
+
             systemctl status medislot-web.service \
               --no-pager || true
+
 
             journalctl -u medislot-web.service \
               -n 100 \
               --no-pager || true
 
+
             exit 1
 
           fi
 
+
           echo "MediSlot deploy completed: $(date -Is) package=$PACKAGE_KEY"
 
+
           DEPLOYEOF
+
 
           chmod 0755 \
             /var/lib/cloud/scripts/per-boot/medislot-deploy.sh
 
-          # First boot: run it now.
-          # Later boots run it through cloud-init's per-boot hook.
+
+          # First boot: run immediately.
+          # Later boots: cloud-init runs the script automatically.
 
           /var/lib/cloud/scripts/per-boot/medislot-deploy.sh
 
 
+  # ----------------------------------------------------------
+  # ELASTIC IP
+  # ----------------------------------------------------------
+
   WebElasticIp:
     Type: AWS::EC2::EIP
+
     Properties:
+
       Domain: vpc
 
       Tags:
+
         - Key: Name
           Value: !Sub '${ProjectName}-${EnvironmentName}-web-eip'
 
@@ -406,12 +610,23 @@ Resources:
           Value: !Ref EnvironmentName
 
 
+  # ----------------------------------------------------------
+  # ELASTIC IP ASSOCIATION
+  # ----------------------------------------------------------
+
   WebElasticIpAssociation:
     Type: AWS::EC2::EIPAssociation
+
     Properties:
+
       AllocationId: !GetAtt WebElasticIp.AllocationId
+
       InstanceId: !Ref WebInstanceV2
 
+
+# ------------------------------------------------------------
+# OUTPUTS
+# ------------------------------------------------------------
 
 Outputs:
 
@@ -419,9 +634,11 @@ Outputs:
     Description: Public URL of the MediSlot web application.
     Value: !Sub 'http://${WebElasticIp}'
 
+
   WebInstanceId:
     Description: EC2 instance hosting the MediSlot dashboards.
     Value: !Ref WebInstanceV2
+
 
   WebSecurityGroupId:
     Description: Security group attached to the web instance.

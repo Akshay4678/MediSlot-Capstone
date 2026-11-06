@@ -39,19 +39,17 @@ def add_auth_routes(bp, role):
 
     @bp.route("/login", methods=["GET", "POST"], endpoint="login")
     def login():
+        """
+        Handle login for the current portal.
 
-        # If already logged in, never display another login page.
-        current = sessions.current()
+        A user may switch directly between doctor and patient login.
+        Therefore, an existing session must NOT block a POST to the
+        other login endpoint.
+        """
 
-        if current:
-            current_role = current.get("role")
-
-            if current_role == role:
-                return redirect(url_for(f"{role}.home"))
-
-            if current_role in ("doctor", "patient"):
-                return redirect(url_for(f"{current_role}.home"))
-
+        # ---------------------------------------------------------
+        # POST = attempt a new login
+        # ---------------------------------------------------------
         if request.method == "POST":
             try:
                 tokens = api_client.public(
@@ -76,12 +74,23 @@ def add_auth_routes(bp, role):
                     render_template(
                         "login.html",
                         role=role,
+                        csrf_value=sessions.csrf_token(),
                     ),
                     401 if exc.status == 401 else 200,
                 )
 
+            # -----------------------------------------------------
+            # Create a NEW session from the newly authenticated user.
+            #
+            # This replaces the existing session if the browser was
+            # previously logged in as the other role.
+            # -----------------------------------------------------
             data = sessions.create(tokens)
 
+            # -----------------------------------------------------
+            # Make sure the authenticated account belongs to the
+            # portal being used.
+            # -----------------------------------------------------
             if data["role"] != role:
                 api_client.logout()
 
@@ -94,13 +103,37 @@ def add_auth_routes(bp, role):
 
             return redirect(url_for(f"{role}.home"))
 
+        # ---------------------------------------------------------
+        # GET = display login page.
+        #
+        # Only here do we check whether the browser already has
+        # an authenticated session.
+        # ---------------------------------------------------------
+        current = sessions.current()
+
+        if current:
+            current_role = current.get("role")
+
+            if current_role == role:
+                return redirect(url_for(f"{role}.home"))
+
+            if current_role in ("doctor", "patient"):
+                return redirect(url_for(f"{current_role}.home"))
+
         return render_template(
             "login.html",
             role=role,
+            csrf_value=sessions.csrf_token(),
         )
 
     @bp.route("/register", methods=["GET", "POST"], endpoint="register")
     def register():
+        """
+        Handle registration for the current portal.
+
+        An already authenticated user should not be shown a
+        registration page.
+        """
 
         current = sessions.current()
 
@@ -124,6 +157,9 @@ def add_auth_routes(bp, role):
                 ),
             }
 
+            # -----------------------------------------------------
+            # Patient-specific registration fields
+            # -----------------------------------------------------
             if role == "patient":
                 payload["first_name"] = request.form.get(
                     "first_name",
@@ -140,6 +176,9 @@ def add_auth_routes(bp, role):
                     "",
                 ).strip()
 
+            # -----------------------------------------------------
+            # Doctor-specific registration code
+            # -----------------------------------------------------
             elif request.form.get("registration_code"):
                 payload["registration_code"] = request.form[
                     "registration_code"
@@ -158,6 +197,7 @@ def add_auth_routes(bp, role):
                 return render_template(
                     "register.html",
                     role=role,
+                    csrf_value=sessions.csrf_token(),
                 )
 
             flash(
@@ -172,11 +212,14 @@ def add_auth_routes(bp, role):
         return render_template(
             "register.html",
             role=role,
+            csrf_value=sessions.csrf_token(),
         )
 
     @bp.route("/logout", methods=["POST"], endpoint="logout")
     @role_required(role)
     def logout():
+        """Sign out the currently authenticated user."""
+
         api_client.logout()
 
         flash(

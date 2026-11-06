@@ -49,28 +49,17 @@ Availability - MediSlot
 
         <tr>
 
-          <th>
-            Day
-          </th>
+          <th>Day</th>
 
-          <th>
-            Consultation type
-          </th>
+          <th>Consultation type</th>
 
-          <th>
-            From
-          </th>
+          <th>From</th>
 
-          <th>
-            To
-          </th>
+          <th>To</th>
 
-          <th>
-            Seats
-          </th>
+          <th>Generated slots</th>
 
-          <th>
-          </th>
+          <th></th>
 
         </tr>
 
@@ -87,17 +76,17 @@ Availability - MediSlot
 
           <td>
 
-            <input type="hidden"
-                   name="p{{ i }}_id"
-                   value="{{ r.availability_id or '' }}">
+            <input
+              type="hidden"
+              name="p{{ i }}_id"
+              value="{{ r.availability_id or '' }}">
 
-            <!-- Hidden removal flag.
-                 It is used only when an existing row is deleted. -->
             {% if r.availability_id %}
 
-            <input type="hidden"
-                   name="p{{ i }}_remove"
-                   value="">
+            <input
+              type="hidden"
+              name="p{{ i }}_remove"
+              value="">
 
             {% endif %}
 
@@ -108,9 +97,10 @@ Availability - MediSlot
 
               {% for n, name in days %}
 
-              <option value="{{ n }}"
-                      {{ 'selected'
-                         if r.day_of_week|string == n|string }}>
+              <option
+                value="{{ n }}"
+                {{ 'selected'
+                   if r.day_of_week|string == n|string }}>
 
                 {{ name }}
 
@@ -125,8 +115,9 @@ Availability - MediSlot
 
           <td>
 
-            <select name="p{{ i }}_type"
-                    data-type-select>
+            <select
+              name="p{{ i }}_type"
+              data-type-select>
 
               <option value=""></option>
 
@@ -135,7 +126,6 @@ Availability - MediSlot
               <option
                 value="{{ t.consultation_type_id }}"
                 data-duration="{{ t.duration_minutes }}"
-                data-health-camp="{{ '1' if t.type_name == 'Health Camp Session' else '0' }}"
                 {{ 'selected'
                    if r.consultation_type_id == t.consultation_type_id }}>
 
@@ -173,24 +163,24 @@ Availability - MediSlot
           </td>
 
 
+          <!-- GENERATED SLOTS -->
+
           <td>
 
-            <input
-              name="p{{ i }}_capacity"
-              type="number"
-              min="1"
-              max="10"
-              value="{{ r.capacity }}"
-              data-capacity
-              style="max-width:80px">
+            <div
+              class="generated-slots"
+              data-slot-preview>
 
-            <span
-              class="muted tiny"
-              data-capacity-help>
-            </span>
+              <span class="muted small">
+                Select time and consultation type
+              </span>
+
+            </div>
 
           </td>
 
+
+          <!-- ACTIONS -->
 
           <td class="nowrap">
 
@@ -245,8 +235,8 @@ Availability - MediSlot
       </span>
 
       <span>
-        Regular consultation types always have 1 seat.
-        Only Health Camp Session allows 2–10 seats.
+        The slot duration comes from the selected
+        consultation type.
       </span>
 
       <span>
@@ -313,8 +303,7 @@ Availability - MediSlot
 
         <option
           value="{{ t.consultation_type_id }}"
-          data-duration="{{ t.duration_minutes }}"
-          data-health-camp="{{ '1' if t.type_name == 'Health Camp Session' else '0' }}">
+          data-duration="{{ t.duration_minutes }}">
 
           {{ t.type_name }}
           ({{ t.duration_minutes }} min)
@@ -352,19 +341,15 @@ Availability - MediSlot
 
     <td>
 
-      <input
-        name="p__I___capacity"
-        type="number"
-        min="1"
-        max="10"
-        value="1"
-        data-capacity
-        style="max-width:80px">
+      <div
+        class="generated-slots"
+        data-slot-preview>
 
-      <span
-        class="muted tiny"
-        data-capacity-help>
-      </span>
+        <span class="muted small">
+          Select time and consultation type
+        </span>
+
+      </div>
 
     </td>
 
@@ -410,36 +395,87 @@ Availability - MediSlot
 
 
   /*
-   * Update the seat/capacity behavior.
-   *
-   * Normal consultation:
-   *     exactly 1 seat.
-   *
-   * Health Camp:
-   *     doctor can choose 2–10 seats.
+   * Convert HH:MM into total minutes.
    */
 
-  function updateRow(row) {
+  function minutes(value) {
+
+    if (
+      !value ||
+      value.indexOf(":") === -1
+    ) {
+      return null;
+    }
+
+    var parts =
+      value.split(":");
+
+    return (
+      parseInt(parts[0], 10) * 60 +
+      parseInt(parts[1], 10)
+    );
+
+  }
+
+
+  /*
+   * Convert total minutes back to HH:MM.
+   */
+
+  function formatTime(totalMinutes) {
+
+    var hours =
+      Math.floor(totalMinutes / 60);
+
+    var minutes =
+      totalMinutes % 60;
+
+    return (
+      String(hours).padStart(2, "0") +
+      ":" +
+      String(minutes).padStart(2, "0")
+    );
+
+  }
+
+
+  /*
+   * Generate appointment slots
+   * based on:
+   *
+   *     From time
+   *     To time
+   *     Consultation duration
+   */
+
+  function updateSlots(row) {
 
     var select =
       row.querySelector(
         "[data-type-select]"
       );
 
-    var capacity =
+    var start =
       row.querySelector(
-        "[data-capacity]"
+        "[data-time-start]"
       );
 
-    var help =
+    var end =
       row.querySelector(
-        "[data-capacity-help]"
+        "[data-time-end]"
+      );
+
+    var preview =
+      row.querySelector(
+        "[data-slot-preview]"
       );
 
 
     if (
       !select ||
-      !capacity
+      !start ||
+      !end ||
+      !preview
     ) {
       return;
     }
@@ -451,52 +487,126 @@ Availability - MediSlot
       ];
 
 
-    var isCamp =
-      option &&
-      option.getAttribute(
-        "data-health-camp"
-      ) === "1";
+    var duration =
+      option
+        ? parseInt(
+            option.getAttribute(
+              "data-duration"
+            ) || "0",
+            10
+          )
+        : 0;
 
 
-    if (isCamp) {
+    var startMinutes =
+      minutes(start.value);
 
-      capacity.readOnly = false;
-
-      capacity.min = "2";
-
-      capacity.max = "10";
+    var endMinutes =
+      minutes(end.value);
 
 
-      if (
-        parseInt(
-          capacity.value || "0",
-          10
-        ) < 2
-      ) {
+    /*
+     * Missing information.
+     */
 
-        capacity.value = "2";
+    if (
+      !duration ||
+      startMinutes === null ||
+      endMinutes === null
+    ) {
 
-      }
+      preview.innerHTML =
+        '<span class="muted small">' +
+        'Select time and consultation type' +
+        '</span>';
 
-
-      help.textContent =
-        "2–10 seats";
-
-    } else {
-
-      capacity.value = "1";
-
-      capacity.readOnly = true;
-
-      capacity.min = "1";
-
-      capacity.max = "1";
-
-
-      help.textContent =
-        "1 seat";
+      return;
 
     }
+
+
+    /*
+     * Invalid time range.
+     */
+
+    if (endMinutes <= startMinutes) {
+
+      preview.innerHTML =
+        '<span class="muted small">' +
+        'End time must be after start time' +
+        '</span>';
+
+      return;
+
+    }
+
+
+    /*
+     * Generate complete slots only.
+     */
+
+    var totalMinutes =
+      endMinutes - startMinutes;
+
+    var slotCount =
+      Math.floor(
+        totalMinutes / duration
+      );
+
+
+    if (slotCount <= 0) {
+
+      preview.innerHTML =
+        '<span class="muted small">' +
+        'No complete slots' +
+        '</span>';
+
+      return;
+
+    }
+
+
+    var html = "";
+
+
+    /*
+     * Generate every appointment slot.
+     */
+
+    for (
+      var i = 0;
+      i < slotCount;
+      i++
+    ) {
+
+      var slotStart =
+        startMinutes +
+        (i * duration);
+
+      var slotEnd =
+        slotStart +
+        duration;
+
+
+      html +=
+        '<div class="generated-slot">' +
+          formatTime(slotStart) +
+          ' - ' +
+          formatTime(slotEnd) +
+        '</div>';
+
+    }
+
+
+    preview.innerHTML =
+      '<strong>' +
+      slotCount +
+      ' slot' +
+      (slotCount === 1 ? '' : 's') +
+      '</strong>' +
+      '<div class="slot-list">' +
+      html +
+      '</div>';
 
   }
 
@@ -509,27 +619,28 @@ Availability - MediSlot
 
     [
       "[data-type-select]",
-      "[data-capacity]"
+      "[data-time-start]",
+      "[data-time-end]"
     ].forEach(function (selector) {
 
-      var el =
+      var element =
         row.querySelector(
           selector
         );
 
-      if (el) {
+      if (element) {
 
-        el.addEventListener(
+        element.addEventListener(
           "input",
           function () {
-            updateRow(row);
+            updateSlots(row);
           }
         );
 
-        el.addEventListener(
+        element.addEventListener(
           "change",
           function () {
-            updateRow(row);
+            updateSlots(row);
           }
         );
 
@@ -538,7 +649,7 @@ Availability - MediSlot
     });
 
 
-    updateRow(row);
+    updateSlots(row);
 
   }
 
@@ -557,10 +668,7 @@ Availability - MediSlot
 
 
   /*
-   * Add a new availability row.
-   *
-   * If source is provided, duplicate
-   * its values.
+   * Add a new row.
    */
 
   function addRow(source) {
@@ -590,8 +698,7 @@ Availability - MediSlot
         "day",
         "type",
         "start",
-        "end",
-        "capacity"
+        "end"
       ].forEach(function (name) {
 
         var sourceField =
@@ -649,7 +756,7 @@ Availability - MediSlot
 
 
   /*
-   * Add row button.
+   * Add row.
    */
 
   document
@@ -665,7 +772,7 @@ Availability - MediSlot
 
 
   /*
-   * Duplicate and delete buttons.
+   * Duplicate / delete buttons.
    */
 
   body.addEventListener(
@@ -699,7 +806,7 @@ Availability - MediSlot
 
 
       /*
-       * Duplicate row.
+       * Duplicate.
        */
 
       if (action === "dup") {
@@ -712,14 +819,7 @@ Availability - MediSlot
 
 
       /*
-       * Delete row.
-       *
-       * Existing saved rows:
-       *     set the hidden _remove field
-       *     and hide the row.
-       *
-       * New unsaved rows:
-       *     remove them from the DOM.
+       * Delete.
        */
 
       if (action === "del") {
@@ -746,8 +846,7 @@ Availability - MediSlot
 
           /*
            * Existing database record.
-           * Keep the row in the form so the
-           * backend receives the remove flag.
+           * Mark it for deletion.
            */
 
           removeField.value = "1";

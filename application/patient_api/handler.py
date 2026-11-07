@@ -115,7 +115,8 @@ def _doctor_search(event):
     except (TypeError, ValueError):
         return _error(400, "INVALID_PAGINATION", "limit and offset must be integers.")
 
-    conditions = ["d.is_active = TRUE", "h.is_active = TRUE", "s.is_active = TRUE", "u.is_active = TRUE"]
+    # specialisations has no is_active column (see schema.sql), so it is not filtered here.
+    conditions = ["d.is_active = TRUE", "h.is_active = TRUE", "u.is_active = TRUE"]
     values = []
     if search:
         conditions.append("(d.first_name LIKE %s OR d.last_name LIKE %s OR h.hospital_name LIKE %s)")
@@ -150,7 +151,9 @@ def _doctor_search(event):
 
 def _availability(event):
     q = event.get("queryStringParameters") or {}
-    doctor_id = (q.get("doctor_id") or "").strip()
+    # The route is /doctors/{doctor_id}/slots, so the id arrives as a path parameter.
+    path_params = event.get("pathParameters") or {}
+    doctor_id = (path_params.get("doctor_id") or q.get("doctor_id") or "").strip()
     date_text = (q.get("date") or "").strip()
     if not doctor_id or not date_text:
         return _error(400, "MISSING_PARAMETERS", "doctor_id and date (YYYY-MM-DD) are required.")
@@ -681,6 +684,8 @@ def lambda_handler(event, context):
         if str(exc) == "IDEMPOTENCY_KEY_OWNERSHIP":
             return _error(409, "IDEMPOTENCY_KEY_IN_USE", "That idempotency key belongs to another request.")
         return _error(403, "FORBIDDEN", "The requested operation is not permitted.")
-    except Exception:
+    except Exception as exc:
         log.exception("Patient API failed")
-        return _error(500, "INTERNAL_SERVER_ERROR", "The request could not be completed.")
+        # In dev only, include the real cause so it shows on the web page without opening CloudWatch.
+        detail = f" [{type(exc).__name__}: {exc}]" if os.environ.get("ENVIRONMENT_NAME") == "dev" else ""
+        return _error(500, "INTERNAL_SERVER_ERROR", "The request could not be completed." + detail)

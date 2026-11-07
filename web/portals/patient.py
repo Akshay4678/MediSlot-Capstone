@@ -16,7 +16,19 @@ add_auth_routes(bp, "patient")
 @bp.errorhandler(ApiError)
 def api_error(exc):
     flash(exc.message, "error")
+    # Never redirect back to the page that just failed: that is an endless redirect loop.
+    if request.endpoint == "patient.home":
+        return redirect(url_for("landing"))
     return redirect(url_for("patient.home"))
+
+
+def _items(path, params=None):
+    """Load a list from the API; on failure show the real reason and keep the page usable."""
+    try:
+        return api_client.call("GET", path, params=params)["items"]
+    except ApiError as exc:
+        flash(f"{path}: {exc.message} (HTTP {exc.status})", "error")
+        return []
 
 
 @bp.route("/", endpoint="home")
@@ -25,16 +37,15 @@ def home():
     query = request.args.get("search", "").strip()
     city = request.args.get("city", "").strip()
     specialisation = request.args.get("specialisation", "").strip()
-    doctors = api_client.call(
-        "GET",
+    doctors = _items(
         "/doctors/search",
-        params={
+        {
             "search": query,
             "city": city,
             "specialisation": specialisation,
         },
-    )["items"]
-    appointments = api_client.call("GET", "/appointments")["items"]
+    )
+    appointments = _items("/appointments")
     return render_template(
         "patient/home.html",
         doctors=doctors,

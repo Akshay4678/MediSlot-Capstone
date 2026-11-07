@@ -82,7 +82,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          SourcePrefixListId: pl-9aa247f3
+          SourcePrefixListId: pl-0fa83cebf909345ca
           Description: SSH access from EC2 Instance Connect
 
       SecurityGroupEgress:

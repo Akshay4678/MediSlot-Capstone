@@ -215,7 +215,7 @@ Resources:
   # WEB EC2 INSTANCE
   # ----------------------------------------------------------
 
-  WebInstanceV2:
+  WebInstanceV3:
     Type: AWS::EC2::Instance
 
     Properties:
@@ -262,7 +262,6 @@ Resources:
 
       UserData:
         Fn::Base64: !Sub |
-
           #!/bin/bash
 
           # MEDISLOT_WEB_PACKAGE_KEY=${WebPackageKey}
@@ -274,7 +273,6 @@ Resources:
 
 
           cat > /var/lib/cloud/scripts/per-boot/medislot-deploy.sh <<'DEPLOYEOF'
-
           #!/bin/bash
 
           set -Eeuo pipefail
@@ -621,7 +619,7 @@ Resources:
 
       AllocationId: !GetAtt WebElasticIp.AllocationId
 
-      InstanceId: !Ref WebInstanceV2
+      InstanceId: !Ref WebInstanceV3
 
 
 # ------------------------------------------------------------
@@ -637,7 +635,7 @@ Outputs:
 
   WebInstanceId:
     Description: EC2 instance hosting the MediSlot dashboards.
-    Value: !Ref WebInstanceV2
+    Value: !Ref WebInstanceV3
 
 
   WebSecurityGroupId:

@@ -29,9 +29,11 @@ def _fetch(cur, doctor_id):
     cur.execute(
         "SELECT ap.availability_id, ap.consultation_type_id, ct.type_name, ct.duration_minutes, "
         "       ap.day_of_week, ap.start_time, ap.end_time, ap.capacity, ap.is_active "
-        "FROM availability_patterns ap JOIN consultation_types ct "
+        "FROM availability_patterns ap "
+        "JOIN consultation_types ct "
         "ON ct.consultation_type_id = ap.consultation_type_id "
-        "WHERE ap.doctor_id = %s ORDER BY ap.day_of_week, ap.start_time",
+        "WHERE ap.doctor_id = %s "
+        "ORDER BY ap.day_of_week, ap.start_time",
         (doctor_id,),
     )
 
@@ -68,11 +70,7 @@ def validate(items, types_by_id, existing_ids):
     """Validate and normalise the submitted patterns (pure function, unit-tested)."""
 
     if not isinstance(items, list):
-        raise ApiError(
-            400,
-            "INVALID_FIELD",
-            "patterns must be a list.",
-        )
+        raise ApiError(400, "INVALID_FIELD", "patterns must be a list.")
 
     if len(items) > MAX_PATTERNS:
         raise ApiError(
@@ -145,17 +143,13 @@ def validate(items, types_by_id, existing_ids):
                 f"{ctype['type_name']} ({ctype['duration_minutes']} min).",
             )
 
-        # Capacity is configured at the availability/slot level.
+        # Health Camp capacity is intentionally NOT validated here.
         #
-        # Regular consultation:
-        #   normally capacity = 1
-        #
-        # Health Camp:
-        #   capacity can be 1 or greater.
-        #
-        # The previous Health Camp 2-10 restriction is intentionally removed.
-        # The actual number of people allowed for a Health Camp booking will
-        # be enforced later by the booking logic.
+        # A Health Camp can have capacity 1, 3, 5, 6, etc.
+        # The actual group/appointment capacity rules will be handled
+        # during appointment-booking development.
+        camp = rules.is_health_camp(ctype["type_name"])
+
         raw_capacity = item.get("capacity", 1)
 
         try:
@@ -163,11 +157,12 @@ def validate(items, types_by_id, existing_ids):
         except (TypeError, ValueError):
             capacity = 0
 
-        if capacity < 1:
+        # Non-camp consultations remain single-patient slots.
+        if not camp and capacity != 1:
             raise ApiError(
                 400,
                 "INVALID_CAPACITY",
-                f"{label}: capacity must be at least 1.",
+                f"{label}: only Health Camp sessions can have capacity above 1.",
             )
 
         availability_id = item.get("availability_id")
@@ -206,8 +201,7 @@ def validate(items, types_by_id, existing_ids):
             }
         )
 
-    # A doctor cannot be in two places:
-    # patterns on the same weekday must not overlap.
+    # A doctor cannot be in two places: patterns on the same weekday must not overlap.
     for day in range(1, 8):
         day_items = sorted(
             (
@@ -224,10 +218,9 @@ def validate(items, types_by_id, existing_ids):
                     400,
                     "OVERLAPPING_PATTERNS",
                     f"{DAY_NAMES[day]}: "
-                    f"{first['start_time']:%H:%M}-"
-                    f"{first['end_time']:%H:%M} overlaps "
-                    f"{second['start_time']:%H:%M}-"
-                    f"{second['end_time']:%H:%M}.",
+                    f"{first['start_time']:%H:%M}-{first['end_time']:%H:%M} "
+                    f"overlaps "
+                    f"{second['start_time']:%H:%M}-{second['end_time']:%H:%M}.",
                 )
 
     return clean

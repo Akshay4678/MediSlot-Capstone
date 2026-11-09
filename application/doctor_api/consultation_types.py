@@ -1,4 +1,12 @@
-"""Consultation types owned by the calling doctor: POST/GET/PUT/DELETE /doctors/me/consultation-types."""
+"""Consultation types offered by the calling doctor: POST/GET/PUT/DELETE /doctors/me/consultation-types.
+
+Data model (two tables):
+  * consultation_types          - the fixed catalogue shared by every doctor (type_name, duration_minutes).
+  * doctor_consultation_types   - one row per doctor per catalogue type, holding that doctor's own fee.
+
+The public id of a consultation type in this API is the CATALOGUE id (consultation_type_id). A doctor can
+have each catalogue type at most once, so (doctor, consultation_type_id) identifies their offering.
+"""
 
 from decimal import Decimal, InvalidOperation
 
@@ -8,6 +16,13 @@ from application.common import rules
 from application.common.api import ApiError, money, new_id, require_uuid
 
 MAX_FEE = Decimal("100000")
+
+_SELECT_OFFERING = (
+    "SELECT ct.consultation_type_id, ct.type_name, ct.duration_minutes, dct.fee "
+    "FROM doctor_consultation_types dct "
+    "JOIN consultation_types ct ON ct.consultation_type_id = dct.consultation_type_id "
+    "WHERE dct.doctor_id = %s"
+)
 
 
 def _fee(value):
@@ -26,21 +41,26 @@ def _row(row):
 
 
 def _load(cur, doctor_id, type_id):
-    cur.execute(
-        "SELECT consultation_type_id, type_name, duration_minutes, fee FROM consultation_types "
-        "WHERE consultation_type_id = %s AND doctor_id = %s", (type_id, doctor_id))
+    cur.execute(_SELECT_OFFERING + " AND ct.consultation_type_id = %s", (doctor_id, type_id))
     row = cur.fetchone()
     if not row:
         raise ApiError(404, "CONSULTATION_TYPE_NOT_FOUND", "Consultation type not found.")
     return row
 
 
+def _catalogue_id(cur, name, minutes):
+    """Return the catalogue row for a type name, creating it the first time any doctor offers it."""
+    cur.execute(
+        "INSERT INTO consultation_types (consultation_type_id, type_name, duration_minutes) VALUES (%s, %s, %s) "
+        "ON DUPLICATE KEY UPDATE consultation_type_id = consultation_type_id", (new_id(), name, minutes))
+    cur.execute("SELECT consultation_type_id, duration_minutes FROM consultation_types WHERE type_name = %s", (name,))
+    return cur.fetchone()
+
+
 def list_(ctx):
     doctor = ctx.doctor()
     with ctx.conn.cursor() as cur:
-        cur.execute(
-            "SELECT consultation_type_id, type_name, duration_minutes, fee FROM consultation_types "
-            "WHERE doctor_id = %s ORDER BY duration_minutes, type_name", (doctor["doctor_id"],))
+        cur.execute(_SELECT_OFFERING + " ORDER BY ct.duration_minutes, ct.type_name", (doctor["doctor_id"],))
         items = [_row(r) for r in cur.fetchall()]
     allowed = [{"type_name": n, "duration_minutes": rules.canonical_type(n)[1]} for n in rules.allowed_type_names()]
     return 200, {"items": items, "allowed_types": allowed}
@@ -56,14 +76,15 @@ def create(ctx):
         raise ApiError(400, "INVALID_DURATION", f"{name} has a fixed duration of {minutes} minutes.")
     if "fee" not in ctx.body:
         raise ApiError(400, "MISSING_FIELD", "fee is required.")
-    fee, type_id = _fee(ctx.body["fee"]), new_id()
+    fee = _fee(ctx.body["fee"])
 
     try:
         with ctx.conn.cursor() as cur:
+            catalogue = _catalogue_id(cur, name, minutes)
             cur.execute(
-                "INSERT INTO consultation_types (consultation_type_id, doctor_id, type_name, duration_minutes, fee) "
-                "VALUES (%s, %s, %s, %s, %s)", (type_id, doctor["doctor_id"], name, minutes, fee))
-            row = _load(cur, doctor["doctor_id"], type_id)
+                "INSERT INTO doctor_consultation_types (doctor_consultation_type_id, doctor_id, consultation_type_id, fee) "
+                "VALUES (%s, %s, %s, %s)", (new_id(), doctor["doctor_id"], catalogue["consultation_type_id"], fee))
+            row = _load(cur, doctor["doctor_id"], catalogue["consultation_type_id"])
     except pymysql.err.IntegrityError as exc:
         if exc.args and exc.args[0] == 1062:
             raise ApiError(409, "TYPE_EXISTS", f"You already have a '{name}' consultation type.") from None
@@ -83,7 +104,9 @@ def update(ctx):
             raise ApiError(400, "INVALID_DURATION", "Consultation durations are fixed by the platform rules.")
         if "fee" not in body:
             raise ApiError(400, "NOTHING_TO_UPDATE", "Only fee can be updated.")
-        cur.execute("UPDATE consultation_types SET fee = %s WHERE consultation_type_id = %s", (_fee(body["fee"]), type_id))
+        cur.execute(
+            "UPDATE doctor_consultation_types SET fee = %s WHERE doctor_id = %s AND consultation_type_id = %s",
+            (_fee(body["fee"]), doctor["doctor_id"], type_id))
         row = _load(cur, doctor["doctor_id"], type_id)
     return 200, {"consultation_type": _row(row)}
 
@@ -94,7 +117,9 @@ def delete(ctx):
     try:
         with ctx.conn.cursor() as cur:
             _load(cur, doctor["doctor_id"], type_id)
-            cur.execute("DELETE FROM consultation_types WHERE consultation_type_id = %s", (type_id,))
+            # Only this doctor's offering is removed; the shared catalogue row stays for other doctors.
+            cur.execute("DELETE FROM doctor_consultation_types WHERE doctor_id = %s AND consultation_type_id = %s",
+                        (doctor["doctor_id"], type_id))
     except pymysql.err.IntegrityError as exc:
         if exc.args and exc.args[0] in (1451, 1217):
             raise ApiError(409, "TYPE_IN_USE", "This consultation type is used by an availability pattern, slot or appointment.") from None

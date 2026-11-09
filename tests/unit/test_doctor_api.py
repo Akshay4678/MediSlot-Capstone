@@ -157,8 +157,10 @@ class FakeCtx:
 
 
 def test_consultation_type_rules():
-    ctx = lambda body: FakeCtx(body, conn=Conn([("FROM consultation_types", [
-        {"consultation_type_id": "x", "type_name": "Quick Consult", "duration_minutes": 15, "fee": 400}])]))
+    ctx = lambda body: FakeCtx(body, conn=Conn([
+        ("FROM consultation_types", [{"consultation_type_id": "x", "duration_minutes": 15}]),  # catalogue lookup
+        ("FROM doctor_consultation_types", [
+            {"consultation_type_id": "x", "type_name": "Quick Consult", "duration_minutes": 15, "fee": 400}])]))
     assert code_of(lambda: consultation_types.create(ctx({"type_name": "Spa Day", "fee": 10}))) == "INVALID_TYPE_NAME"
     assert code_of(lambda: consultation_types.create(ctx({"type_name": "Quick Consult", "fee": 10, "duration_minutes": 20}))) == "INVALID_DURATION"
     assert code_of(lambda: consultation_types.create(ctx({"type_name": "Quick Consult"}))) == "MISSING_FIELD"
@@ -170,21 +172,55 @@ def test_consultation_type_rules():
     assert insert == []  # (separate conn) sanity: nothing leaks between contexts
 
 
-def test_consultation_type_insert_uses_the_fixed_duration_and_the_callers_doctor_id():
-    conn = Conn([("FROM consultation_types", [{"consultation_type_id": "x", "type_name": "Standard Consult",
-                                               "duration_minutes": 30, "fee": 500}])])
+def test_consultation_type_create_adds_a_catalogue_row_and_the_callers_own_fee():
+    conn = Conn([("FROM consultation_types", [{"consultation_type_id": "cat-1", "duration_minutes": 30}]),
+                 ("FROM doctor_consultation_types", [{"consultation_type_id": "cat-1", "type_name": "Standard Consult",
+                                                      "duration_minutes": 30, "fee": 500}])])
     consultation_types.create(FakeCtx({"type_name": "Standard Consult", "fee": 500}, conn=conn))
-    sql, params = [e for e in conn.executed if e[0].startswith("INSERT")][0]
-    assert params[1] == DOC and params[2] == "Standard Consult" and params[3] == 30
+    inserts = [e for e in conn.executed if e[0].startswith("INSERT")]
+    catalogue = [e for e in inserts if "INTO consultation_types" in e[0]][0]
+    offering = [e for e in inserts if "INTO doctor_consultation_types" in e[0]][0]
+    # the catalogue holds the name and the fixed duration only: no doctor and no fee
+    assert "doctor_id" not in catalogue[0] and "fee" not in catalogue[0]
+    assert catalogue[1][1] == "Standard Consult" and catalogue[1][2] == 30
+    # the fee lives on the per-doctor row, keyed by the caller's doctor id and the catalogue id
+    assert offering[1][1] == DOC and offering[1][2] == "cat-1" and str(offering[1][3]) == "500.00"
+
+
+def test_two_doctors_can_offer_the_same_type_with_different_fees():
+    def create_for(doctor_id, fee):
+        conn = Conn([("FROM consultation_types", [{"consultation_type_id": "cat-1", "duration_minutes": 30}]),
+                     ("FROM doctor_consultation_types", [{"consultation_type_id": "cat-1", "type_name": "Standard Consult",
+                                                          "duration_minutes": 30, "fee": fee}])])
+        ctx = FakeCtx({"type_name": "Standard Consult", "fee": fee}, conn=conn)
+        ctx.doctor = lambda: {"doctor_id": doctor_id, "timezone": "Asia/Kolkata", "is_active": True}
+        consultation_types.create(ctx)
+        return [e for e in conn.executed if "INTO doctor_consultation_types" in e[0]][0][1]
+    first, second = create_for(DOC, 500), create_for("22222222-2222-4222-8222-222222222222", 900)
+    assert first[2] == second[2] == "cat-1"          # same catalogue type ...
+    assert first[1] != second[1] and first[3] != second[3]  # ... different doctor row and fee
 
 
 def test_only_fee_can_be_updated():
     row = {"consultation_type_id": T_QUICK, "type_name": "Quick Consult", "duration_minutes": 15, "fee": 400}
-    conn = Conn([("FROM consultation_types", [row])])
+    conn = Conn([("FROM doctor_consultation_types", [row])])
     assert code_of(lambda: consultation_types.update(FakeCtx({"type_name": "Detailed Consult"}, {"id": T_QUICK}, conn))) == "TYPE_NAME_IMMUTABLE"
     assert code_of(lambda: consultation_types.update(FakeCtx({"duration_minutes": 60}, {"id": T_QUICK}, conn))) == "INVALID_DURATION"
     assert code_of(lambda: consultation_types.update(FakeCtx({}, {"id": T_QUICK}, conn))) == "NOTHING_TO_UPDATE"
     assert consultation_types.update(FakeCtx({"fee": 450}, {"id": T_QUICK}, conn))[0] == 200
+    update_sql, update_params = [e for e in conn.executed if e[0].startswith("UPDATE")][0]
+    assert "doctor_consultation_types" in update_sql and update_params[1:] == (DOC, T_QUICK)  # only this doctor's fee
+
+
+def test_delete_only_removes_the_callers_offering_not_the_shared_catalogue_row():
+    row = {"consultation_type_id": T_QUICK, "type_name": "Quick Consult", "duration_minutes": 15, "fee": 400}
+    conn = Conn([("FROM doctor_consultation_types", [row])])
+    assert consultation_types.delete(FakeCtx({}, {"id": T_QUICK}, conn))[0] == 200
+    sql, params = [e for e in conn.executed if e[0].startswith("DELETE")][0]
+    assert "doctor_consultation_types" in sql and "FROM consultation_types" not in sql and params == (DOC, T_QUICK)
+    # a type this doctor does not offer is a 404, whoever else offers it
+    empty = Conn([("FROM doctor_consultation_types", [])])
+    assert code_of(lambda: consultation_types.delete(FakeCtx({}, {"id": T_QUICK}, empty))) == "CONSULTATION_TYPE_NOT_FOUND"
 
 
 # -------------------------------------------------------------------- router

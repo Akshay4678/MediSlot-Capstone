@@ -114,8 +114,11 @@ def put(ctx):
 
     doctor_id = doctor["doctor_id"]
     with ctx.conn.cursor() as cur:
-        cur.execute("SELECT consultation_type_id, type_name, duration_minutes FROM consultation_types WHERE doctor_id = %s",
-                    (doctor_id,))
+        cur.execute(
+            "SELECT ct.consultation_type_id, ct.type_name, ct.duration_minutes "
+            "FROM doctor_consultation_types dct "
+            "JOIN consultation_types ct ON ct.consultation_type_id = dct.consultation_type_id "
+            "WHERE dct.doctor_id = %s", (doctor_id,))
         types_by_id = {r["consultation_type_id"]: r for r in cur.fetchall()}
         cur.execute("SELECT availability_id FROM availability_patterns WHERE doctor_id = %s", (doctor_id,))
         existing_ids = {r["availability_id"] for r in cur.fetchall()}

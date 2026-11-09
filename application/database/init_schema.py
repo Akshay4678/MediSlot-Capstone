@@ -144,13 +144,14 @@ def split_sql_statements(sql_text):
     return statements
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Dependency order does not matter for DROP because foreign key checks are disabled,
 # but the list must name every application table.
 APP_TABLES = (
     "refund_ledger", "appointments", "materialised_slots", "blackout_dates",
-    "availability_patterns", "consultation_types", "doctors", "patients",
+    "availability_patterns", "doctor_consultation_types", "consultation_types_v4",
+    "consultation_types", "doctors", "patients",
     "specialisations", "hospitals", "users",
 )
 
@@ -180,6 +181,98 @@ def _current_version(cursor):
     return row["version"] if isinstance(row, dict) else row[0]
 
 
+# ---------------------------------------------------------------- 4 -> 5 migration
+# Version 5 splits the old per-doctor consultation_types table into
+#   consultation_types          the fixed catalogue (type_name, duration_minutes), shared by all doctors
+#   doctor_consultation_types   one row per doctor per type, holding that doctor's own fee
+# availability_patterns, materialised_slots and appointments keep their consultation_type_id column
+# (now the catalogue id) and reference the pair (doctor_id, consultation_type_id).
+OLD_TYPES_TABLE = "consultation_types_v4"
+SPLIT_CHILD_TABLES = (
+    # table, index name, foreign key name
+    ("availability_patterns", "ix_availability_doctor_type", "fk_availability_doctor_type"),
+    ("materialised_slots", "ix_slots_doctor_type", "fk_slots_doctor_type"),
+    ("appointments", "ix_appointments_doctor_type", "fk_appointments_doctor_type"),
+)
+
+
+def _first(row):
+    return row["n"] if isinstance(row, dict) else row[0]
+
+
+def _column_exists(cursor, table, column):
+    cursor.execute(
+        "SELECT COUNT(*) AS n FROM information_schema.columns "
+        "WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s",
+        (table, column),
+    )
+    return _first(cursor.fetchone()) > 0
+
+
+def _constraint_exists(cursor, table, name):
+    cursor.execute(
+        "SELECT COUNT(*) AS n FROM information_schema.table_constraints "
+        "WHERE table_schema = DATABASE() AND table_name = %s AND constraint_name = %s",
+        (table, name),
+    )
+    return _first(cursor.fetchone()) > 0
+
+
+def _prepare_consultation_type_split(cursor):
+    """Step 1: detach and rename the old per-doctor table so schema.sql can create the new ones.
+
+    Returns True while the old table still has data that must be copied (step 2). Safe to re-run.
+    """
+    if _table_exists(cursor, "consultation_types") and _column_exists(cursor, "consultation_types", "doctor_id"):
+        cursor.execute(
+            "SELECT table_name AS child, constraint_name AS fk FROM information_schema.referential_constraints "
+            "WHERE constraint_schema = DATABASE() AND referenced_table_name = 'consultation_types'"
+        )
+        for row in cursor.fetchall():
+            child, fk = (row["child"], row["fk"]) if isinstance(row, dict) else (row[0], row[1])
+            cursor.execute(f"ALTER TABLE `{child}` DROP FOREIGN KEY `{fk}`")
+        cursor.execute(f"RENAME TABLE consultation_types TO {OLD_TYPES_TABLE}")
+    return _table_exists(cursor, OLD_TYPES_TABLE)
+
+
+def _finish_consultation_type_split(cursor):
+    """Step 2 (after schema.sql created the new tables): copy data, repoint children, re-add keys."""
+    old = OLD_TYPES_TABLE
+    # Catalogue: one row per type name (schema.sql already seeded the standard four).
+    cursor.execute(
+        "INSERT IGNORE INTO consultation_types (consultation_type_id, type_name, duration_minutes) "
+        f"SELECT MIN(consultation_type_id), type_name, MAX(duration_minutes) FROM {old} GROUP BY type_name"
+    )
+    # Each old row becomes that doctor's offering of the catalogue type; the old id is reused as the row id.
+    cursor.execute(
+        "INSERT IGNORE INTO doctor_consultation_types (doctor_consultation_type_id, doctor_id, consultation_type_id, fee) "
+        f"SELECT o.consultation_type_id, o.doctor_id, ct.consultation_type_id, o.fee "
+        f"FROM {old} o JOIN consultation_types ct ON ct.type_name = o.type_name"
+    )
+    # Fees the doctors already set win over the seed defaults.
+    cursor.execute(
+        "UPDATE doctor_consultation_types d "
+        "JOIN consultation_types ct ON ct.consultation_type_id = d.consultation_type_id "
+        f"JOIN {old} o ON o.doctor_id = d.doctor_id AND o.type_name = ct.type_name "
+        "SET d.fee = o.fee"
+    )
+    for table, index, fk in SPLIT_CHILD_TABLES:
+        # Old per-doctor type id -> catalogue id (matched through the type name).
+        cursor.execute(
+            f"UPDATE {table} t JOIN {old} o ON o.consultation_type_id = t.consultation_type_id "
+            "JOIN consultation_types ct ON ct.type_name = o.type_name "
+            "SET t.consultation_type_id = ct.consultation_type_id"
+        )
+        if not _constraint_exists(cursor, table, fk):
+            cursor.execute(
+                f"ALTER TABLE {table} ADD KEY {index} (doctor_id, consultation_type_id), "
+                f"ADD CONSTRAINT {fk} FOREIGN KEY (doctor_id, consultation_type_id) "
+                "REFERENCES doctor_consultation_types (doctor_id, consultation_type_id) "
+                "ON UPDATE CASCADE ON DELETE RESTRICT"
+            )
+    cursor.execute(f"DROP TABLE {old}")
+
+
 def initialize_database():
     """Create or upgrade the schema.
 
@@ -199,7 +292,7 @@ def initialize_database():
         with connection.cursor() as cursor:
             version = _current_version(cursor)
             legacy = version is None and _table_exists(cursor, "users")
-            outdated = version is not None and version < SCHEMA_VERSION
+            split_pending = False
 
             # Milestone 3 -> 4 is a small additive migration. Keep production data intact.
             # Older/unversioned layouts are still rebuilt only when explicitly allowed.
@@ -214,7 +307,15 @@ def initialize_database():
                     "UPDATE schema_meta SET version = 4, applied_at = CURRENT_TIMESTAMP WHERE id = 1"
                 )
                 connection.commit()
-                return
+
+            # Milestone 4 -> 5 keeps data: consultation types are split into a catalogue and per-doctor fees.
+            # Step 1 happens here; step 2 runs after schema.sql has created the new tables.
+            if version == 4:
+                logger.info("Applying schema migration 4 -> 5 (consultation types split)")
+                split_pending = _prepare_consultation_type_split(cursor)
+                version = SCHEMA_VERSION
+
+            outdated = version is not None and version < SCHEMA_VERSION
 
             if legacy or outdated:
                 if os.environ.get("ALLOW_SCHEMA_REBUILD", "").lower() != "true":
@@ -231,6 +332,9 @@ def initialize_database():
             for number, statement in enumerate(statements, start=1):
                 logger.info("Executing database schema statement %s of %s", number, len(statements))
                 cursor.execute(statement)
+
+            if split_pending:
+                _finish_consultation_type_split(cursor)
 
             cursor.execute(
                 "INSERT INTO schema_meta (id, version) VALUES (1, %s) "

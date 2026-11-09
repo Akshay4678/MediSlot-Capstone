@@ -35,8 +35,10 @@ def get(ctx):
     with ctx.conn.cursor() as cur:
         cur.execute(
             "SELECT s.slot_id, s.`date`, s.start_time, s.end_time, s.start_utc, s.end_utc, s.capacity, "
-            "       s.booked_count, s.status, ct.type_name, ct.duration_minutes, ct.fee "
+            "       s.booked_count, s.status, ct.type_name, ct.duration_minutes, dct.fee "
             "FROM materialised_slots s JOIN consultation_types ct ON ct.consultation_type_id = s.consultation_type_id "
+            "JOIN doctor_consultation_types dct ON dct.doctor_id = s.doctor_id "
+            "     AND dct.consultation_type_id = s.consultation_type_id "
             "WHERE s.doctor_id = %s AND s.`date` BETWEEN %s AND %s ORDER BY s.start_utc",
             (doctor["doctor_id"], start, end))
         slot_rows = cur.fetchall()

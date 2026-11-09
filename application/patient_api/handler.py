@@ -177,9 +177,10 @@ def _availability(event):
             cur.execute(
                 "SELECT s.slot_id, s.`date`, s.start_time, s.end_time, s.start_utc, s.end_utc, "
                 "s.capacity, s.booked_count, s.status, ct.consultation_type_id, ct.type_name, "
-                "ct.duration_minutes, ct.fee "
+                "ct.duration_minutes, dct.fee "
                 "FROM materialised_slots s "
                 "JOIN consultation_types ct ON ct.consultation_type_id = s.consultation_type_id "
+                "JOIN doctor_consultation_types dct ON dct.doctor_id = s.doctor_id AND dct.consultation_type_id = s.consultation_type_id "
                 "WHERE s.doctor_id = %s AND s.`date` = %s "
                 "AND s.start_utc > UTC_TIMESTAMP() "
                 "ORDER BY s.start_utc",
@@ -262,8 +263,9 @@ def _book(user_id, body, idempotency_key=None, hold_offer_id=None):
             patient = _require_patient(conn, user_id)
             cur.execute(
                 "SELECT s.slot_id, s.doctor_id, s.consultation_type_id, s.start_utc, s.end_utc, "
-                "s.capacity, s.booked_count, s.status, ct.fee "
+                "s.capacity, s.booked_count, s.status, dct.fee "
                 "FROM materialised_slots s JOIN consultation_types ct ON ct.consultation_type_id = s.consultation_type_id "
+                "JOIN doctor_consultation_types dct ON dct.doctor_id = s.doctor_id AND dct.consultation_type_id = s.consultation_type_id "
                 "WHERE s.slot_id = %s FOR UPDATE",
                 (str(body["slot_id"]),),
             )
@@ -338,11 +340,12 @@ def _appointments(user_id):
                 "SELECT a.appointment_id, a.status, a.notes, a.created_at, a.updated_at, "
                 "a.doctor_id, a.consultation_type_id, a.slot_id, "
                 "d.first_name AS doctor_first_name, d.last_name AS doctor_last_name, "
-                "ct.type_name, ct.duration_minutes, ct.fee, s.`date`, s.start_time, s.end_time, s.start_utc, s.end_utc "
+                "ct.type_name, ct.duration_minutes, dct.fee, s.`date`, s.start_time, s.end_time, s.start_utc, s.end_utc "
                 "FROM appointments a "
                 "JOIN patients p ON p.patient_id = a.patient_id "
                 "JOIN doctors d ON d.doctor_id = a.doctor_id "
                 "JOIN consultation_types ct ON ct.consultation_type_id = a.consultation_type_id "
+                "JOIN doctor_consultation_types dct ON dct.doctor_id = a.doctor_id AND dct.consultation_type_id = a.consultation_type_id "
                 "JOIN materialised_slots s ON s.slot_id = a.slot_id "
                 "WHERE p.user_id = %s ORDER BY s.start_utc DESC LIMIT 200",
                 (user_id,),
@@ -370,10 +373,10 @@ def _cancel(user_id, appointment_id, body):
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT a.appointment_id, a.patient_id, a.doctor_id, a.slot_id, a.status, "
-                "s.start_utc, ct.fee FROM appointments a "
+                "s.start_utc, dct.fee FROM appointments a "
                 "JOIN patients p ON p.patient_id = a.patient_id "
                 "JOIN materialised_slots s ON s.slot_id = a.slot_id "
-                "JOIN consultation_types ct ON ct.consultation_type_id = a.consultation_type_id "
+                "JOIN doctor_consultation_types dct ON dct.doctor_id = a.doctor_id AND dct.consultation_type_id = a.consultation_type_id "
                 "WHERE a.appointment_id = %s AND p.user_id = %s FOR UPDATE",
                 (appointment_id, user_id),
             )

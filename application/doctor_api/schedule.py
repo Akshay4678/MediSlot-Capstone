@@ -76,6 +76,13 @@ def get(ctx):
             "booked_count": int(r["booked_count"]), "available_seats": max(0, int(r["capacity"]) - int(r["booked_count"])),
             "status": r["status"], "appointments": patients})
 
+    # A blackout day overrides any weekly availability. Hide the BLOCKED slots the materialiser
+    # created, and keep only slots that already hold an active appointment so the doctor still
+    # sees patients who were booked before the blackout was added.
+    for d in days.values():
+        if d["blackout"]:
+            d["slots"] = [s for s in d["slots"] if s["appointments"]]
+
     ordered = list(days.values())
     body = {"timezone": doctor["timezone"], "from": start.isoformat(), "to": end.isoformat(), "days": ordered}
     if start == end:

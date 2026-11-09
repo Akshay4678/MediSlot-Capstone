@@ -152,10 +152,7 @@ Schedule - MediSlot
     </div>
 
     <span class="muted small">
-
-      {{ day.slots|length }}
-      slot{{ '' if day.slots|length == 1 else 's' }}
-
+      {% if day.blackout and not day.slots %}Unavailable{% else %}{{ day.slots|length }} slot{{ '' if day.slots|length == 1 else 's' }}{% endif %}
     </span>
 
   </div>
@@ -288,11 +285,16 @@ Schedule - MediSlot
 
   </div>
 
-  {% else %}
+  {% elif day.blackout %}
 
     <p class="muted">
-      No appointment slots for this day.
+      Blackout day{% if day.blackout_reason %} ({{ day.blackout_reason }}){% endif %}.
+      No appointments are offered, even if weekly availability is set for {{ day.weekday }}.
     </p>
+
+  {% else %}
+
+    <p class="muted">No appointment slots for this day.</p>
 
   {% endif %}
 

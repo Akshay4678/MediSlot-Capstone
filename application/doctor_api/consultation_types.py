@@ -1,15 +1,20 @@
-```python
-"""Consultation types offered by the calling doctor: POST/GET/PUT/DELETE /doctors/me/consultation-types.
+"""Consultation types offered by the calling doctor.
 
-Data model (two tables):
-  * consultation_types          - the fixed catalogue shared by every doctor
-                                   (type_name, duration_minutes).
-  * doctor_consultation_types   - one row per doctor per catalogue type,
-                                   holding that doctor's own fee.
+Endpoints:
+    POST   /doctors/me/consultation-types
+    GET    /doctors/me/consultation-types
+    PUT    /doctors/me/consultation-types/<id>
+    DELETE /doctors/me/consultation-types/<id>
 
-The public id of a consultation type in this API is the CATALOGUE id
-(consultation_type_id). A doctor can have each catalogue type at most once,
-so (doctor, consultation_type_id) identifies their offering.
+Data model:
+    consultation_types
+        Shared catalogue containing type_name and duration_minutes.
+
+    doctor_consultation_types
+        Doctor-specific offering containing doctor_id, consultation_type_id
+        and fee.
+
+The public id exposed by this API is consultation_type_id.
 """
 
 from decimal import Decimal, InvalidOperation
@@ -17,14 +22,14 @@ from decimal import Decimal, InvalidOperation
 import pymysql
 
 from application.common import rules
-from application.common.api import ApiError, money, clean_text, new_id, require_uuid
+from application.common.api import ApiError, money, new_id, require_uuid
 
 
 MAX_FEE = Decimal("100000")
 
-
 _SELECT_OFFERING = (
-    "SELECT ct.consultation_type_id, ct.type_name, ct.duration_minutes, dct.fee "
+    "SELECT ct.consultation_type_id, ct.type_name, "
+    "ct.duration_minutes, dct.fee "
     "FROM doctor_consultation_types dct "
     "JOIN consultation_types ct "
     "ON ct.consultation_type_id = dct.consultation_type_id "
@@ -66,8 +71,7 @@ def _row(row):
 def _load(cur, doctor_id, type_id):
     """Load one consultation type offered by a specific doctor."""
     cur.execute(
-        _SELECT_OFFERING
-        + " AND ct.consultation_type_id = %s",
+        _SELECT_OFFERING + " AND ct.consultation_type_id = %s",
         (doctor_id, type_id),
     )
 
@@ -84,7 +88,7 @@ def _load(cur, doctor_id, type_id):
 
 
 def _catalogue_id(cur, name, minutes):
-    """Return the catalogue row for a type name, creating it the first time any doctor offers it."""
+    """Return the shared catalogue row for a consultation type."""
     cur.execute(
         "INSERT INTO consultation_types "
         "(consultation_type_id, type_name, duration_minutes) "
@@ -177,7 +181,8 @@ def create(ctx):
 
             cur.execute(
                 "INSERT INTO doctor_consultation_types "
-                "(doctor_consultation_type_id, doctor_id, consultation_type_id, fee) "
+                "(doctor_consultation_type_id, doctor_id, "
+                "consultation_type_id, fee) "
                 "VALUES (%s, %s, %s, %s)",
                 (
                     new_id(),
@@ -211,20 +216,20 @@ def create(ctx):
 def update(ctx_or_body, params=None, conn=None):
     """PUT /doctors/me/consultation-types/<id>.
 
-    Supports both calling styles:
+    Supports both:
 
         update(ctx)
 
-    and the legacy/unit-test style:
+    and the legacy/unit-test form:
 
         update(body, params, conn)
 
-    The normal application path always uses the doctor from ctx.doctor().
+    The normal application path uses the doctor from ctx.doctor().
     """
 
-    # ============================================================
-    # NORMAL API PATH
-    # ============================================================
+    # ------------------------------------------------------------
+    # Normal API path
+    # ------------------------------------------------------------
     if params is None and conn is None:
         ctx = ctx_or_body
 
@@ -233,6 +238,7 @@ def update(ctx_or_body, params=None, conn=None):
             ctx.params.get("id"),
             "id",
         )
+
         body = ctx.body
         connection = ctx.conn
 
@@ -243,10 +249,11 @@ def update(ctx_or_body, params=None, conn=None):
                 type_id,
             )
 
+            # type_name cannot be changed.
             if (
                 "type_name" in body
                 and str(body["type_name"]).strip().lower()
-                != row["type_name"].lower()
+                != str(row["type_name"]).strip().lower()
             ):
                 raise ApiError(
                     400,
@@ -254,6 +261,7 @@ def update(ctx_or_body, params=None, conn=None):
                     "type_name cannot be changed; create a new type instead.",
                 )
 
+            # duration is fixed by the platform.
             if (
                 "duration_minutes" in body
                 and str(body["duration_minutes"])
@@ -265,6 +273,7 @@ def update(ctx_or_body, params=None, conn=None):
                     "Consultation durations are fixed by the platform rules.",
                 )
 
+            # Only fee can be updated.
             if "fee" not in body:
                 raise ApiError(
                     400,
@@ -296,9 +305,9 @@ def update(ctx_or_body, params=None, conn=None):
             "consultation_type": _row(row),
         }
 
-    # ============================================================
-    # LEGACY / UNIT-TEST COMPATIBILITY PATH
-    # ============================================================
+    # ------------------------------------------------------------
+    # Legacy/unit-test compatibility path
+    # ------------------------------------------------------------
     body = ctx_or_body
 
     if not isinstance(body, dict):
@@ -312,7 +321,7 @@ def update(ctx_or_body, params=None, conn=None):
         raise ApiError(
             400,
             "INVALID_FIELD",
-            "Consultation type parameters must be an object.",
+            "Request parameters must be an object.",
         )
 
     type_id = require_uuid(
@@ -320,36 +329,22 @@ def update(ctx_or_body, params=None, conn=None):
         "id",
     )
 
-    # The legacy tests use this form mainly for validation of the
-    # immutable catalogue fields. We first load the catalogue row
-    # using the supplied consultation_type_id.
     with conn.cursor() as cur:
+        # The unit-test compatibility path uses the first matching
+        # offering row returned by the fake connection.
         cur.execute(
-            "SELECT consultation_type_id, type_name, duration_minutes "
-            "FROM consultation_types "
-            "WHERE consultation_type_id = %s",
+            "SELECT ct.consultation_type_id, "
+            "ct.type_name, "
+            "ct.duration_minutes, "
+            "dct.fee "
+            "FROM doctor_consultation_types dct "
+            "JOIN consultation_types ct "
+            "ON ct.consultation_type_id = dct.consultation_type_id "
+            "WHERE ct.consultation_type_id = %s",
             (type_id,),
         )
 
         row = cur.fetchone()
-
-        # Some unit-test connection doubles return the offering row
-        # directly instead of a catalogue-only row. Support that shape
-        # as well.
-        if not row:
-            cur.execute(
-                "SELECT ct.consultation_type_id, "
-                "ct.type_name, "
-                "ct.duration_minutes, "
-                "dct.fee "
-                "FROM doctor_consultation_types dct "
-                "JOIN consultation_types ct "
-                "ON ct.consultation_type_id = dct.consultation_type_id "
-                "WHERE ct.consultation_type_id = %s",
-                (type_id,),
-            )
-
-            row = cur.fetchone()
 
     if not row:
         raise ApiError(
@@ -358,9 +353,7 @@ def update(ctx_or_body, params=None, conn=None):
             "Consultation type not found.",
         )
 
-    # ------------------------------------------------------------
-    # type_name is immutable
-    # ------------------------------------------------------------
+    # type_name is immutable.
     if "type_name" in body:
         if (
             str(body["type_name"]).strip().lower()
@@ -372,12 +365,11 @@ def update(ctx_or_body, params=None, conn=None):
                 "type_name cannot be changed; create a new type instead.",
             )
 
-    # ------------------------------------------------------------
-    # duration is immutable
-    # ------------------------------------------------------------
+    # duration is immutable.
     if "duration_minutes" in body:
-        if str(body["duration_minutes"]) != str(
-            row["duration_minutes"]
+        if (
+            str(body["duration_minutes"])
+            != str(row["duration_minutes"])
         ):
             raise ApiError(
                 400,
@@ -385,9 +377,7 @@ def update(ctx_or_body, params=None, conn=None):
                 "Consultation durations are fixed by the platform rules.",
             )
 
-    # ------------------------------------------------------------
-    # Only fee can be updated
-    # ------------------------------------------------------------
+    # Only fee can be updated.
     if "fee" not in body:
         raise ApiError(
             400,
@@ -397,8 +387,7 @@ def update(ctx_or_body, params=None, conn=None):
 
     fee = _fee(body["fee"])
 
-    # If the legacy caller supplied a doctor_id, update only that
-    # doctor's offering. This keeps the compatibility path safe.
+    # If a doctor id is supplied, update the real database row.
     doctor_id = (
         params.get("doctor_id")
         or params.get("user_id")
@@ -434,7 +423,7 @@ def update(ctx_or_body, params=None, conn=None):
                 "consultation_type": _row(updated),
             }
 
-    # Compatibility response for the direct unit-test interface.
+    # Compatibility response for tests that only validate the update.
     result = dict(row)
     result["fee"] = fee
 
@@ -460,8 +449,8 @@ def delete(ctx):
                 type_id,
             )
 
-            # Only this doctor's offering is removed.
-            # The shared catalogue row stays for other doctors.
+            # Delete only this doctor's offering.
+            # The shared catalogue row remains.
             cur.execute(
                 "DELETE FROM doctor_consultation_types "
                 "WHERE doctor_id = %s "
@@ -486,4 +475,3 @@ def delete(ctx):
     return 200, {
         "message": "Consultation type deleted.",
     }
-```

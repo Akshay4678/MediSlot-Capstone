@@ -29,23 +29,27 @@ def _fetch(cur, doctor_id):
     cur.execute(
         "SELECT ap.availability_id, ap.consultation_type_id, ct.type_name, ct.duration_minutes, "
         "       ap.day_of_week, ap.start_time, ap.end_time, ap.capacity, ap.is_active "
-        "FROM availability_patterns ap JOIN consultation_types ct ON ct.consultation_type_id = ap.consultation_type_id "
+        "FROM availability_patterns ap JOIN consultation_types ct "
+        "ON ct.consultation_type_id = ap.consultation_type_id "
         "WHERE ap.doctor_id = %s ORDER BY ap.day_of_week, ap.start_time",
         (doctor_id,),
     )
 
-    return [{
-        "availability_id": r["availability_id"],
-        "consultation_type_id": r["consultation_type_id"],
-        "type_name": r["type_name"],
-        "duration_minutes": int(r["duration_minutes"]),
-        "day_of_week": int(r["day_of_week"]),
-        "day_name": DAY_NAMES[int(r["day_of_week"])],
-        "start_time": fmt_time(r["start_time"]),
-        "end_time": fmt_time(r["end_time"]),
-        "capacity": int(r["capacity"]),
-        "is_active": bool(r["is_active"]),
-    } for r in cur.fetchall()]
+    return [
+        {
+            "availability_id": r["availability_id"],
+            "consultation_type_id": r["consultation_type_id"],
+            "type_name": r["type_name"],
+            "duration_minutes": int(r["duration_minutes"]),
+            "day_of_week": int(r["day_of_week"]),
+            "day_name": DAY_NAMES[int(r["day_of_week"])],
+            "start_time": fmt_time(r["start_time"]),
+            "end_time": fmt_time(r["end_time"]),
+            "capacity": int(r["capacity"]),
+            "is_active": bool(r["is_active"]),
+        }
+        for r in cur.fetchall()
+    ]
 
 
 def get(ctx):
@@ -77,7 +81,8 @@ def validate(items, types_by_id, existing_ids):
             f"At most {MAX_PATTERNS} patterns are allowed.",
         )
 
-    clean, seen_ids = [], set()
+    clean = []
+    seen_ids = set()
 
     for index, item in enumerate(items, start=1):
         label = f"patterns[{index}]"
@@ -140,26 +145,29 @@ def validate(items, types_by_id, existing_ids):
                 f"{ctype['type_name']} ({ctype['duration_minutes']} min).",
             )
 
-        # Health Camp capacity is intentionally NOT validated here.
-        # Capacity will be handled during appointment booking.
-        camp = rules.is_health_camp(ctype["type_name"])
-
-        raw_capacity = item.get(
-            "capacity",
-            1,
-        )
+        # Capacity is configured at the availability/slot level.
+        #
+        # Regular consultation:
+        #   normally capacity = 1
+        #
+        # Health Camp:
+        #   capacity can be 1 or greater.
+        #
+        # The previous Health Camp 2-10 restriction is intentionally removed.
+        # The actual number of people allowed for a Health Camp booking will
+        # be enforced later by the booking logic.
+        raw_capacity = item.get("capacity", 1)
 
         try:
             capacity = int(raw_capacity)
         except (TypeError, ValueError):
             capacity = 0
 
-        # Normal consultation types can only have one appointment per slot.
-        if not camp and capacity != 1:
+        if capacity < 1:
             raise ApiError(
                 400,
                 "INVALID_CAPACITY",
-                f"{label}: only Health Camp sessions can have capacity above 1.",
+                f"{label}: capacity must be at least 1.",
             )
 
         availability_id = item.get("availability_id")
@@ -186,15 +194,17 @@ def validate(items, types_by_id, existing_ids):
 
             seen_ids.add(availability_id)
 
-        clean.append({
-            "availability_id": availability_id,
-            "consultation_type_id": type_id,
-            "day_of_week": day,
-            "start_time": start,
-            "end_time": end,
-            "capacity": capacity,
-            "is_active": bool(item.get("is_active", True)),
-        })
+        clean.append(
+            {
+                "availability_id": availability_id,
+                "consultation_type_id": type_id,
+                "day_of_week": day,
+                "start_time": start,
+                "end_time": end,
+                "capacity": capacity,
+                "is_active": bool(item.get("is_active", True)),
+            }
+        )
 
     # A doctor cannot be in two places:
     # patterns on the same weekday must not overlap.
@@ -214,8 +224,10 @@ def validate(items, types_by_id, existing_ids):
                     400,
                     "OVERLAPPING_PATTERNS",
                     f"{DAY_NAMES[day]}: "
-                    f"{first['start_time']:%H:%M}-{first['end_time']:%H:%M} overlaps "
-                    f"{second['start_time']:%H:%M}-{second['end_time']:%H:%M}.",
+                    f"{first['start_time']:%H:%M}-"
+                    f"{first['end_time']:%H:%M} overlaps "
+                    f"{second['start_time']:%H:%M}-"
+                    f"{second['end_time']:%H:%M}.",
                 )
 
     return clean
@@ -310,7 +322,6 @@ def put(ctx):
                         doctor_id,
                     ),
                 )
-
             else:
                 cur.execute(
                     "INSERT INTO availability_patterns "

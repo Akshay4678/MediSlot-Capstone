@@ -903,7 +903,7 @@ jobs:
           echo "RDS schema initialization completed successfully."
 
       # ==========================================
-      # STEP 13C: Verify that the slot materialiser is idempotent
+      # STEP 13C: Verify that the slot materialiser is idempotentcy
       # ==========================================
       - name: Verify slot materialiser idempotency
         shell: bash

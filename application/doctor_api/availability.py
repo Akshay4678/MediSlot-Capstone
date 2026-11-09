@@ -10,6 +10,7 @@ from application.common.api import ApiError, fmt_time, new_id, parse_hhmm, requi
 from application.slot_materialiser import core as slots
 
 MAX_PATTERNS = 50
+
 DAY_NAMES = {
     1: "Monday",
     2: "Tuesday",
@@ -70,7 +71,11 @@ def validate(items, types_by_id, existing_ids):
     """Validate and normalise the submitted patterns (pure function, unit-tested)."""
 
     if not isinstance(items, list):
-        raise ApiError(400, "INVALID_FIELD", "patterns must be a list.")
+        raise ApiError(
+            400,
+            "INVALID_FIELD",
+            "patterns must be a list.",
+        )
 
     if len(items) > MAX_PATTERNS:
         raise ApiError(
@@ -143,27 +148,37 @@ def validate(items, types_by_id, existing_ids):
                 f"{ctype['type_name']} ({ctype['duration_minutes']} min).",
             )
 
-        # Health Camp capacity is intentionally NOT validated here.
+        # ------------------------------------------------------------
+        # CAPACITY
+        # ------------------------------------------------------------
         #
-        # A Health Camp can have capacity 1, 3, 5, 6, etc.
-        # The actual group/appointment capacity rules will be handled
-        # during appointment-booking development.
+        # Normal consultations always represent one patient.
+        #
+        # Health Camp capacity is intentionally NOT restricted here.
+        # The booking implementation will decide how many people can
+        # participate in a camp appointment.
+        #
+        # Default Health Camp capacity = 5.
+        # ------------------------------------------------------------
+
         camp = rules.is_health_camp(ctype["type_name"])
 
-        raw_capacity = item.get("capacity", 1)
+        if camp:
+            raw_capacity = item.get("capacity", 5)
+        else:
+            raw_capacity = item.get("capacity", 1)
 
         try:
             capacity = int(raw_capacity)
         except (TypeError, ValueError):
-            capacity = 0
+            capacity = 1 if not camp else 5
 
-        # Non-camp consultations remain single-patient slots.
-        if not camp and capacity != 1:
-            raise ApiError(
-                400,
-                "INVALID_CAPACITY",
-                f"{label}: only Health Camp sessions can have capacity above 1.",
-            )
+        # Normal consultation = exactly one patient.
+        # Health Camp can use any positive capacity for now.
+        if not camp:
+            capacity = 1
+        elif capacity < 1:
+            capacity = 5
 
         availability_id = item.get("availability_id")
 
@@ -201,7 +216,8 @@ def validate(items, types_by_id, existing_ids):
             }
         )
 
-    # A doctor cannot be in two places: patterns on the same weekday must not overlap.
+    # A doctor cannot be in two places: patterns on the same weekday
+    # must not overlap.
     for day in range(1, 8):
         day_items = sorted(
             (

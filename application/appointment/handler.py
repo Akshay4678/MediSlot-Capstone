@@ -220,7 +220,7 @@ def lambda_handler(event, context):
                     {"error": "NOT_CANCELLABLE_OR_NOT_FOUND"},
                 )
 
-            # Return an error for unsupported HTTP methods.
+            # Return an error for unsupported HTTP method.
             return response(
                 405,
                 {"error": "METHOD_NOT_ALLOWED"},

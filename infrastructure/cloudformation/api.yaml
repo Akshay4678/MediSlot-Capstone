@@ -1101,6 +1101,76 @@ Resources:
             - PatientApiFunctionArn:
                 Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-PatientApiFunctionArn'
 
+  PatientProfileCreateMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ResourceId: !Ref PatientMeProfileRes
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub:
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PatientApiFunctionArn}/invocations'
+            - PatientApiFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-PatientApiFunctionArn'
+
+  PatientProfileUpdateMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ResourceId: !Ref PatientMeProfileRes
+      HttpMethod: PUT
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub:
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PatientApiFunctionArn}/invocations'
+            - PatientApiFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-PatientApiFunctionArn'
+
+  PatientProfileDeleteMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ResourceId: !Ref PatientMeProfileRes
+      HttpMethod: DELETE
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub:
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PatientApiFunctionArn}/invocations'
+            - PatientApiFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-PatientApiFunctionArn'
+
+  DoctorPublicProfileMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ResourceId: !Ref DoctorSlotRes
+      HttpMethod: GET
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotAuthorizer
+      RequestParameters:
+        method.request.path.doctor_id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub:
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PatientApiFunctionArn}/invocations'
+            - PatientApiFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-PatientApiFunctionArn'
+
   ApiDeployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
@@ -1137,6 +1207,10 @@ Resources:
       - WaitlistDeleteMethod
       - WaitlistOfferAcceptMethod
       - PatientMeMethod
+      - PatientProfileCreateMethod
+      - PatientProfileUpdateMethod
+      - PatientProfileDeleteMethod
+      - DoctorPublicProfileMethod
     Properties:
       RestApiId: !Ref MediSlotRestApi
       Description: Initial deployment (the pipeline creates a fresh deployment on every release).

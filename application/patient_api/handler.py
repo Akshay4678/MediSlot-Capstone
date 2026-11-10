@@ -26,12 +26,14 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Attr, Key
 
+from application.common.api import ApiError
 from application.common.auth_context import claims
 from application.common.http import request_body, request_method, response
 from application.common.rules import (
     booking_window_days, idempotency_ttl_hours, waitlist_max_size, hold_offer_minutes,
-    max_reschedules, min_reschedule_hours, refund_bands,
+    max_reschedules, min_reschedule_hours, refund_bands, max_upcoming_per_doctor,
 )
+from application.patient_api import discovery, profile as patient_profile
 from application.database.connection import get_connection
 
 log = logging.getLogger()
@@ -90,7 +92,7 @@ def _error(status, code, message):
 def _patient(conn, user_id):
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT patient_id, first_name, last_name, phone FROM patients WHERE user_id = %s",
+            "SELECT patient_id, first_name, last_name, phone, city FROM patients WHERE user_id = %s",
             (user_id,),
         )
         return cur.fetchone()
@@ -103,100 +105,42 @@ def _require_patient(conn, user_id):
     return patient
 
 
-def _doctor_search(event):
-    q = event.get("queryStringParameters") or {}
-    search = (q.get("search") or "").strip()
-    city = (q.get("city") or "").strip()
-    specialisation = (q.get("specialisation") or "").strip()
-
-    try:
-        limit = max(1, min(50, int(q.get("limit", 20))))
-        offset = max(0, int(q.get("offset", 0)))
-    except (TypeError, ValueError):
-        return _error(400, "INVALID_PAGINATION", "limit and offset must be integers.")
-
-    # specialisations has no is_active column (see schema.sql), so it is not filtered here.
-    conditions = ["d.is_active = TRUE", "h.is_active = TRUE", "u.is_active = TRUE"]
-    values = []
-    if search:
-        conditions.append("(d.first_name LIKE %s OR d.last_name LIKE %s OR h.hospital_name LIKE %s)")
-        values.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
-    if city:
-        conditions.append("h.city LIKE %s")
-        values.append(f"%{city}%")
-    if specialisation:
-        conditions.append("s.specialisation_name LIKE %s")
-        values.append(f"%{specialisation}%")
-
+def _with_connection(work):
     conn = get_connection()
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT d.doctor_id, d.first_name, d.last_name, d.qualifications, d.experience_years, "
-                "d.timezone, h.hospital_id, h.hospital_name, h.city, s.specialisation_id, "
-                "s.specialisation_name AS specialisation "
-                "FROM doctors d "
-                "JOIN hospitals h ON h.hospital_id = d.hospital_id "
-                "JOIN specialisations s ON s.specialisation_id = d.specialisation_id "
-                "JOIN users u ON u.user_id = d.user_id "
-                f"WHERE {' AND '.join(conditions)} "
-                "ORDER BY d.last_name, d.first_name LIMIT %s OFFSET %s",
-                tuple(values + [limit, offset]),
-            )
-            rows = cur.fetchall()
-        return response(200, {"items": rows, "count": len(rows), "limit": limit, "offset": offset})
+        status, body = work(conn)
+        return response(status, body)
     finally:
         conn.close()
+
+
+def _doctor_search(event):
+    q = event.get("queryStringParameters") or {}
+    return _with_connection(lambda conn: discovery.search(conn, q))
+
+
+def _doctor_profile(event):
+    doctor_id = ((event.get("pathParameters") or {}).get("doctor_id") or "").strip()
+    return _with_connection(lambda conn: discovery.doctor_profile(conn, doctor_id))
 
 
 def _availability(event):
     q = event.get("queryStringParameters") or {}
     # The route is /doctors/{doctor_id}/slots, so the id arrives as a path parameter.
-    path_params = event.get("pathParameters") or {}
-    doctor_id = (path_params.get("doctor_id") or q.get("doctor_id") or "").strip()
-    date_text = (q.get("date") or "").strip()
-    if not doctor_id or not date_text:
-        return _error(400, "MISSING_PARAMETERS", "doctor_id and date (YYYY-MM-DD) are required.")
-    try:
-        target = datetime.strptime(date_text, "%Y-%m-%d").date()
-    except ValueError:
-        return _error(400, "INVALID_DATE", "date must use YYYY-MM-DD.")
+    doctor_id = (((event.get("pathParameters") or {}).get("doctor_id")) or q.get("doctor_id") or "").strip()
+    return _with_connection(lambda conn: discovery.slots(conn, doctor_id, q))
 
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT d.first_name, d.last_name, d.timezone FROM doctors d "
-                "WHERE d.doctor_id = %s AND d.is_active = TRUE",
-                (doctor_id,),
-            )
-            doctor = cur.fetchone()
-            if not doctor:
-                return _error(404, "DOCTOR_NOT_FOUND", "Doctor was not found.")
 
-            cur.execute(
-                "SELECT s.slot_id, s.`date`, s.start_time, s.end_time, s.start_utc, s.end_utc, "
-                "s.capacity, s.booked_count, s.status, ct.consultation_type_id, ct.type_name, "
-                "ct.duration_minutes, dct.fee "
-                "FROM materialised_slots s "
-                "JOIN consultation_types ct ON ct.consultation_type_id = s.consultation_type_id "
-                "JOIN doctor_consultation_types dct ON dct.doctor_id = s.doctor_id AND dct.consultation_type_id = s.consultation_type_id "
-                "WHERE s.doctor_id = %s AND s.`date` = %s "
-                "AND s.start_utc > UTC_TIMESTAMP() "
-                "ORDER BY s.start_utc",
-                (doctor_id, target),
-            )
-            slots = []
-            for row in cur.fetchall():
-                available = max(0, int(row["capacity"]) - int(row["booked_count"]))
-                if row["status"] != "OPEN" or available == 0:
-                    continue
-                row["available_seats"] = available
-                slots.append(row)
-
-        return response(200, {"doctor_id": doctor_id, "date": date_text, "timezone": doctor["timezone"], "slots": slots})
-    finally:
-        conn.close()
+def _profile_route(method, user_id, event):
+    def work(conn):
+        if method == "GET":
+            return patient_profile.get(conn, user_id)
+        if method == "POST":
+            return patient_profile.create(conn, user_id, request_body(event))
+        if method == "PUT":
+            return patient_profile.update(conn, user_id, request_body(event))
+        return patient_profile.delete(conn, user_id)
+    return _with_connection(work)
 
 
 def _idempotency_start(user_id, key):
@@ -280,6 +224,11 @@ def _book(user_id, body, idempotency_key=None, hold_offer_id=None):
                 raise RuntimeError("SLOT_IN_PAST")
             if _parse_utc(slot["start_utc"]) > _now() + timedelta(days=booking_window_days()):
                 raise RuntimeError("BOOKING_WINDOW_EXCEEDED")
+            # Frozen rule: at most N (default 3) upcoming appointments with the same doctor.
+            # Lock the patient's row so two parallel bookings cannot both slip under the limit.
+            cur.execute("SELECT patient_id FROM patients WHERE patient_id = %s FOR UPDATE", (patient["patient_id"],))
+            if discovery.upcoming_with_doctor(cur, patient["patient_id"], slot["doctor_id"], _now()) >= max_upcoming_per_doctor():
+                raise RuntimeError("DOCTOR_LIMIT_REACHED")
             # One seat per patient: a patient cannot take two seats of the same (Health Camp) slot.
             cur.execute(
                 "SELECT 1 AS n FROM appointments WHERE patient_id = %s AND slot_id = %s AND status = 'CONFIRMED' LIMIT 1",
@@ -326,6 +275,8 @@ def _book(user_id, body, idempotency_key=None, hold_offer_id=None):
             "SLOT_MISMATCH": (400, "SLOT_MISMATCH", "The selected slot does not belong to the requested doctor/consultation type."),
             "SLOT_FULL": (409, "SLOT_FULL", "The selected slot is no longer available."),
             "SLOT_IN_PAST": (409, "SLOT_IN_PAST", "The selected slot has already started."),
+            "DOCTOR_LIMIT_REACHED": (409, "DOCTOR_LIMIT_REACHED",
+                                     f"You already hold {max_upcoming_per_doctor()} upcoming appointments with this doctor."),
             "ALREADY_BOOKED": (409, "ALREADY_BOOKED", "You already have an appointment in this slot."),
             "BOOKING_WINDOW_EXCEEDED": (400, "BOOKING_WINDOW_EXCEEDED", "The selected slot is outside the booking window."),
         }
@@ -480,7 +431,6 @@ def _reschedule(user_id, appointment_id, body):
                 return _error(409, "SLOT_FULL", "The new slot is no longer available.")
             if _parse_utc(new_slot["start_utc"]) <= _now():
                 return _error(409, "SLOT_IN_PAST", "The new slot has already started.")
-
             cur.execute(
                 "UPDATE materialised_slots SET booked_count = GREATEST(booked_count - 1, 0), "
                 "status = IF(status = 'BLOCKED', 'BLOCKED', 'OPEN') "
@@ -707,15 +657,10 @@ def _route(event, user_id, role):
         return _waitlist_leave(user_id, path_params.get("waitlist_id"))
     if method == "POST" and resource == "/waitlist/offers/{offer_id}/accept":
         return _hold_offer_accept(user_id, path_params.get("offer_id"))
-    if method == "GET" and resource == "/patient/me":
-        conn = get_connection()
-        try:
-            patient = _patient(conn, user_id)
-            if not patient:
-                return _error(404, "PATIENT_NOT_FOUND", "Patient profile was not found.")
-            return response(200, {"patient": patient})
-        finally:
-            conn.close()
+    if resource == "/patient/me" and method in ("GET", "POST", "PUT", "DELETE"):
+        return _profile_route(method, user_id, event)
+    if method == "GET" and resource == "/doctors/{doctor_id}":
+        return _doctor_profile(event)
     return _error(404, "ROUTE_NOT_FOUND", "Unsupported patient route.")
 
 
@@ -728,6 +673,8 @@ def lambda_handler(event, context):
         return _error(403, "FORBIDDEN", "This endpoint is for patients only.")
     try:
         return _route(event, str(user_id), str(role))
+    except ApiError as exc:
+        return _error(exc.status, exc.code, exc.message)
     except ValueError as exc:
         if str(exc) == "PATIENT_PROFILE_REQUIRED":
             return _error(403, "PATIENT_PROFILE_REQUIRED", "Create your patient profile first.")

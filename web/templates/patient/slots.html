@@ -6,8 +6,11 @@
 
 <div class="card">
   <form method="get" class="form-grid">
-    <label>Date
+    <label>From
       <input type="date" name="date" value="{{ date }}">
+    </label>
+    <label>To (optional, up to 14 days)
+      <input type="date" name="to" value="{{ until }}">
     </label>
     <div class="actions"><button type="submit">Show slots</button></div>
   </form>
@@ -17,10 +20,11 @@
   {% if data.slots %}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Consultation</th><th>Time</th><th>Fee</th><th>Seats</th><th>Action</th></tr></thead>
+        <thead><tr><th>Date</th><th>Consultation</th><th>Time</th><th>Fee</th><th>Seats</th><th>Action</th></tr></thead>
         <tbody>
         {% for s in data.slots %}
           <tr>
+            <td>{{ s.date }}</td>
             <td>{{ s.type_name }} ({{ s.duration_minutes }} min)</td>
             <td>{{ s.start_time }} - {{ s.end_time }}</td>
             <td>₹{{ s.fee }}</td>
@@ -40,7 +44,7 @@
       </table>
     </div>
   {% else %}
-    <p class="muted">No open slots for this date.</p>
+    <p class="muted">No open slots for this date range.</p>
   {% endif %}
 </div>
 {% endblock %}

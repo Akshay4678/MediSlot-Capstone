@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Dr. {{ doctor.first_name }} {{ doctor.last_name }} - MediSlot{% endblock %}
+{% block content %}
+<h1>Dr. {{ doctor.first_name }} {{ doctor.last_name }}</h1>
+<div class="card">
+  <p><strong>{{ doctor.specialisation }}</strong> &middot; {{ doctor.hospital_name }}, {{ doctor.city }}</p>
+  <p class="muted">{{ doctor.qualifications or "" }}{% if doctor.qualifications %} &middot; {% endif %}{{ doctor.experience_years }} years of experience</p>
+</div>
+<div class="card">
+  <h2>Consultation types and fees</h2>
+  {% if consultation_types %}
+  <table id="doctor-fees">
+    <thead><tr><th>Consultation</th><th>Duration</th><th>Fee</th></tr></thead>
+    <tbody>
+    {% for t in consultation_types %}
+      <tr><td>{{ t.type_name }}</td><td>{{ t.duration_minutes }} min</td><td>&#8377;{{ t.fee }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="muted">This doctor has not published any consultation types yet.</p>
+  {% endif %}
+  <p><a class="button-link" href="{{ url_for('patient.slots', doctor_id=doctor_id) }}">View available slots</a></p>
+</div>
+{% endblock %}

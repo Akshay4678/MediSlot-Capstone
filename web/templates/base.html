@@ -20,6 +20,7 @@
     <form class="inline" method="post" action="{{ url_for('doctor.logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="secondary" type="submit">Sign out</button></form>
   {% elif session_role == 'patient' %}
     <a href="{{ url_for('patient.home') }}">Home</a>
+    <a href="{{ url_for('patient.profile') }}">Profile</a>
     <form class="inline" method="post" action="{{ url_for('patient.logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="secondary" type="submit">Sign out</button></form>
   {% endif %}
   </nav>

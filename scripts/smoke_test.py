@@ -12,7 +12,9 @@ import json
 import os
 import secrets
 import sys
+import uuid
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import date, timedelta
 
@@ -92,13 +94,13 @@ def main():
         reg["registration_code"] = CODE
     expect("doctor register", call("POST", "/auth/doctors/register", body=reg), 201)
     token = expect("doctor login", call("POST", "/auth/doctors/login", body={"email": d_email, "password": password}), 200)["access_token"]
-    expect("doctor token rejected on patient endpoint (403)", call("GET", "/patients/me", token), 403)
+    expect("doctor token rejected on patient endpoint (403)", call("GET", "/patient/me", token), 403)
     expect("profile not created yet", call("GET", "/doctors/me", token), 404)
     expect("availability needs a profile", call("GET", "/doctors/me/availability", token), 409)
 
     hospital = expect("hospitals", call("GET", "/hospitals", token), 200)["items"][0]["hospital_id"]
     spec = expect("specialisations", call("GET", "/specialisations", token), 200)["items"][0]["specialisation_id"]
-    profile = {"first_name": "Smoke", "last_name": "Doctor", "licence_number": f"S-{secrets.randbelow(10**6):06d}",
+    profile = {"first_name": "Smoke", "last_name": f"D{run}", "licence_number": f"S-{secrets.randbelow(10**6):06d}",
                "hospital_id": hospital, "specialisation_id": spec, "timezone": "Asia/Kolkata",
                "experience_years": 3, "qualifications": "Smoke test"}
     expect("profile create", call("PUT", "/doctors/me", token, profile), 201)
@@ -154,6 +156,89 @@ def main():
     expect("blackout delete", call("DELETE", f"/doctors/me/blackouts/{black['blackout']['blackout_id']}", token), 200)
     reopened = call("GET", f"/doctors/me/schedule?date={monday.isoformat()}", token)[1]
     assert all(s["status"] == "OPEN" for s in reopened["slots"]) and len(reopened["slots"]) == 6
+
+    # ------------------------------------------------------------ patient domain (Milestone 4)
+    doctor_id = expect("doctor id", call("GET", "/doctors/me", token), 200)["profile"]["doctor_id"]
+    a_token = expect("patient A login", call("POST", "/auth/patients/login",
+                     body={"email": p_email, "password": password}), 200)["access_token"]
+    b_email = f"smoke-patient-b-{run}@smoke.medislot.test"
+    expect("patient B register", call("POST", "/auth/patients/register",
+           body={"email": b_email, "password": password, "first_name": "Other", "last_name": "Person"}), 201)
+    b_token = expect("patient B login", call("POST", "/auth/patients/login",
+                     body={"email": b_email, "password": password}), 200)["access_token"]
+
+    # Profile: read, update, validation, second create refused.
+    mine = expect("patient profile read", call("GET", "/patient/me", a_token), 200)["patient"]
+    assert mine["first_name"] == "Smoke", mine
+    expect("patient profile update", call("PUT", "/patient/me", a_token, {"city": "Hyderabad"}), 200)
+    expect("patient profile bad field", call("PUT", "/patient/me", a_token, {"user_id": "x"}), 400)
+    expect("patient profile exists", call("POST", "/patient/me", a_token, {"first_name": "A", "last_name": "B"}), 409)
+
+    # Data isolation: there is no id in the URL, so each patient only ever sees their own profile.
+    theirs = expect("patient B profile read", call("GET", "/patient/me", b_token), 200)["patient"]
+    assert theirs["first_name"] == "Other" and theirs["patient_id"] != mine["patient_id"], theirs
+    leak = expect("patient id in query is ignored",
+                  call("GET", f"/patient/me?patient_id={mine['patient_id']}", b_token), 200)["patient"]
+    assert leak["patient_id"] == theirs["patient_id"], "patient B must never receive patient A's profile"
+    expect("patient B cannot edit A via body", call("PUT", "/patient/me", b_token,
+           {"patient_id": mine["patient_id"], "city": "Hacked"}), 400)
+    assert call("GET", "/patient/me", a_token)[1]["patient"]["city"] == "Hyderabad"
+
+    # Doctor search: filters and pagination.
+    found = expect("search by name", call("GET", f"/doctors/search?name=Smoke%20D{run}", a_token), 200)
+    assert any(d["doctor_id"] == doctor_id for d in found["items"]), found
+    expect("search by hospital", call("GET", "/doctors/search?hospital=" + urllib.parse.quote(
+        found["items"][0]["hospital_name"][:6]), a_token), 200)
+    mine_row = next(d for d in found["items"] if d["doctor_id"] == doctor_id)
+    both = expect("search by city and specialisation", call(
+        "GET", f"/doctors/search?name=Smoke%20D{run}&city=" + urllib.parse.quote(mine_row["city"]) +
+        "&specialisation=" + urllib.parse.quote(mine_row["specialisation"]), a_token), 200)
+    assert any(d["doctor_id"] == doctor_id for d in both["items"])
+    page = expect("search pagination", call("GET", "/doctors/search?limit=1&offset=0", a_token), 200)
+    assert page["count"] == 1 and page["limit"] == 1 and "total" in page and "has_more" in page, page
+    expect("search bad pagination", call("GET", "/doctors/search?limit=abc", a_token), 400)
+
+    # Public doctor profile with consultation types and fees.
+    public = expect("public doctor profile", call("GET", f"/doctors/{doctor_id}", a_token), 200)
+    assert any(t["consultation_type_id"] == ctype["consultation_type_id"] and float(t["fee"]) == 550
+               for t in public["consultation_types"]), public
+    expect("unknown doctor 404", call("GET", f"/doctors/{uuid.uuid4()}", a_token), 404)
+
+    # Free seats per slot for a date range.
+    rng = expect("slots for a date range", call(
+        "GET", f"/doctors/{doctor_id}/slots?from={monday.isoformat()}&to={(monday + timedelta(days=6)).isoformat()}",
+        a_token), 200)
+    assert len(rng["days"]) == 7 and all("available_seats" in x for x in rng["slots"]), rng
+    day_slots = next(d for d in rng["days"] if d["date"] == monday.isoformat())["slots"]
+    assert len(day_slots) == 6 and day_slots[0]["available_seats"] == 1, day_slots
+    expect("slot range limit", call(
+        "GET", f"/doctors/{doctor_id}/slots?from={monday.isoformat()}&to={(monday + timedelta(days=40)).isoformat()}",
+        a_token), 400)
+
+    # Booking edge cases: idempotency, one doctor per patient within the gap, other patients unaffected.
+    def book(tok, slot, key):
+        return call("POST", "/bookings", tok, {"doctor_id": doctor_id, "slot_id": slot["slot_id"],
+                    "consultation_type_id": slot["consultation_type_id"], "idempotency_key": key})
+
+    slots_ = day_slots[:5]
+    booked = [expect(f"book slot {n + 1}", book(a_token, slot, f"smoke-{run}-{n}"), 201)
+              for n, slot in enumerate(slots_[:3])]
+    again = expect("same key is idempotent", book(a_token, slots_[0], f"smoke-{run}-0"), 200)
+    assert again["appointment_id"] == booked[0]["appointment_id"]
+    expect("a 4th upcoming appointment with the same doctor is refused (limit 3)", book(a_token, slots_[3], f"smoke-{run}-3"), 409)
+    expect("another patient can still book that doctor", book(b_token, slots_[3], f"smoke-{run}-4"), 201)
+    expect("full slot cannot be booked again", book(b_token, slots_[0], f"smoke-{run}-5"), 409)
+    expect("cancel one appointment", call("DELETE", f"/appointments/{booked[0]['appointment_id']}", a_token), 200)
+    expect("booking allowed again after cancelling", book(a_token, slots_[4], f"smoke-{run}-6"), 201)
+    expect("patient with upcoming appointments cannot delete profile", call("DELETE", "/patient/me", b_token), 409)
+
+    # Clean up the throw-away patients.
+    for tok in (a_token, b_token):
+        for item in call("GET", "/appointments", tok)[1]["items"]:
+            if item["status"] == "CONFIRMED":
+                expect("cancel appointment", call("DELETE", f"/appointments/{item['appointment_id']}", tok), 200)
+    expect("patient profile delete", call("DELETE", "/patient/me", b_token), 200)
+    expect("patient A profile delete", call("DELETE", "/patient/me", a_token), 200)
 
     expect("clear availability", call("PUT", "/doctors/me/availability", token, {"patterns": []}), 200)
     expect("logout doctor", call("POST", "/auth/logout", token), 200)

@@ -539,6 +539,7 @@ jobs:
           put_if_missing "${P}/rules/idempotency-ttl-hours" 24
           put_if_missing "${P}/rules/waitlist-max-size" 5
           put_if_missing "${P}/rules/hold-offer-minutes" 15
+          put_if_missing "${P}/rules/max-upcoming-per-doctor" 3
           put_if_missing "${P}/rules/max-reschedules" 2
           put_if_missing "${P}/rules/min-reschedule-hours" 6
           put_if_missing "${P}/rules/refund-full-hours" 48

@@ -5,7 +5,7 @@ rules/detailed-consult-minutes, rules/health-camp-minutes, rules/health-camp-min
 rules/health-camp-max-capacity, rules/booking-window-days, rules/photo-max-bytes,
 rules/idempotency-ttl-hours, rules/waitlist-max-size, rules/hold-offer-minutes,
 rules/max-reschedules, rules/min-reschedule-hours, rules/refund-full-hours,
-rules/refund-75-hours, rules/refund-50-hours.
+rules/refund-75-hours, rules/refund-50-hours, rules/max-upcoming-per-doctor.
 The numbers below are only fallbacks used when a parameter is missing (a warning is logged).
 """
 
@@ -76,3 +76,8 @@ def refund_bands():
         config.get_int("rules/refund-75-hours", 24),
         config.get_int("rules/refund-50-hours", 6),
     )
+
+
+def max_upcoming_per_doctor():
+    """Brief: a patient may hold at most 3 upcoming appointments with the same doctor."""
+    return max(1, config.get_int("rules/max-upcoming-per-doctor", 3))

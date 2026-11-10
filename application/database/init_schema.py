@@ -218,6 +218,29 @@ def _constraint_exists(cursor, table, name):
     return _first(cursor.fetchone()) > 0
 
 
+def _index_exists(cursor, table, name):
+    cursor.execute(
+        "SELECT COUNT(*) AS n FROM information_schema.statistics "
+        "WHERE table_schema = DATABASE() AND table_name = %s AND index_name = %s",
+        (table, name),
+    )
+    return _first(cursor.fetchone()) > 0
+
+
+# Indexes added after schema version 5 shipped. They are created idempotently on every run
+# (no version bump, no data loss): (table, index name, column list).
+EXTRA_INDEXES = (
+    ("doctors", "ix_doctors_first_name", "first_name"),
+)
+
+
+def _ensure_extra_indexes(cursor):
+    for table, name, columns in EXTRA_INDEXES:
+        if not _index_exists(cursor, table, name):
+            logger.info("Creating index %s on %s", name, table)
+            cursor.execute(f"CREATE INDEX `{name}` ON `{table}` ({columns})")
+
+
 def _prepare_consultation_type_split(cursor):
     """Step 1: detach and rename the old per-doctor table so schema.sql can create the new ones.
 
@@ -335,6 +358,8 @@ def initialize_database():
 
             if split_pending:
                 _finish_consultation_type_split(cursor)
+
+            _ensure_extra_indexes(cursor)
 
             cursor.execute(
                 "INSERT INTO schema_meta (id, version) VALUES (1, %s) "

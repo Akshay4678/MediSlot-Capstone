@@ -251,8 +251,41 @@ class FakeApi:
                 },
             )
 
-        if path in ("/doctors/search", "/appointments") and method == "GET":
+        if path == "/doctors/search" and method == "GET":
+            return FakeResponse(
+                200,
+                {
+                    "items": [{"doctor_id": "d9", "first_name": "Asha", "last_name": "Rao", "specialisation": "Cardiology",
+                               "hospital_name": "Apollo", "city": "Hyderabad", "experience_years": 5}],
+                    "count": 1, "total": 25, "limit": 10, "offset": (params or {}).get("offset", 0), "has_more": True,
+                },
+            )
+
+        if path == "/appointments" and method == "GET":
             return FakeResponse(200, {"items": []})
+
+        if path == "/patient/me" and method == "GET":
+            return FakeResponse(200, {"patient": {"first_name": "Pat", "last_name": "One", "phone": "+91 98765 43210",
+                                                  "city": "Pune", "gender": "Male", "date_of_birth": "1990-05-04",
+                                                  "address": None, "emergency_contact": None}})
+
+        if path == "/patient/me" and method == "PUT":
+            if self.put_error:
+                return FakeResponse(*self.put_error)
+            return FakeResponse(200, {"patient": json})
+
+        if path == "/patient/me" and method == "DELETE":
+            return FakeResponse(200, {"message": "deleted"})
+
+        if path == "/doctors/d9" and method == "GET":
+            return FakeResponse(
+                200,
+                {
+                    "doctor": {"doctor_id": "d9", "first_name": "Asha", "last_name": "Rao", "specialisation": "Cardiology",
+                               "hospital_name": "Apollo", "city": "Hyderabad", "qualifications": "MBBS", "experience_years": 5},
+                    "consultation_types": [{"type_name": "Standard Consult", "duration_minutes": 30, "fee": 500.0}],
+                },
+            )
 
         if path == "/waitlist" and method == "GET":
             return FakeResponse(
@@ -1148,3 +1181,60 @@ def test_patient_can_accept_an_offer_and_leave_the_waitlist(client, api):
 
     assert ("POST", "/waitlist/offers/o1/accept") in made
     assert ("DELETE", "/waitlist/w1") in made
+
+
+def test_patient_search_sends_all_filters_and_pages(client, api):
+    login(client, "patient")
+
+    html = client.get("/patient/?name=Asha&hospital=Apollo&city=Hyd&specialisation=Cardio&offset=10").get_data(as_text=True)
+
+    sent = [c[4] for c in api.calls if c[1] == "/doctors/search"][-1]
+    assert sent["name"] == "Asha" and sent["hospital"] == "Apollo" and sent["city"] == "Hyd"
+    assert sent["specialisation"] == "Cardio" and sent["offset"] == 10 and sent["limit"] == 10
+    assert "25 found" in html and "Next" in html and "Previous" in html
+    assert "/patient/doctor/d9" in html
+
+
+def test_patient_profile_editor_shows_and_saves_details(client, api):
+    login(client, "patient")
+
+    page = client.get("/patient/profile").get_data(as_text=True)
+    assert 'value="Pat"' in page and "+91 98765 43210" in page
+
+    token = extract_csrf_token(page, "/patient/profile")
+    response = client.post("/patient/profile", data={"csrf_token": token, "first_name": "Pat", "last_name": "Two",
+                                                    "phone": "+91 90000 11111", "gender": "Male"})
+    put = [c[3] for c in api.calls if c[0] == "PUT" and c[1] == "/patient/me"][0]
+
+    assert response.status_code == 302 and put["last_name"] == "Two" and put["phone"] == "+91 90000 11111"
+
+
+def test_patient_profile_shows_the_api_validation_message(client, api):
+    login(client, "patient")
+    token = extract_csrf_token(client.get("/patient/profile").get_data(as_text=True), "/patient/profile")
+    api.put_error = (400, {"error": "INVALID_PHONE", "message": "phone must be 7-19 digits."})
+
+    html = client.post("/patient/profile", data={"csrf_token": token, "first_name": "Pat", "last_name": "One",
+                                                "phone": "abc"}).get_data(as_text=True)
+
+    assert "phone must be 7-19 digits." in html and 'value="abc"' in html
+
+
+def test_patient_can_delete_their_profile_and_is_signed_out(client, api):
+    login(client, "patient")
+    token = extract_csrf_token(client.get("/patient/profile").get_data(as_text=True), "/patient/profile")
+
+    response = client.post("/patient/profile/delete", data={"csrf_token": token})
+
+    assert ("DELETE", "/patient/me") in [(c[0], c[1]) for c in api.calls]
+    assert response.status_code == 302 and response.headers["Location"] == "/"
+    # Signed out: the portal now sends the visitor to the login page.
+    assert client.get("/patient/").headers["Location"].endswith("/patient/login")
+
+
+def test_public_doctor_page_lists_fees(client, api):
+    login(client, "patient")
+
+    html = client.get("/patient/doctor/d9").get_data(as_text=True)
+
+    assert "Dr. Asha Rao" in html and "Standard Consult" in html and "500.0" in html

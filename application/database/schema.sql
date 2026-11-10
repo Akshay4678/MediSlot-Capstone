@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS doctors (
     KEY ix_doctors_hospital_active (hospital_id, is_active),
     KEY ix_doctors_specialisation_active (specialisation_id, is_active),
     KEY ix_doctors_name (last_name, first_name),
+    KEY ix_doctors_first_name (first_name),
     CONSTRAINT fk_doctors_user FOREIGN KEY (user_id) REFERENCES users(user_id)
         ON UPDATE CASCADE ON DELETE RESTRICT,
     CONSTRAINT fk_doctors_hospital FOREIGN KEY (hospital_id) REFERENCES hospitals(hospital_id)

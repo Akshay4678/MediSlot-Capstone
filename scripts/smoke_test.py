@@ -124,8 +124,10 @@ def main():
                                           "start_time": start, "end_time": end}
     expect("overlapping patterns rejected", call("PUT", "/doctors/me/availability", token,
            {"patterns": [pattern("09:00", "12:00"), pattern("11:00", "13:00")]}), 400)
-    expect("capacity above 1 only for health camps", call("PUT", "/doctors/me/availability", token,
-           {"patterns": [dict(pattern("09:00", "12:00"), capacity=3)]}), 400)
+    # Normal consultations are always one patient: a larger capacity is accepted but forced to 1.
+    forced = expect("normal consult capacity forced to 1", call("PUT", "/doctors/me/availability", token,
+                    {"patterns": [dict(pattern("09:00", "12:00"), capacity=3)]}), 200)
+    assert all(p["capacity"] == 1 for p in forced["patterns"]), forced["patterns"]
     saved = expect("availability save", call("PUT", "/doctors/me/availability", token,
                    {"patterns": [pattern("09:00", "12:00", day) for day in (1, 2, 3, 4, 5)]}), 200)
     assert saved["slots"]["created"] > 0, "saving availability should create slots in the 30-day window"

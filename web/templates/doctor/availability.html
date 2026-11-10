@@ -74,6 +74,8 @@ Availability - MediSlot
 
           <th>To</th>
 
+          <th>Seats per slot</th>
+
           <th>Generated slots</th>
 
           <th></th>
@@ -155,6 +157,7 @@ Availability - MediSlot
               <option
                 value="{{ t.consultation_type_id }}"
                 data-duration="{{ t.duration_minutes }}"
+                data-camp="{{ 1 if t.type_name|lower == 'health camp session' else 0 }}"
                 {% if r.consultation_type_id == t.consultation_type_id %}
                   selected
                 {% endif %}>
@@ -191,6 +194,28 @@ Availability - MediSlot
               value="{{ r.end_time }}"
               data-time-end
               required>
+
+          </td>
+
+
+          <!-- SEATS PER SLOT (Health Camp only) -->
+
+          <td data-capacity-cell>
+
+            <input
+              name="p{{ i }}_capacity"
+              type="number"
+              min="{{ camp_cap.min }}"
+              max="{{ camp_cap.max }}"
+              step="1"
+              value="{{ r.capacity if r.capacity and r.capacity > 1 else camp_cap.default }}"
+              class="capacity-input"
+              data-capacity
+              aria-label="Seats per slot"
+              title="How many people can book each slot ({{ camp_cap.min }}-{{ camp_cap.max }})"
+              style="width:5em">
+
+            <span class="muted small" data-capacity-na>1 patient</span>
 
           </td>
 
@@ -282,6 +307,12 @@ Availability - MediSlot
       </span>
 
       <span>
+        For a <strong>Health Camp Session</strong> you also choose the
+        seats per slot ({{ camp_cap.min }}&ndash;{{ camp_cap.max }}).
+        All other consultation types are always one patient per slot.
+      </span>
+
+      <span>
         Two active rows on the same day cannot overlap.
         Adjacent rows such as 09:00–10:00 and
         10:00–11:00 are allowed.
@@ -363,7 +394,8 @@ Availability - MediSlot
 
         <option
           value="{{ t.consultation_type_id }}"
-          data-duration="{{ t.duration_minutes }}">
+          data-duration="{{ t.duration_minutes }}"
+          data-camp="{{ 1 if t.type_name|lower == 'health camp session' else 0 }}">
 
           {{ t.type_name }}
           ({{ t.duration_minutes }} min)
@@ -397,6 +429,26 @@ Availability - MediSlot
         value=""
         data-time-end
         required>
+
+    </td>
+
+
+    <td data-capacity-cell>
+
+      <input
+        name="p__I___capacity"
+        type="number"
+        min="{{ camp_cap.min }}"
+        max="{{ camp_cap.max }}"
+        step="1"
+        value="{{ camp_cap.default }}"
+        class="capacity-input"
+        data-capacity
+        aria-label="Seats per slot"
+        title="How many people can book each slot ({{ camp_cap.min }}-{{ camp_cap.max }})"
+        style="width:5em">
+
+      <span class="muted small" data-capacity-na>1 patient</span>
 
     </td>
 
@@ -549,6 +601,43 @@ Availability - MediSlot
     }
 
 
+    /*
+     * Health Camp Session: the doctor chooses the seats per slot.
+     * Every other type is always one patient per slot.
+     */
+
+    var seatsInput =
+      row.querySelector("[data-capacity]");
+
+    var seatsNa =
+      row.querySelector("[data-capacity-na]");
+
+    var campOption =
+      select.options[select.selectedIndex];
+
+    var isCamp =
+      !!campOption &&
+      campOption.getAttribute("data-camp") === "1";
+
+    if (seatsInput) {
+
+      seatsInput.style.display =
+        isCamp ? "" : "none";
+
+      seatsInput.disabled = !isCamp;
+
+      seatsInput.required = isCamp;
+
+    }
+
+    if (seatsNa) {
+
+      seatsNa.style.display =
+        isCamp ? "none" : "";
+
+    }
+
+
     var option =
       select.options[
         select.selectedIndex
@@ -626,12 +715,24 @@ Availability - MediSlot
      * of generated slots.
      */
 
+    var seatsText = "";
+
+    if (isCamp && seatsInput && seatsInput.value) {
+
+      seatsText =
+        ' <span class="muted small">&times; ' +
+        seatsInput.value +
+        ' seats</span>';
+
+    }
+
     preview.innerHTML =
       '<strong>' +
       slotCount +
       ' slot' +
       (slotCount === 1 ? '' : 's') +
-      '</strong>';
+      '</strong>' +
+      seatsText;
 
   }
 
@@ -645,7 +746,8 @@ Availability - MediSlot
     [
       "[data-type-select]",
       "[data-time-start]",
-      "[data-time-end]"
+      "[data-time-end]",
+      "[data-capacity]"
     ].forEach(function (selector) {
 
       var element =
@@ -741,7 +843,8 @@ Availability - MediSlot
         "day",
         "type",
         "start",
-        "end"
+        "end",
+        "capacity"
       ].forEach(function (name) {
 
         var sourceField =

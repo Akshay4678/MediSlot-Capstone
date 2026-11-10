@@ -2,6 +2,29 @@
 {% block title %}Blackout dates - MediSlot{% endblock %}
 {% block content %}
 <h1>Blackout dates</h1>
+{% if pending %}
+<div class="card" id="blackout-confirm">
+  <h2>Patients are already booked on {{ pending.blackout_date }}</h2>
+  <p>{{ pending.message }}</p>
+  {% if pending.appointments %}
+  <table><tr><th>Time</th><th>Type</th><th>Patient</th></tr>
+    {% for a in pending.appointments %}<tr><td>{{ a.time }}</td><td>{{ a.type_name }}</td><td>{{ a.patient_name }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+  <p class="muted">Either way, no new patient can book that day once it is blacked out.</p>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="blackout_date" value="{{ pending.blackout_date }}">
+    <input type="hidden" name="reason" value="{{ pending.reason }}">
+    <p class="actions">
+      <button type="submit" name="existing_bookings" value="keep">Keep these appointments and block new bookings</button>
+      <button type="submit" name="existing_bookings" value="cancel" class="secondary"
+              onclick="return confirm('Cancel these appointments? Patients will be refunded in full.');">Cancel these appointments (full refund)</button>
+      <a href="{{ url_for('doctor.blackouts') }}">Do nothing</a>
+    </p>
+  </form>
+</div>
+{% endif %}
 <div class="card"><h2>Add leave / conference days</h2>
   <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="row"><div><label for="blackout_date">Date</label><input id="blackout_date" name="blackout_date" type="date" required></div>

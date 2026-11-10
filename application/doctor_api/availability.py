@@ -61,9 +61,12 @@ def get(ctx):
     with ctx.conn.cursor() as cur:
         patterns = _fetch(cur, doctor["doctor_id"])
 
+    low, high = rules.health_camp_capacity_bounds()
+
     return 200, {
         "timezone": doctor["timezone"],
         "patterns": patterns,
+        "health_camp_capacity": {"min": low, "max": high, "default": min(max(5, low), high)},
     }
 
 
@@ -149,36 +152,38 @@ def validate(items, types_by_id, existing_ids):
             )
 
         # ------------------------------------------------------------
-        # CAPACITY
+        # CAPACITY (seats per generated slot)
         # ------------------------------------------------------------
         #
-        # Normal consultations always represent one patient.
-        #
-        # Health Camp capacity is intentionally NOT restricted here.
-        # The booking implementation will decide how many people can
-        # participate in a camp appointment.
-        #
-        # Default Health Camp capacity = 5.
+        # Normal consultations always represent one patient (capacity 1).
+        # A Health Camp Session lets the doctor choose how many people each
+        # slot holds, between the configured minimum and maximum (default 2-10,
+        # SSM rules/health-camp-min-capacity and rules/health-camp-max-capacity).
+        # If the doctor leaves it empty, 5 seats (kept inside the allowed range) are used.
         # ------------------------------------------------------------
 
-        camp = rules.is_health_camp(ctype["type_name"])
-
-        if camp:
-            raw_capacity = item.get("capacity", 5)
+        if rules.is_health_camp(ctype["type_name"]):
+            low, high = rules.health_camp_capacity_bounds()
+            raw_capacity = item.get("capacity")
+            if raw_capacity in (None, ""):
+                capacity = min(max(5, low), high)
+            else:
+                if isinstance(raw_capacity, bool):
+                    raise ApiError(400, "INVALID_CAPACITY", f"{label}: capacity must be a whole number.")
+                try:
+                    capacity = int(str(raw_capacity).strip())
+                except (TypeError, ValueError):
+                    raise ApiError(
+                        400, "INVALID_CAPACITY", f"{label}: capacity must be a whole number.",
+                    ) from None
+                if not low <= capacity <= high:
+                    raise ApiError(
+                        400,
+                        "INVALID_CAPACITY",
+                        f"{label}: a Health Camp Session must have between {low} and {high} seats per slot.",
+                    )
         else:
-            raw_capacity = item.get("capacity", 1)
-
-        try:
-            capacity = int(raw_capacity)
-        except (TypeError, ValueError):
-            capacity = 1 if not camp else 5
-
-        # Normal consultation = exactly one patient.
-        # Health Camp can use any positive capacity for now.
-        if not camp:
             capacity = 1
-        elif capacity < 1:
-            capacity = 5
 
         availability_id = item.get("availability_id")
 

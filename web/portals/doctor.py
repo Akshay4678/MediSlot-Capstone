@@ -610,10 +610,32 @@ def availability():
         types=types_data,
         days=DAYS,
         timezone=saved["timezone"],
+        camp_cap=saved.get("health_camp_capacity")
+        or {"min": 2, "max": 10, "default": 5},
     )
 
 
 # ---------------------------------------------------------------- blackouts
+
+def _booked_on(day):
+    """Patients already booked on a date, for the blackout confirmation panel."""
+    data = api_client.call(
+        "GET",
+        "/doctors/me/schedule",
+        params={"date": day},
+    )
+    booked = []
+    for slot in data.get("slots", []):
+        for appt in slot.get("appointments", []):
+            booked.append(
+                {
+                    "time": slot["start_time"],
+                    "type_name": slot["type_name"],
+                    "patient_name": appt["patient_name"],
+                }
+            )
+    return booked
+
 
 @bp.route(
     "/blackouts",
@@ -622,6 +644,8 @@ def availability():
 )
 @role_required("doctor")
 def blackouts():
+
+    pending = None
 
     if request.method == "POST":
 
@@ -642,47 +666,90 @@ def blackouts():
 
             else:
 
+                payload = {
+                    "blackout_date": request.form.get(
+                        "blackout_date",
+                        "",
+                    ),
+                    "reason": request.form.get(
+                        "reason",
+                        "",
+                    ),
+                }
+
+                choice = request.form.get(
+                    "existing_bookings",
+                    "",
+                )
+
+                if choice in ("keep", "cancel"):
+                    payload["existing_bookings"] = choice
+
                 result = api_client.call(
                     "POST",
                     "/doctors/me/blackouts",
-                    {
-                        "blackout_date": request.form.get(
-                            "blackout_date",
-                            "",
-                        ),
-                        "reason": request.form.get(
-                            "reason",
-                            "",
-                        ),
-                    },
+                    payload,
                 )
 
-                note = (
-                    f" {result['slots_with_bookings']} "
-                    f"slot(s) already have bookings."
-                    if result["slots_with_bookings"]
-                    else ""
-                )
+                parts = [
+                    f"Blackout added; "
+                    f"{result['slots_blocked']} slot(s) blocked "
+                    f"(no new bookings)."
+                ]
+
+                if result.get("appointments_cancelled"):
+                    parts.append(
+                        f"{result['appointments_cancelled']} "
+                        f"appointment(s) cancelled and "
+                        f"marked for a full refund."
+                    )
+
+                elif result.get("appointments_kept"):
+                    parts.append(
+                        f"{result['appointments_kept']} "
+                        f"existing appointment(s) were kept."
+                    )
 
                 flash(
-                    f"Blackout added; "
-                    f"{result['slots_blocked']} slot(s) blocked."
-                    f"{note}",
+                    " ".join(parts),
                     "success",
                 )
 
         except ApiError as exc:
-            flash(
-                exc.message,
-                "error",
-            )
 
-        return redirect(
-            url_for("doctor.blackouts")
-        )
+            if exc.code == "BLACKOUT_HAS_BOOKINGS":
+
+                # Ask the doctor what to do with the patients who are already booked.
+                day = request.form.get("blackout_date", "")
+
+                try:
+                    appointments = _booked_on(day)
+                except ApiError:
+                    appointments = []
+
+                pending = {
+                    "blackout_date": day,
+                    "reason": request.form.get("reason", ""),
+                    "message": exc.message,
+                    "appointments": appointments,
+                }
+
+            else:
+
+                flash(
+                    exc.message,
+                    "error",
+                )
+
+        if pending is None:
+
+            return redirect(
+                url_for("doctor.blackouts")
+            )
 
     return render_template(
         "doctor/blackouts.html",
+        pending=pending,
         **api_client.call(
             "GET",
             "/doctors/me/blackouts",

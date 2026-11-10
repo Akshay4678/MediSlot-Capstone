@@ -43,6 +43,8 @@ class FakeApi:
         self.calls = []
         self.expired_tokens = set()
         self.put_error = None  # (status, body) to make PUT /doctors/me fail
+        self.extra_types = []  # extra consultation types returned by the types endpoint
+        self.has_bookings_on_blackout = False  # POST /doctors/me/blackouts needs a keep/cancel choice
 
         self.profile = {
             "doctor_id": "d1",
@@ -216,7 +218,7 @@ class FakeApi:
                             "duration_minutes": 30,
                             "fee": 500.0,
                         }
-                    ],
+                    ] + self.extra_types,
                     "allowed_types": [
                         {
                             "type_name": "Standard Consult",
@@ -232,6 +234,7 @@ class FakeApi:
                 {
                     "timezone": "Asia/Kolkata",
                     "patterns": [],
+                    "health_camp_capacity": {"min": 2, "max": 10, "default": 5},
                 },
             )
 
@@ -245,6 +248,51 @@ class FakeApi:
                         "window_days": 30,
                         "removed_unbooked": 0,
                     },
+                },
+            )
+
+        if path in ("/doctors/search", "/appointments") and method == "GET":
+            return FakeResponse(200, {"items": []})
+
+        if path == "/waitlist" and method == "GET":
+            return FakeResponse(
+                200,
+                {
+                    "items": [
+                        {"waitlist_id": "w1", "slot_id": "s1", "doctor_name": "Dr. Asha Rao",
+                         "type_name": "Standard Consult", "date": "2026-11-20", "start_time": "10:00"}
+                    ],
+                    "offers": [
+                        {"offer_id": "o1", "slot_id": "s2", "doctor_name": "Dr. Asha Rao",
+                         "type_name": "Standard Consult", "date": "2026-11-21", "start_time": "11:00"}
+                    ],
+                },
+            )
+
+        if path == "/waitlist/w1" and method == "DELETE":
+            return FakeResponse(200, {"message": "Removed from waitlist."})
+
+        if path == "/waitlist/offers/o1/accept" and method == "POST":
+            return FakeResponse(201, {"appointment_id": "a1", "status": "CONFIRMED"})
+
+        if path == "/doctors/me/blackouts" and method == "POST":
+            body = json or {}
+            if self.has_bookings_on_blackout and "existing_bookings" not in body:
+                return FakeResponse(
+                    409,
+                    {
+                        "error": "BLACKOUT_HAS_BOOKINGS",
+                        "message": "1 appointment(s) are already booked.",
+                    },
+                )
+            return FakeResponse(
+                201,
+                {
+                    "blackout": {"blackout_id": "b1"},
+                    "slots_blocked": 4,
+                    "slots_with_bookings": 1,
+                    "appointments_kept": 1 if body.get("existing_bookings") == "keep" else 0,
+                    "appointments_cancelled": 1 if body.get("existing_bookings") == "cancel" else 0,
                 },
             )
 
@@ -994,3 +1042,109 @@ def test_logout_then_login_again_works(client, api):
     response = login(client, "doctor")
 
     assert response.headers["Location"].endswith("/doctor/")
+
+# -------------------------------------------------------
+# Health Camp seats per slot and blackout confirmation
+# -------------------------------------------------------
+
+CAMP_TYPE = {
+    "consultation_type_id": "t2",
+    "type_name": "Health Camp Session",
+    "duration_minutes": 60,
+    "fee": 200.0,
+}
+
+
+def test_availability_page_has_a_seats_input_limited_to_the_camp_range(client, api):
+    api.extra_types = [CAMP_TYPE]
+    login(client, "doctor")
+
+    html = client.get("/doctor/availability").get_data(as_text=True)
+
+    assert 'name="p__I___capacity"' in html
+    assert 'min="2"' in html and 'max="10"' in html
+    # Only the camp type is flagged so the input shows for it alone.
+    assert 'data-camp="1"' in html and 'data-camp="0"' in html
+
+
+def test_availability_form_sends_the_chosen_camp_capacity(client, api):
+    api.extra_types = [CAMP_TYPE]
+    login(client, "doctor")
+
+    client.post(
+        "/doctor/availability",
+        data={
+            "csrf_token": csrf(client),
+            "row_count": "1",
+            "p0_id": "",
+            "p0_type": "t2",
+            "p0_day": "6",
+            "p0_start": "09:00",
+            "p0_end": "12:00",
+            "p0_capacity": "8",
+        },
+    )
+
+    put = [c[3] for c in api.calls if c[0] == "PUT" and c[1] == "/doctors/me/availability"][0]
+
+    assert put["patterns"][0]["capacity"] == "8"
+
+
+def test_blackout_with_existing_bookings_asks_the_doctor_to_choose(client, api):
+    api.has_bookings_on_blackout = True
+    login(client, "doctor")
+
+    response = client.post(
+        "/doctor/blackouts",
+        data={"csrf_token": csrf(client), "blackout_date": "2026-11-02", "reason": "Leave"},
+    )
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "already booked on 2026-11-02" in html
+    assert 'name="existing_bookings" value="keep"' in html
+    assert 'name="existing_bookings" value="cancel"' in html
+    assert "Pat One" in html
+
+
+def test_blackout_confirmation_passes_the_choice_to_the_api(client, api):
+    api.has_bookings_on_blackout = True
+    login(client, "doctor")
+
+    client.post(
+        "/doctor/blackouts",
+        data={
+            "csrf_token": csrf(client),
+            "blackout_date": "2026-11-02",
+            "reason": "Leave",
+            "existing_bookings": "cancel",
+        },
+    )
+
+    posts = [c[3] for c in api.calls if c[0] == "POST" and c[1] == "/doctors/me/blackouts"]
+
+    assert posts[-1]["existing_bookings"] == "cancel"
+
+
+def test_patient_home_lists_waitlist_entries_and_held_offers(client, api):
+    login(client, "patient")
+
+    html = client.get("/patient/").get_data(as_text=True)
+
+    assert "My waitlist" in html
+    assert "A seat is being held for you" in html and "2026-11-21" in html
+    assert "/patient/offers/o1/accept" in html
+    assert "/patient/waitlist/w1/leave" in html
+
+
+def test_patient_can_accept_an_offer_and_leave_the_waitlist(client, api):
+    login(client, "patient")
+    token = extract_csrf_token(client.get("/patient/").get_data(as_text=True), "/patient/")
+
+    client.post("/patient/offers/o1/accept", data={"csrf_token": token})
+    client.post("/patient/waitlist/w1/leave", data={"csrf_token": token})
+
+    made = [(c[0], c[1]) for c in api.calls]
+
+    assert ("POST", "/waitlist/offers/o1/accept") in made
+    assert ("DELETE", "/waitlist/w1") in made

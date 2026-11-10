@@ -187,40 +187,18 @@ def test_invalid_patterns_are_rejected(bad, expected):
     )
 
 
-def test_health_camp_capacity_is_not_rejected_by_availability_validation():
-    """Health Camp seat enforcement is handled by the booking engine."""
-
-    for capacity in (1, 2, 5, 6, 10, 20):
-        clean = availability.validate(
-            [
-                item(
-                    T_CAMP,
-                    start="09:00",
-                    end="10:00",
-                    capacity=capacity,
-                )
-            ],
-            TYPES,
-            set(),
-        )
-
-        assert clean[0]["capacity"] == capacity
+def _camp(**extra):
+    return availability.validate([item(T_CAMP, start="09:00", end="10:00", **extra)], TYPES, set())
 
 
-def test_health_camp_capacity_defaults_to_five():
-    clean = availability.validate(
-        [
-            item(
-                T_CAMP,
-                start="09:00",
-                end="10:00",
-            )
-        ],
-        TYPES,
-        set(),
-    )
+def test_health_camp_capacity_accepts_two_to_ten():
+    for capacity in (2, 3, 5, 9, 10, "7"):
+        assert _camp(capacity=capacity)[0]["capacity"] == int(capacity)
 
-    assert clean[0]["capacity"] == 5
+
+def test_health_camp_capacity_outside_two_to_ten_is_rejected():
+    for capacity in (0, 1, 11, 20, -3, "abc", 2.5, True):
+        assert code_of(lambda capacity=capacity: _camp(capacity=capacity)) == "INVALID_CAPACITY", capacity
 
 
 def test_normal_consultation_capacity_is_always_one():

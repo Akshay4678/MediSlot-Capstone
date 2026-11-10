@@ -46,10 +46,16 @@ def home():
         },
     )
     appointments = _items("/appointments")
+    try:
+        waiting = api_client.call("GET", "/waitlist")
+    except ApiError:
+        waiting = {}
     return render_template(
         "patient/home.html",
         doctors=doctors,
         appointments=appointments,
+        waitlist=waiting.get("items", []),
+        offers=waiting.get("offers", []),
         search=query,
         city=city,
         specialisation=specialisation,
@@ -132,6 +138,28 @@ def waitlist():
     try:
         api_client.call("POST", "/waitlist", {"slot_id": request.form.get("slot_id", "").strip()})
         flash("You have been added to the waitlist.", "success")
+    except ApiError as exc:
+        flash(exc.message, "error")
+    return redirect(url_for("patient.home"))
+
+
+@bp.route("/waitlist/<waitlist_id>/leave", methods=["POST"], endpoint="waitlist_leave")
+@role_required("patient")
+def waitlist_leave(waitlist_id):
+    try:
+        api_client.call("DELETE", f"/waitlist/{waitlist_id}")
+        flash("You have left the waitlist.", "success")
+    except ApiError as exc:
+        flash(exc.message, "error")
+    return redirect(url_for("patient.home"))
+
+
+@bp.route("/offers/<offer_id>/accept", methods=["POST"], endpoint="offer_accept")
+@role_required("patient")
+def offer_accept(offer_id):
+    try:
+        api_client.call("POST", f"/waitlist/offers/{offer_id}/accept")
+        flash("Offer accepted - your appointment is confirmed.", "success")
     except ApiError as exc:
         flash(exc.message, "error")
     return redirect(url_for("patient.home"))

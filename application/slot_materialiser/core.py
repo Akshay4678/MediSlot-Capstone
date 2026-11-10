@@ -139,20 +139,28 @@ def rebuild_future_slots(conn, doctor_id, tz_name, now_utc=None):
 
 
 def block_date(conn, doctor_id, local_date):
-    """Blackout added: unbooked slots on that date become BLOCKED. Returns (blocked, with_bookings)."""
+    """Blackout added: EVERY open or full slot on that date becomes BLOCKED so nobody can book it.
+
+    Returns (blocked, with_bookings): the number of slots closed and, of those, how many already
+    hold at least one booking. Existing appointments are not touched here (the caller decides
+    whether to keep or cancel them). Closing slots that already have bookings matters for
+    multi-seat Health Camp slots, which would otherwise stay OPEN and keep accepting patients.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE materialised_slots SET status = 'BLOCKED' "
-            "WHERE doctor_id = %s AND `date` = %s AND booked_count = 0 AND status IN ('OPEN', 'FULL')",
-            (doctor_id, local_date),
-        )
-        blocked = cur.rowcount or 0
-        cur.execute(
-            "SELECT COUNT(*) AS n FROM materialised_slots WHERE doctor_id = %s AND `date` = %s AND booked_count > 0",
+            "SELECT COUNT(*) AS n FROM materialised_slots "
+            "WHERE doctor_id = %s AND `date` = %s AND booked_count > 0 AND status IN ('OPEN', 'FULL')",
             (doctor_id, local_date),
         )
         row = cur.fetchone()
-    return blocked, int(row["n"] if isinstance(row, dict) else row[0])
+        with_bookings = int(row["n"] if isinstance(row, dict) else row[0])
+        cur.execute(
+            "UPDATE materialised_slots SET status = 'BLOCKED' "
+            "WHERE doctor_id = %s AND `date` = %s AND status IN ('OPEN', 'FULL')",
+            (doctor_id, local_date),
+        )
+        blocked = cur.rowcount or 0
+    return blocked, with_bookings
 
 
 def unblock_date(conn, doctor_id, tz_name, local_date, now_utc=None):

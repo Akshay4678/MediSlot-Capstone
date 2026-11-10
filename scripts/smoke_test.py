@@ -98,11 +98,13 @@ def main():
 
     hospital = expect("hospitals", call("GET", "/hospitals", token), 200)["items"][0]["hospital_id"]
     spec = expect("specialisations", call("GET", "/specialisations", token), 200)["items"][0]["specialisation_id"]
-    profile = {"first_name": "Smoke", "last_name": "Doctor", "licence_number": f"SMOKE-{run}".upper(),
+    profile = {"first_name": "Smoke", "last_name": "Doctor", "licence_number": f"S-{secrets.randbelow(10**6):06d}",
                "hospital_id": hospital, "specialisation_id": spec, "timezone": "Asia/Kolkata",
                "experience_years": 3, "qualifications": "Smoke test"}
     expect("profile create", call("PUT", "/doctors/me", token, profile), 201)
     expect("profile read", call("GET", "/doctors/me", token), 200)
+    for bad in ("AB12", "AB-123456", "ABCD123", "SMOKE-1"):  # <5 chars, >8 chars, >3 letters, >3 letters
+        expect(f"bad licence {bad} rejected", call("PUT", "/doctors/me", token, {"licence_number": bad}), 400)
     expect("bad timezone rejected", call("PUT", "/doctors/me", token, {"timezone": "Mars/Base"}), 400)
     expect("profile update", call("PUT", "/doctors/me", token, {"experience_years": 4}), 200)
 

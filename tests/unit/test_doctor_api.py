@@ -383,6 +383,15 @@ def test_profile_validation_normalises_and_rejects_bad_values():
         == "INVALID_LICENCE"
     )
 
+    for bad in ("AB12", "AB-123456", "ABCD123", "SMOKE-1", "-AB123"):
+        assert (
+            code_of(lambda bad=bad: profile._validate({"licence_number": bad}, creating=False))
+            == "INVALID_LICENCE"
+        ), bad
+
+    for good in ("12345", "ABC12345", "TS-12345", "S-123456"):
+        assert profile._validate({"licence_number": good}, creating=False)["licence_number"] == good.upper()
+
     assert (
         code_of(
             lambda: profile._validate(

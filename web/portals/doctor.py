@@ -682,7 +682,7 @@ def blackouts():
                     "",
                 )
 
-                if choice in ("keep", "cancel"):
+                if choice == "keep":
                     payload["existing_bookings"] = choice
 
                 result = api_client.call(
@@ -697,14 +697,7 @@ def blackouts():
                     f"(no new bookings)."
                 ]
 
-                if result.get("appointments_cancelled"):
-                    parts.append(
-                        f"{result['appointments_cancelled']} "
-                        f"appointment(s) cancelled and "
-                        f"marked for a full refund."
-                    )
-
-                elif result.get("appointments_kept"):
+                if result.get("appointments_kept"):
                     parts.append(
                         f"{result['appointments_kept']} "
                         f"existing appointment(s) were kept."
@@ -719,7 +712,7 @@ def blackouts():
 
             if exc.code == "BLACKOUT_HAS_BOOKINGS":
 
-                # Ask the doctor what to do with the patients who are already booked.
+                # Ask the doctor to confirm; patients who are already booked keep their appointments.
                 day = request.form.get("blackout_date", "")
 
                 try:

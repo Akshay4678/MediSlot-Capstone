@@ -14,11 +14,6 @@
 ## Patient data isolation
 The patient is identified only from the authorizer context (`userId`). There is no patient id in any URL, query string or body, so one patient cannot ask for another's profile. Proven by unit tests (`tests/unit/test_patient_domain.py`) and by the deployed smoke test, which registers two patients, sends patient A's id as a query parameter and in a body as patient B, and checks B still only ever receives B's own data.
 
-## Booking rules that protect the patient side (Frozen Rule Set)
-* A patient holds at most **one** appointment per slot.
-* A patient holds at most **3 upcoming appointments with the same doctor** (SSM `rules/max-upcoming-per-doctor`, default 3). The 4th is refused with 409 `DOCTOR_LIMIT_REACHED`. The check runs inside the booking transaction after locking the patient's row, so two parallel bookings cannot both slip under the limit.
-* Slots in the past, outside the booking window, full, or blocked (blackout) are refused.
-
 ## Search indexes and why
 Search joins `doctors`, `hospitals`, `specialisations` and `users`. Name, hospital and city filters are **prefix** matches (`LIKE 'abc%'`) because a B-tree index can serve a prefix but never a leading wildcard. User input has `%` and `_` escaped.
 
@@ -35,5 +30,8 @@ Search joins `doctors`, `hospitals`, `specialisations` and `users`. Name, hospit
 
 Verify with `EXPLAIN` on the dev database after loading realistic data; the Milestone 4 checkpoint reviews these against the real query patterns. A leading-wildcard name search (`%abc`) is deliberately not offered: it would force a full scan.
 
+## Scope
+This milestone stops at discovery: profiles, search, public doctor profile and slot availability. Booking, cancellation, refunds, reschedule, waitlist and notifications belong to Milestones 5-6 and are not part of this change set.
+
 ## Known differences from the brief's endpoint names
-The brief lists `/patients/me`, `GET /doctors?name=...`, `POST /appointments` with an `Idempotency-Key` header and `PATCH /appointments/{id}`. This project uses `/patient/me`, `/doctors/search`, `POST /bookings` with the key in the body, and `POST /appointments/{id}/reschedule`. Behaviour is the same; align the names if the mentor wants the exact paths.
+The brief lists `/patients/me` and `GET /doctors?name=...`. This project uses `/patient/me` and `/doctors/search`. Behaviour is the same; align the names if the mentor wants the exact paths.

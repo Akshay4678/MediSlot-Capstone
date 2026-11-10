@@ -165,14 +165,3 @@ def slots(conn, doctor_id, q, now_utc=None):
     if single:
         body["date"] = start.isoformat()
     return 200, body
-
-
-def upcoming_with_doctor(cur, patient_id, doctor_id, now_utc=None):
-    """How many upcoming CONFIRMED appointments this patient already holds with this doctor."""
-    now_utc = (now_utc or datetime.now(timezone.utc)).replace(tzinfo=None)
-    cur.execute(
-        "SELECT COUNT(*) AS n FROM appointments a JOIN materialised_slots s ON s.slot_id = a.slot_id "
-        "WHERE a.patient_id = %s AND a.doctor_id = %s AND a.status = 'CONFIRMED' AND s.start_utc > %s",
-        (patient_id, doctor_id, now_utc))
-    row = cur.fetchone()
-    return int(row["n"] if isinstance(row, dict) else row[0])

@@ -18,8 +18,6 @@
     <input type="hidden" name="reason" value="{{ pending.reason }}">
     <p class="actions">
       <button type="submit" name="existing_bookings" value="keep">Keep these appointments and block new bookings</button>
-      <button type="submit" name="existing_bookings" value="cancel" class="secondary"
-              onclick="return confirm('Cancel these appointments? Patients will be refunded in full.');">Cancel these appointments (full refund)</button>
       <a href="{{ url_for('doctor.blackouts') }}">Do nothing</a>
     </p>
   </form>

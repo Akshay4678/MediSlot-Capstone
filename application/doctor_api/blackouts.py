@@ -28,7 +28,7 @@ def list_(ctx):
         return 200, {"items": [_row(r) for r in cur.fetchall()]}
 
 
-BOOKING_CHOICES = ("keep", "cancel")
+BOOKING_CHOICES = ("keep",)
 
 
 def _booked_appointments(conn, doctor_id, day, now_utc):
@@ -46,31 +46,6 @@ def _booked_appointments(conn, doctor_id, day, now_utc):
         return cur.fetchall()
 
 
-def _cancel_appointments(conn, appointments, reason):
-    """Doctor-initiated cancellation: status, 100% refund ledger row, seats released."""
-    note = ("Cancelled by doctor: " + (reason or "doctor unavailable"))[:500]
-    for a in appointments:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE appointments SET status = 'CANCELLED_BY_DOCTOR', notes = %s "
-                "WHERE appointment_id = %s AND status = 'CONFIRMED'",
-                (note, a["appointment_id"]))
-            if not (cur.rowcount or 0):
-                continue
-            cur.execute(
-                "UPDATE materialised_slots SET booked_count = GREATEST(booked_count - 1, 0) WHERE slot_id = %s",
-                (a["slot_id"],))
-            cur.execute(
-                "INSERT INTO refund_ledger (refund_id, appointment_id, refund_amount, refund_percentage, refund_status) "
-                "VALUES (%s, %s, %s, 100, 'CALCULATED') "
-                "ON DUPLICATE KEY UPDATE refund_amount = VALUES(refund_amount), refund_percentage = 100",
-                (new_id(), a["appointment_id"], money_value(a["fee"])))
-
-
-def money_value(fee):
-    return round(float(fee), 2)
-
-
 def create(ctx):
     doctor = ctx.doctor()
     day = parse_date(ctx.body.get("blackout_date"), "blackout_date")
@@ -82,7 +57,7 @@ def create(ctx):
     choice = ctx.body.get("existing_bookings")
     choice = str(choice).strip().lower() if choice not in (None, "") else ""
     if choice and choice not in BOOKING_CHOICES:
-        raise ApiError(400, "INVALID_FIELD", "existing_bookings must be 'keep' or 'cancel'.")
+        raise ApiError(400, "INVALID_FIELD", "existing_bookings must be 'keep'.")
 
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     booked = _booked_appointments(ctx.conn, doctor["doctor_id"], day, now_utc)
@@ -90,7 +65,7 @@ def create(ctx):
         raise ApiError(
             409, "BLACKOUT_HAS_BOOKINGS",
             f"{len(booked)} appointment(s) are already booked on {day.isoformat()}. "
-            "Choose whether to keep them or cancel them (patients are refunded in full) before blocking the day.")
+            "Confirm that they are kept (existing appointments stay, no new bookings are accepted) to block the day.")
 
     blackout_id = new_id()
     try:
@@ -102,14 +77,10 @@ def create(ctx):
             raise ApiError(409, "BLACKOUT_EXISTS", "That date is already blacked out.") from None
         raise
 
-    cancelled = 0
-    if booked and choice == "cancel":
-        _cancel_appointments(ctx.conn, booked, reason)
-        cancelled = len(booked)
     blocked, with_bookings = slots.block_date(ctx.conn, doctor["doctor_id"], day)
     return 201, {"blackout": {"blackout_id": blackout_id, "blackout_date": day.isoformat(), "reason": reason or ""},
                  "slots_blocked": blocked, "slots_with_bookings": with_bookings,
-                 "appointments_kept": len(booked) - cancelled, "appointments_cancelled": cancelled}
+                 "appointments_kept": len(booked)}
 
 
 def delete(ctx):

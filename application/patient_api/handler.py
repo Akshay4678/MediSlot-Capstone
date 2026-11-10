@@ -31,7 +31,7 @@ from application.common.auth_context import claims
 from application.common.http import request_body, request_method, response
 from application.common.rules import (
     booking_window_days, idempotency_ttl_hours, waitlist_max_size, hold_offer_minutes,
-    max_reschedules, min_reschedule_hours, refund_bands, max_upcoming_per_doctor,
+    max_reschedules, min_reschedule_hours, refund_bands,
 )
 from application.patient_api import discovery, profile as patient_profile
 from application.database.connection import get_connection
@@ -224,18 +224,6 @@ def _book(user_id, body, idempotency_key=None, hold_offer_id=None):
                 raise RuntimeError("SLOT_IN_PAST")
             if _parse_utc(slot["start_utc"]) > _now() + timedelta(days=booking_window_days()):
                 raise RuntimeError("BOOKING_WINDOW_EXCEEDED")
-            # Frozen rule: at most N (default 3) upcoming appointments with the same doctor.
-            # Lock the patient's row so two parallel bookings cannot both slip under the limit.
-            cur.execute("SELECT patient_id FROM patients WHERE patient_id = %s FOR UPDATE", (patient["patient_id"],))
-            if discovery.upcoming_with_doctor(cur, patient["patient_id"], slot["doctor_id"], _now()) >= max_upcoming_per_doctor():
-                raise RuntimeError("DOCTOR_LIMIT_REACHED")
-            # One seat per patient: a patient cannot take two seats of the same (Health Camp) slot.
-            cur.execute(
-                "SELECT 1 AS n FROM appointments WHERE patient_id = %s AND slot_id = %s AND status = 'CONFIRMED' LIMIT 1",
-                (patient["patient_id"], slot["slot_id"]),
-            )
-            if cur.fetchone():
-                raise RuntimeError("ALREADY_BOOKED")
 
             appointment_id = str(uuid.uuid4())
             notes = str(body.get("notes") or "").strip()[:2000] or None
@@ -275,9 +263,6 @@ def _book(user_id, body, idempotency_key=None, hold_offer_id=None):
             "SLOT_MISMATCH": (400, "SLOT_MISMATCH", "The selected slot does not belong to the requested doctor/consultation type."),
             "SLOT_FULL": (409, "SLOT_FULL", "The selected slot is no longer available."),
             "SLOT_IN_PAST": (409, "SLOT_IN_PAST", "The selected slot has already started."),
-            "DOCTOR_LIMIT_REACHED": (409, "DOCTOR_LIMIT_REACHED",
-                                     f"You already hold {max_upcoming_per_doctor()} upcoming appointments with this doctor."),
-            "ALREADY_BOOKED": (409, "ALREADY_BOOKED", "You already have an appointment in this slot."),
             "BOOKING_WINDOW_EXCEEDED": (400, "BOOKING_WINDOW_EXCEEDED", "The selected slot is outside the booking window."),
         }
         status, code, message = mapping.get(str(exc), (500, "BOOKING_FAILED", "The booking could not be completed."))
@@ -356,7 +341,7 @@ def _cancel(user_id, appointment_id, body):
             )
             cur.execute(
                 "UPDATE materialised_slots SET booked_count = GREATEST(booked_count - 1, 0), "
-                "status = IF(status = 'BLOCKED', 'BLOCKED', 'OPEN') "
+                "status = IF(booked_count - 1 <= 0, 'OPEN', IF(booked_count - 1 >= capacity, 'FULL', 'OPEN')) "
                 "WHERE slot_id = %s",
                 (row["slot_id"],),
             )
@@ -433,7 +418,7 @@ def _reschedule(user_id, appointment_id, body):
                 return _error(409, "SLOT_IN_PAST", "The new slot has already started.")
             cur.execute(
                 "UPDATE materialised_slots SET booked_count = GREATEST(booked_count - 1, 0), "
-                "status = IF(status = 'BLOCKED', 'BLOCKED', 'OPEN') "
+                "status = IF(booked_count - 1 <= 0, 'OPEN', IF(booked_count - 1 >= capacity, 'FULL', 'OPEN')) "
                 "WHERE slot_id = %s",
                 (appointment["slot_id"],),
             )
@@ -471,8 +456,6 @@ def _waitlist_join(user_id, body):
             slot = cur.fetchone()
             if not slot:
                 return _error(404, "SLOT_NOT_FOUND", "The selected slot was not found.")
-            if slot["status"] == "BLOCKED":
-                return _error(409, "SLOT_UNAVAILABLE", "The doctor is not available on that day, so the waitlist is closed.")
             if int(slot["booked_count"]) < int(slot["capacity"]) and slot["status"] == "OPEN":
                 return _error(409, "SLOT_AVAILABLE", "The slot is available now; book it instead of joining the waitlist.")
 
@@ -513,56 +496,15 @@ def _waitlist_leave(user_id, waitlist_id):
     return response(200, {"message": "Removed from waitlist."})
 
 
-def _slot_labels(slot_ids):
-    """Date, time, doctor and type for slot ids, so the patient sees more than a raw slot id."""
-    slot_ids = sorted({str(i) for i in slot_ids if i})
-    if not slot_ids:
-        return {}
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT s.slot_id, s.`date`, s.start_time, s.end_time, d.first_name, d.last_name, ct.type_name "
-                "FROM materialised_slots s JOIN doctors d ON d.doctor_id = s.doctor_id "
-                "JOIN consultation_types ct ON ct.consultation_type_id = s.consultation_type_id "
-                f"WHERE s.slot_id IN ({', '.join(['%s'] * len(slot_ids))})",
-                slot_ids,
-            )
-            return {
-                r["slot_id"]: {
-                    "date": str(r["date"]),
-                    "start_time": str(r["start_time"])[:5],
-                    "end_time": str(r["end_time"])[:5],
-                    "doctor_name": f"Dr. {r['first_name']} {r['last_name']}".strip(),
-                    "type_name": r["type_name"],
-                }
-                for r in cur.fetchall()
-            }
-    finally:
-        conn.close()
-
-
 def _waitlist_list(user_id):
     conn = get_connection()
     try:
         patient = _require_patient(conn, user_id)
     finally:
         conn.close()
-    scan = _table(WAITLIST_TABLE).scan(FilterExpression=Attr("patient_id").eq(patient["patient_id"]))
-    items = scan.get("Items", [])
-
-    # Hold offers waiting for this patient to accept (not yet expired).
-    offers = []
-    if HOLD_OFFERS_TABLE:
-        now_epoch = int(_now().timestamp())
-        found = _table(HOLD_OFFERS_TABLE).scan(
-            FilterExpression=Attr("patient_id").eq(patient["patient_id"]) & Attr("status").eq("PENDING"))
-        offers = [o for o in found.get("Items", []) if int(o.get("expires_at", 0)) > now_epoch]
-
-    labels = _slot_labels([i.get("slot_id") for i in items] + [o.get("slot_id") for o in offers])
-    for entry in items + offers:
-        entry.update(labels.get(str(entry.get("slot_id")), {}))
-    return response(200, {"items": items, "offers": offers})
+    table = _table(WAITLIST_TABLE)
+    scan = table.scan(FilterExpression=Attr("patient_id").eq(patient["patient_id"]))
+    return response(200, {"items": scan.get("Items", [])})
 
 
 def _hold_offer_accept(user_id, offer_id):
@@ -597,12 +539,11 @@ def _dispatch_waitlist_offer(slot_id):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT s.doctor_id, s.consultation_type_id, s.status FROM materialised_slots s WHERE s.slot_id = %s",
+                "SELECT s.doctor_id, s.consultation_type_id FROM materialised_slots s WHERE s.slot_id = %s",
                 (slot_id,),
             )
             slot = cur.fetchone()
-        # A seat freed on a blacked-out day must not be offered to the waitlist.
-        if not slot or slot["status"] != "OPEN":
+        if not slot:
             return
     finally:
         conn.close()

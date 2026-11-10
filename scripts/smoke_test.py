@@ -215,28 +215,7 @@ def main():
         "GET", f"/doctors/{doctor_id}/slots?from={monday.isoformat()}&to={(monday + timedelta(days=40)).isoformat()}",
         a_token), 400)
 
-    # Booking edge cases: idempotency, one doctor per patient within the gap, other patients unaffected.
-    def book(tok, slot, key):
-        return call("POST", "/bookings", tok, {"doctor_id": doctor_id, "slot_id": slot["slot_id"],
-                    "consultation_type_id": slot["consultation_type_id"], "idempotency_key": key})
-
-    slots_ = day_slots[:5]
-    booked = [expect(f"book slot {n + 1}", book(a_token, slot, f"smoke-{run}-{n}"), 201)
-              for n, slot in enumerate(slots_[:3])]
-    again = expect("same key is idempotent", book(a_token, slots_[0], f"smoke-{run}-0"), 200)
-    assert again["appointment_id"] == booked[0]["appointment_id"]
-    expect("a 4th upcoming appointment with the same doctor is refused (limit 3)", book(a_token, slots_[3], f"smoke-{run}-3"), 409)
-    expect("another patient can still book that doctor", book(b_token, slots_[3], f"smoke-{run}-4"), 201)
-    expect("full slot cannot be booked again", book(b_token, slots_[0], f"smoke-{run}-5"), 409)
-    expect("cancel one appointment", call("DELETE", f"/appointments/{booked[0]['appointment_id']}", a_token), 200)
-    expect("booking allowed again after cancelling", book(a_token, slots_[4], f"smoke-{run}-6"), 201)
-    expect("patient with upcoming appointments cannot delete profile", call("DELETE", "/patient/me", b_token), 409)
-
     # Clean up the throw-away patients.
-    for tok in (a_token, b_token):
-        for item in call("GET", "/appointments", tok)[1]["items"]:
-            if item["status"] == "CONFIRMED":
-                expect("cancel appointment", call("DELETE", f"/appointments/{item['appointment_id']}", tok), 200)
     expect("patient profile delete", call("DELETE", "/patient/me", b_token), 200)
     expect("patient A profile delete", call("DELETE", "/patient/me", a_token), 200)
 

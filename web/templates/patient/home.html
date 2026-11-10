@@ -90,31 +90,4 @@
   {% endif %}
 </div>
 
-{% if offers or waitlist %}
-<div class="card" id="waitlist-card">
-  <h2>My waitlist</h2>
-  {% for o in offers %}
-    <p><strong>A seat is being held for you:</strong>
-      {{ o.doctor_name }} &middot; {{ o.type_name }} &middot; {{ o.date }} {{ o.start_time }}.
-      Accept before the offer expires.</p>
-    <form method="post" action="{{ url_for('patient.offer_accept', offer_id=o.offer_id) }}" class="inline-form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit">Accept seat</button>
-    </form>
-  {% endfor %}
-  {% if waitlist %}
-  <div class="table-wrap"><table>
-    <thead><tr><th>Doctor</th><th>Consultation</th><th>Date</th><th>Time</th><th></th></tr></thead>
-    <tbody>
-    {% for w in waitlist %}
-      <tr><td>{{ w.doctor_name or '-' }}</td><td>{{ w.type_name or '-' }}</td><td>{{ w.date or '-' }}</td>
-          <td>{{ w.start_time or '-' }}</td>
-          <td><form method="post" action="{{ url_for('patient.waitlist_leave', waitlist_id=w.waitlist_id) }}" class="inline-form">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="secondary">Leave</button></form></td></tr>
-    {% endfor %}
-    </tbody></table></div>
-  {% endif %}
-</div>
-{% endif %}
 {% endblock %}

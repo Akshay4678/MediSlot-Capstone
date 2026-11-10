@@ -1,4 +1,4 @@
-"""Blackout date with patients already booked: keep or cancel, and no new bookings either way.
+"""Blackout date with patients already booked: keep, and no new bookings either way.
 
 Runs the real SQL of application.doctor_api.blackouts / slot_materialiser.core against an in-memory
 SQLite database (the statements used are portable apart from a few MySQL spellings translated below).
@@ -25,8 +25,6 @@ CREATE TABLE materialised_slots (slot_id TEXT PRIMARY KEY, doctor_id TEXT, consu
 CREATE TABLE appointments (appointment_id TEXT PRIMARY KEY, patient_id TEXT, doctor_id TEXT, slot_id TEXT,
                            consultation_type_id TEXT, status TEXT, notes TEXT);
 CREATE TABLE doctor_consultation_types (doctor_id TEXT, consultation_type_id TEXT, fee REAL);
-CREATE TABLE refund_ledger (refund_id TEXT, appointment_id TEXT PRIMARY KEY, refund_amount REAL,
-                            refund_percentage REAL, refund_status TEXT);
 """
 
 
@@ -43,10 +41,7 @@ class Cursor:
 
     @staticmethod
     def _sql(sql):
-        sql = sql.replace("%s", "?").replace("GREATEST(", "MAX(").replace("`", '"')
-        if "ON DUPLICATE KEY UPDATE" in sql:
-            sql = sql.split("ON DUPLICATE KEY UPDATE")[0] + (
-                "ON CONFLICT(appointment_id) DO UPDATE SET refund_amount = excluded.refund_amount, refund_percentage = 100")
+        sql = sql.replace("%s", "?").replace("`", '"')
         return sql
 
     @staticmethod
@@ -126,22 +121,11 @@ def test_keep_closes_every_slot_but_leaves_the_appointments_confirmed(conn):
     status, body = blackouts.create(ctx_for(conn, existing_bookings="keep"))
 
     assert status == 201
-    assert body["appointments_kept"] == 3 and body["appointments_cancelled"] == 0
+    assert body["appointments_kept"] == 3
     # The partly booked camp slot is closed too, so no new patient can book it.
     assert statuses(conn) == {"camp": "BLOCKED", "single": "BLOCKED", "empty": "BLOCKED"}
     assert conn.q("SELECT COUNT(*) FROM appointments WHERE status = 'CONFIRMED'")[0][0] == 3
     assert conn.q("SELECT booked_count FROM materialised_slots WHERE slot_id = 'camp'")[0][0] == 2
-
-
-def test_cancel_marks_doctor_cancellation_with_full_refund_and_frees_the_seats(conn):
-    status, body = blackouts.create(ctx_for(conn, existing_bookings="cancel"))
-
-    assert status == 201 and body["appointments_cancelled"] == 3
-    assert conn.q("SELECT DISTINCT status FROM appointments") == [("CANCELLED_BY_DOCTOR",)]
-    refunds = conn.q("SELECT refund_amount, refund_percentage, refund_status FROM refund_ledger")
-    assert len(refunds) == 3 and set(refunds) == {(300.0, 100.0, "CALCULATED")}
-    assert conn.q("SELECT SUM(booked_count) FROM materialised_slots")[0][0] == 0
-    assert set(statuses(conn).values()) == {"BLOCKED"}
 
 
 def test_day_without_bookings_needs_no_choice(conn):
@@ -165,10 +149,9 @@ def test_other_days_and_other_doctors_are_untouched(conn):
     conn.db.execute("UPDATE materialised_slots SET doctor_id = 'other' WHERE slot_id = 'single'")
     conn.db.execute("UPDATE appointments SET doctor_id = 'other' WHERE slot_id = 'single'")
 
-    blackouts.create(ctx_for(conn, existing_bookings="cancel"))
+    blackouts.create(ctx_for(conn, existing_bookings="keep"))
 
     assert statuses(conn)["next-day"] == "FULL" and statuses(conn)["single"] == "FULL"
-    assert conn.q("SELECT status FROM appointments WHERE slot_id = 'next-day'") == [("CONFIRMED",)]
 
 
 def test_block_date_returns_slots_closed_and_how_many_had_bookings(conn):

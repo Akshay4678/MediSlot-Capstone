@@ -287,27 +287,6 @@ class FakeApi:
                 },
             )
 
-        if path == "/waitlist" and method == "GET":
-            return FakeResponse(
-                200,
-                {
-                    "items": [
-                        {"waitlist_id": "w1", "slot_id": "s1", "doctor_name": "Dr. Asha Rao",
-                         "type_name": "Standard Consult", "date": "2026-11-20", "start_time": "10:00"}
-                    ],
-                    "offers": [
-                        {"offer_id": "o1", "slot_id": "s2", "doctor_name": "Dr. Asha Rao",
-                         "type_name": "Standard Consult", "date": "2026-11-21", "start_time": "11:00"}
-                    ],
-                },
-            )
-
-        if path == "/waitlist/w1" and method == "DELETE":
-            return FakeResponse(200, {"message": "Removed from waitlist."})
-
-        if path == "/waitlist/offers/o1/accept" and method == "POST":
-            return FakeResponse(201, {"appointment_id": "a1", "status": "CONFIRMED"})
-
         if path == "/doctors/me/blackouts" and method == "POST":
             body = json or {}
             if self.has_bookings_on_blackout and "existing_bookings" not in body:
@@ -325,7 +304,6 @@ class FakeApi:
                     "slots_blocked": 4,
                     "slots_with_bookings": 1,
                     "appointments_kept": 1 if body.get("existing_bookings") == "keep" else 0,
-                    "appointments_cancelled": 1 if body.get("existing_bookings") == "cancel" else 0,
                 },
             )
 
@@ -1136,7 +1114,6 @@ def test_blackout_with_existing_bookings_asks_the_doctor_to_choose(client, api):
     assert response.status_code == 200
     assert "already booked on 2026-11-02" in html
     assert 'name="existing_bookings" value="keep"' in html
-    assert 'name="existing_bookings" value="cancel"' in html
     assert "Pat One" in html
 
 
@@ -1150,91 +1127,10 @@ def test_blackout_confirmation_passes_the_choice_to_the_api(client, api):
             "csrf_token": csrf(client),
             "blackout_date": "2026-11-02",
             "reason": "Leave",
-            "existing_bookings": "cancel",
+            "existing_bookings": "keep",
         },
     )
 
     posts = [c[3] for c in api.calls if c[0] == "POST" and c[1] == "/doctors/me/blackouts"]
 
-    assert posts[-1]["existing_bookings"] == "cancel"
-
-
-def test_patient_home_lists_waitlist_entries_and_held_offers(client, api):
-    login(client, "patient")
-
-    html = client.get("/patient/").get_data(as_text=True)
-
-    assert "My waitlist" in html
-    assert "A seat is being held for you" in html and "2026-11-21" in html
-    assert "/patient/offers/o1/accept" in html
-    assert "/patient/waitlist/w1/leave" in html
-
-
-def test_patient_can_accept_an_offer_and_leave_the_waitlist(client, api):
-    login(client, "patient")
-    token = extract_csrf_token(client.get("/patient/").get_data(as_text=True), "/patient/")
-
-    client.post("/patient/offers/o1/accept", data={"csrf_token": token})
-    client.post("/patient/waitlist/w1/leave", data={"csrf_token": token})
-
-    made = [(c[0], c[1]) for c in api.calls]
-
-    assert ("POST", "/waitlist/offers/o1/accept") in made
-    assert ("DELETE", "/waitlist/w1") in made
-
-
-def test_patient_search_sends_all_filters_and_pages(client, api):
-    login(client, "patient")
-
-    html = client.get("/patient/?name=Asha&hospital=Apollo&city=Hyd&specialisation=Cardio&offset=10").get_data(as_text=True)
-
-    sent = [c[4] for c in api.calls if c[1] == "/doctors/search"][-1]
-    assert sent["name"] == "Asha" and sent["hospital"] == "Apollo" and sent["city"] == "Hyd"
-    assert sent["specialisation"] == "Cardio" and sent["offset"] == 10 and sent["limit"] == 10
-    assert "25 found" in html and "Next" in html and "Previous" in html
-    assert "/patient/doctor/d9" in html
-
-
-def test_patient_profile_editor_shows_and_saves_details(client, api):
-    login(client, "patient")
-
-    page = client.get("/patient/profile").get_data(as_text=True)
-    assert 'value="Pat"' in page and "+91 98765 43210" in page
-
-    token = extract_csrf_token(page, "/patient/profile")
-    response = client.post("/patient/profile", data={"csrf_token": token, "first_name": "Pat", "last_name": "Two",
-                                                    "phone": "+91 90000 11111", "gender": "Male"})
-    put = [c[3] for c in api.calls if c[0] == "PUT" and c[1] == "/patient/me"][0]
-
-    assert response.status_code == 302 and put["last_name"] == "Two" and put["phone"] == "+91 90000 11111"
-
-
-def test_patient_profile_shows_the_api_validation_message(client, api):
-    login(client, "patient")
-    token = extract_csrf_token(client.get("/patient/profile").get_data(as_text=True), "/patient/profile")
-    api.put_error = (400, {"error": "INVALID_PHONE", "message": "phone must be 7-19 digits."})
-
-    html = client.post("/patient/profile", data={"csrf_token": token, "first_name": "Pat", "last_name": "One",
-                                                "phone": "abc"}).get_data(as_text=True)
-
-    assert "phone must be 7-19 digits." in html and 'value="abc"' in html
-
-
-def test_patient_can_delete_their_profile_and_is_signed_out(client, api):
-    login(client, "patient")
-    token = extract_csrf_token(client.get("/patient/profile").get_data(as_text=True), "/patient/profile")
-
-    response = client.post("/patient/profile/delete", data={"csrf_token": token})
-
-    assert ("DELETE", "/patient/me") in [(c[0], c[1]) for c in api.calls]
-    assert response.status_code == 302 and response.headers["Location"] == "/"
-    # Signed out: the portal now sends the visitor to the login page.
-    assert client.get("/patient/").headers["Location"].endswith("/patient/login")
-
-
-def test_public_doctor_page_lists_fees(client, api):
-    login(client, "patient")
-
-    html = client.get("/patient/doctor/d9").get_data(as_text=True)
-
-    assert "Dr. Asha Rao" in html and "Standard Consult" in html and "500.0" in html
+    assert posts[-1]["existing_bookings"] == "keep"

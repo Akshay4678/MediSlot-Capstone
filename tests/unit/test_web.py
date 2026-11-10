@@ -42,6 +42,7 @@ class FakeApi:
     def __init__(self):
         self.calls = []
         self.expired_tokens = set()
+        self.put_error = None  # (status, body) to make PUT /doctors/me fail
 
         self.profile = {
             "doctor_id": "d1",
@@ -115,12 +116,24 @@ class FakeApi:
             )
 
         if path == "/doctors/me" and method == "GET":
+            if self.profile is None:
+                return FakeResponse(
+                    404,
+                    {
+                        "error": "PROFILE_NOT_FOUND",
+                        "message": "Doctor profile not found.",
+                    },
+                )
+
             return FakeResponse(
                 200,
                 {"profile": self.profile},
             )
 
         if path == "/doctors/me" and method == "PUT":
+            if self.put_error:
+                return FakeResponse(*self.put_error)
+
             return FakeResponse(
                 200,
                 {"profile": self.profile},
@@ -543,6 +556,7 @@ def test_profile_save_sends_only_the_form_fields(client, api):
         "/doctor/profile",
         data={
             "csrf_token": token,
+            "editing": "1",
             "first_name": "Asha",
             "last_name": "Rao",
             "licence_number": "TS-12345",
@@ -564,6 +578,108 @@ def test_profile_save_sends_only_the_form_fields(client, api):
     assert body["licence_number"] == "TS-12345"
     assert "role" not in body
     assert "user_id" not in body
+    assert "editing" not in body  # the edit-mode flag never reaches the API
+
+
+PROFILE_FORM = {
+    "first_name": "Asha",
+    "last_name": "Rao",
+    "licence_number": "TS-12345",
+    "hospital_id": "h1",
+    "specialisation_id": "s1",
+    "timezone": "Asia/Kolkata",
+    "experience_years": "7",
+    "qualifications": "MBBS, MD",
+}
+
+
+def _profile_puts(api):
+    return [c for c in api.calls if c[0] == "PUT" and c[1] == "/doctors/me"]
+
+
+def test_profile_opens_read_only_with_the_saved_details(client):
+    login(client, "doctor")
+
+    html = client.get("/doctor/profile").get_data(as_text=True)
+
+    # every saved detail is shown ...
+    for value in ("Asha", "Rao", "TS-12345", "MBBS", "Cardiology", "Demo Hospital", "Asia/Kolkata"):
+        assert value in html
+    # ... but the fields are locked: disabled fieldset, no edit flag, only "Edit profile" is offered
+    assert '<fieldset id="profile-fields"' in html
+    fieldset_tag = html.split('<fieldset id="profile-fields"', 1)[1].split(">", 1)[0]
+    assert "disabled" in fieldset_tag
+    edit_flag = html.split('id="editing-flag"', 1)[1].split(">", 1)[0]
+    assert "disabled" in edit_flag
+    edit_button = html.split('id="edit-profile"', 1)[1].split(">", 1)[0]
+    assert "hidden" not in edit_button
+    save_button = html.split('id="save-profile"', 1)[1].split(">", 1)[0]
+    assert "hidden" in save_button and "disabled" in save_button
+
+
+def test_profile_cannot_be_saved_without_clicking_edit(client, api):
+    login(client, "doctor")
+    token = csrf(client)
+
+    response = client.post(
+        "/doctor/profile",
+        data=dict(PROFILE_FORM, csrf_token=token),  # no "editing" flag
+    )
+
+    assert response.status_code == 302 and response.headers["Location"].endswith("/doctor/profile")
+    assert not _profile_puts(api)
+    assert "Click Edit profile" in client.get("/doctor/profile").get_data(as_text=True)
+
+
+def test_saving_returns_to_read_only_mode_with_a_success_message(client, api):
+    login(client, "doctor")
+    token = csrf(client)
+
+    response = client.post(
+        "/doctor/profile",
+        data=dict(PROFILE_FORM, csrf_token=token, editing="1"),
+    )
+
+    assert response.status_code == 302 and response.headers["Location"].endswith("/doctor/profile")
+    assert len(_profile_puts(api)) == 1
+
+    html = client.get("/doctor/profile").get_data(as_text=True)
+    assert "Profile saved." in html
+    fieldset_tag = html.split('<fieldset id="profile-fields"', 1)[1].split(">", 1)[0]
+    assert "disabled" in fieldset_tag  # back to read-only
+
+
+def test_a_rejected_save_stays_in_edit_mode_with_the_values_kept(client, api):
+    api.put_error = (400, {"error": "INVALID_LICENCE", "message": "licence_number is invalid."})
+    login(client, "doctor")
+    token = csrf(client)
+
+    response = client.post(
+        "/doctor/profile",
+        data=dict(PROFILE_FORM, csrf_token=token, editing="1", licence_number="BAD"),
+    )
+
+    html = response.get_data(as_text=True)
+    assert response.status_code == 200 and "licence_number is invalid." in html
+    assert 'value="BAD"' in html
+    fieldset_tag = html.split('<fieldset id="profile-fields"', 1)[1].split(">", 1)[0]
+    assert "disabled" not in fieldset_tag
+    save_button = html.split('id="save-profile"', 1)[1].split(">", 1)[0]
+    assert "hidden" not in save_button
+
+
+def test_a_doctor_without_a_profile_starts_in_edit_mode(client, api):
+    api.profile = None
+    login(client, "doctor")
+
+    html = client.get("/doctor/profile").get_data(as_text=True)
+
+    fieldset_tag = html.split('<fieldset id="profile-fields"', 1)[1].split(">", 1)[0]
+    assert "disabled" not in fieldset_tag
+    edit_button = html.split('id="edit-profile"', 1)[1].split(">", 1)[0]
+    assert "hidden" in edit_button
+    save_button = html.split('id="save-profile"', 1)[1].split(">", 1)[0]
+    assert "hidden" not in save_button
 
 
 # -------------------------------------------------------

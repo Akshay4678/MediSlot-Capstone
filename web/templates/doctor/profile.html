@@ -16,11 +16,24 @@ Profile - MediSlot
   </p>
 
 
-  <form method="post">
+  <form method="post" id="profile-form"
+        data-editing="{{ 'true' if editing else 'false' }}">
 
     <input type="hidden"
            name="csrf_token"
            value="{{ csrf_token() }}">
+
+    {# Sent only while the doctor is editing; the server refuses a save without it. #}
+    <input type="hidden"
+           id="editing-flag"
+           name="editing"
+           value="1"
+           {{ '' if editing else 'disabled' }}>
+
+
+    <fieldset id="profile-fields"
+              class="profile-fields"
+              {{ '' if editing else 'disabled' }}>
 
 
     <div class="row">
@@ -211,9 +224,22 @@ Profile - MediSlot
       maxlength="2000">{{ p.qualifications or '' }}</textarea>
 
 
-    <p>
+    </fieldset>
 
-      <button type="submit">
+
+    <p class="actions">
+
+      <button
+        type="button"
+        id="edit-profile"
+        {{ 'hidden' if editing }}>
+        Edit profile
+      </button>
+
+      <button
+        type="submit"
+        id="save-profile"
+        {{ '' if editing else 'hidden disabled' }}>
         Save profile
       </button>
 
@@ -222,6 +248,57 @@ Profile - MediSlot
   </form>
 
 </div>
+
+<style>
+  /* Read-only look: the profile is shown as plain details until "Edit profile" is clicked. */
+  #profile-form .profile-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+  #profile-form .profile-fields:disabled input,
+  #profile-form .profile-fields:disabled select,
+  #profile-form .profile-fields:disabled textarea {
+    background: transparent;
+    color: inherit;
+    cursor: default;
+    opacity: 1;
+    -webkit-text-fill-color: currentColor;
+  }
+  #profile-form [hidden] { display: none !important; }
+</style>
+
+<script>
+(function () {
+  var form = document.getElementById('profile-form');
+  if (!form) { return; }
+  var fields = document.getElementById('profile-fields');
+  var flag = document.getElementById('editing-flag');
+  var edit = document.getElementById('edit-profile');
+  var save = document.getElementById('save-profile');
+  var editing = form.getAttribute('data-editing') === 'true';
+
+  function setEditing(on) {
+    editing = on;
+    fields.disabled = !on;   // disabled fields cannot be changed and are not submitted
+    flag.disabled = !on;     // "editing=1" is only sent while editing
+    save.disabled = !on;
+    save.hidden = !on;
+    edit.hidden = on;
+  }
+
+  // Two separate buttons: turning "Edit profile" into a submit button inside its own click
+  // handler could submit the form straight away.
+  edit.addEventListener('click', function () {
+    setEditing(true);
+    var first = fields.querySelector('input, select, textarea');
+    if (first) { first.focus(); }
+  });
+
+  // Nothing can be submitted until the doctor has clicked "Edit profile".
+  form.addEventListener('submit', function (event) {
+    if (!editing) { event.preventDefault(); }
+  });
+
+  setEditing(editing);
+})();
+</script>
 
 
 {% if p.doctor_id %}

@@ -129,7 +129,21 @@ def home():
 @role_required("doctor")
 def profile():
 
+    editing = False
+
     if request.method == "POST":
+
+        # The page is read-only until the doctor clicks "Edit profile", which is the only
+        # thing that sends this flag. A save without it changes nothing.
+        if request.form.get("editing") != "1":
+            flash(
+                "Click Edit profile before changing your details.",
+                "error",
+            )
+
+            return redirect(
+                url_for("doctor.profile")
+            )
 
         body = {
             k: request.form.get(k, "").strip()
@@ -174,14 +188,20 @@ def profile():
                 "error",
             )
 
+        # A rejected save stays in edit mode so the doctor can correct the values.
         current = body
+        editing = True
 
     else:
         current = _profile_or_none() or {}
 
+        # A doctor who has no profile yet has nothing to view, so the form starts editable.
+        editing = not current.get("doctor_id")
+
     return render_template(
         "doctor/profile.html",
         p=current,
+        editing=editing,
         hospitals=api_client.call(
             "GET",
             "/hospitals",

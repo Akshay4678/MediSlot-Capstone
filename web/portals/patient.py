@@ -1,7 +1,6 @@
-"""Patient portal: doctor search, slot browsing, booking and appointment actions."""
+"""Patient portal (Milestone 4): profile, doctor search, doctor page and slot browsing."""
 
 from datetime import date
-import uuid
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
@@ -54,7 +53,6 @@ def home():
     except ApiError as exc:
         flash(f"/doctors/search: {exc.message} (HTTP {exc.status})", "error")
         found = {"items": [], "total": 0, "has_more": False}
-    appointments = _items("/appointments")
     return render_template(
         "patient/home.html",
         doctors=found.get("items", []),
@@ -62,7 +60,6 @@ def home():
         has_more=found.get("has_more", False),
         offset=offset,
         page_size=page_size,
-        appointments=appointments,
         filters=filters,
         today=date.today().isoformat(),
     )
@@ -120,66 +117,3 @@ def profile_delete():
     api_client.logout()
     flash("Your profile was deleted and your account is closed.", "success")
     return redirect(url_for("landing"))
-
-
-@bp.route("/book", methods=["POST"], endpoint="book")
-@role_required("patient")
-def book():
-    body = {
-        "doctor_id": request.form.get("doctor_id", "").strip(),
-        "consultation_type_id": request.form.get("consultation_type_id", "").strip(),
-        "slot_id": request.form.get("slot_id", "").strip(),
-        "idempotency_key": request.form.get("idempotency_key", "").strip() or str(uuid.uuid4()),
-        "notes": request.form.get("notes", "").strip(),
-    }
-    try:
-        result = api_client.call("POST", "/bookings", body)
-        flash(f"Appointment confirmed: {result['appointment_id']}", "success")
-    except ApiError as exc:
-        flash(exc.message, "error")
-    return redirect(url_for("patient.home"))
-
-
-@bp.route("/appointments/<appointment_id>/cancel", methods=["POST"], endpoint="cancel")
-@role_required("patient")
-def cancel(appointment_id):
-    try:
-        result = api_client.call(
-            "DELETE",
-            f"/appointments/{appointment_id}",
-            {"reason": request.form.get("reason", "Patient cancellation").strip()},
-        )
-        refund = result.get("refund") or {}
-        flash(
-            f"Appointment cancelled. Refund: {refund.get('percentage', 0)}% (₹{refund.get('amount', 0)}).",
-            "success",
-        )
-    except ApiError as exc:
-        flash(exc.message, "error")
-    return redirect(url_for("patient.home"))
-
-
-@bp.route("/appointments/<appointment_id>/reschedule", methods=["POST"], endpoint="reschedule")
-@role_required("patient")
-def reschedule(appointment_id):
-    try:
-        api_client.call(
-            "POST",
-            f"/appointments/{appointment_id}/reschedule",
-            {"slot_id": request.form.get("slot_id", "").strip()},
-        )
-        flash("Appointment rescheduled successfully.", "success")
-    except ApiError as exc:
-        flash(exc.message, "error")
-    return redirect(url_for("patient.home"))
-
-
-@bp.route("/waitlist", methods=["POST"], endpoint="waitlist")
-@role_required("patient")
-def waitlist():
-    try:
-        api_client.call("POST", "/waitlist", {"slot_id": request.form.get("slot_id", "").strip()})
-        flash("You have been added to the waitlist.", "success")
-    except ApiError as exc:
-        flash(exc.message, "error")
-    return redirect(url_for("patient.home"))

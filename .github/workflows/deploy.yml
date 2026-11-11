@@ -284,42 +284,24 @@ jobs:
 
 
       # ==========================================
-      # STEP 8: Milestone 4 notification infrastructure
+      # STEP 8: Remove stacks that belong to later milestones
+      # Notifications (SNS/SQS, EventBridge rules) are Milestone 6 and are not part of this release.
+      # If an earlier run created them, the pipeline deletes them (no manual console work).
       # ==========================================
-      - name: Deploy Notification SNS and SQS Stack
+      - name: Remove notification stacks (later milestone)
         shell: bash
         run: |
           set -euo pipefail
-          aws cloudformation deploy \
-            --template-file infrastructure/cloudformation/sns.yaml \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-sns" \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --parameter-overrides \
-              "ProjectName=${PROJECT_NAME}" \
-              "EnvironmentName=${ENVIRONMENT_NAME}" \
-            --no-fail-on-empty-changeset \
-            --region "${AWS_REGION}"
-
-          NOTIFICATION_TOPIC_ARN="$(aws cloudformation describe-stacks \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-sns" \
-            --query "Stacks[0].Outputs[?OutputKey=='NotificationTopicArn'].OutputValue | [0]" \
-            --output text \
-            --region "${AWS_REGION}")"
-          echo "NOTIFICATION_TOPIC_ARN=${NOTIFICATION_TOPIC_ARN}" >> "${GITHUB_ENV}"
-
-      - name: Deploy EventBridge Notification Rules
-        shell: bash
-        run: |
-          set -euo pipefail
-          aws cloudformation deploy \
-            --template-file infrastructure/cloudformation/eventbridge.yaml \
-            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-eventbridge" \
-            --parameter-overrides \
-              "ProjectName=${PROJECT_NAME}" \
-              "EnvironmentName=${ENVIRONMENT_NAME}" \
-              "NotificationTopicArn=${NOTIFICATION_TOPIC_ARN}" \
-            --no-fail-on-empty-changeset \
-            --region "${AWS_REGION}"
+          for suffix in eventbridge sns; do
+            STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-${suffix}"
+            if aws cloudformation describe-stacks --stack-name "${STACK}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+              echo "Deleting ${STACK}"
+              aws cloudformation delete-stack --stack-name "${STACK}" --region "${AWS_REGION}"
+              aws cloudformation wait stack-delete-complete --stack-name "${STACK}" --region "${AWS_REGION}"
+            else
+              echo "${STACK} does not exist; nothing to remove."
+            fi
+          done
 
       # ==========================================
       # STEP 8A: Deploy Authentication DynamoDB Tables
@@ -539,7 +521,6 @@ jobs:
           put_if_missing "${P}/rules/idempotency-ttl-hours" 24
           put_if_missing "${P}/rules/waitlist-max-size" 5
           put_if_missing "${P}/rules/hold-offer-minutes" 15
-          put_if_missing "${P}/rules/max-upcoming-per-doctor" 3
           put_if_missing "${P}/rules/max-reschedules" 2
           put_if_missing "${P}/rules/min-reschedule-hours" 6
           put_if_missing "${P}/rules/refund-full-hours" 48
@@ -676,9 +657,6 @@ jobs:
               "DatabaseSecretArn=${DB_SECRET_ARN}" \
               "DatabaseHost=${DB_HOST}" \
               "DatabaseName=${DB_NAME}" \
-              "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
-              "WaitlistTableName=${WAITLIST_TABLE_NAME}" \
-              "HoldOffersTableName=${HOLD_OFFERS_TABLE_NAME}" \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
 

@@ -20,7 +20,7 @@
   {% if data.slots %}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Consultation</th><th>Time</th><th>Fee</th><th>Seats</th><th>Action</th></tr></thead>
+        <thead><tr><th>Date</th><th>Consultation</th><th>Time</th><th>Fee</th><th>Free seats</th></tr></thead>
         <tbody>
         {% for s in data.slots %}
           <tr>
@@ -29,15 +29,6 @@
             <td>{{ s.start_time }} - {{ s.end_time }}</td>
             <td>₹{{ s.fee }}</td>
             <td>{{ s.available_seats }}</td>
-            <td>
-              <form method="post" action="{{ url_for('patient.book') }}" class="inline-form">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="doctor_id" value="{{ doctor_id }}">
-                <input type="hidden" name="consultation_type_id" value="{{ s.consultation_type_id }}">
-                <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
-                <button type="submit">Book</button>
-              </form>
-            </td>
           </tr>
         {% endfor %}
         </tbody>

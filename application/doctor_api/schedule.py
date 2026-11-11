@@ -79,7 +79,7 @@ def get(ctx):
             "status": r["status"], "appointments": patients})
 
     # A blackout day overrides any weekly availability. Hide the BLOCKED slots the materialiser
-    # created, and keep only slots that already hold an active appointment so the doctor still
+    # created, and keep only slots that already hold an active appointment so the doctor stil
     # sees patients who were booked before the blackout was added.
     for d in days.values():
         if d["blackout"]:

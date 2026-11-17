@@ -238,12 +238,50 @@ INSERT INTO hospitals (hospital_id, hospital_name, address, city, phone, is_acti
     ('5f39b269-c16d-5b6d-838e-c65672002651', 'Greenfield Medical Centre', '8 Garden Street, Indiranagar', 'Bengaluru', '+91-80-5550-0003', TRUE)
 ON DUPLICATE KEY UPDATE hospital_id = hospital_id;
 
+-- More hospitals (fictional, deterministic ids so re-running is safe).
+INSERT INTO hospitals (hospital_id, hospital_name, address, city, phone, is_active) VALUES
+    ('2f21d98a-6961-5e5d-9e45-22ed5613dbb3', 'Apex Multispeciality Hospital', '21 Station Road, Secunderabad', 'Hyderabad', '+91-40-5550-0004', TRUE),
+    ('fa830f7d-9c1b-5338-98a8-56afd9dca29a', 'Care Plus Children''s Hospital', '7 Madhapur Main Road', 'Hyderabad', '+91-40-5550-0005', TRUE),
+    ('ee5da561-d883-5bff-9add-1df5656d10c7', 'Orchid Heart Institute', '88 MG Road', 'Bengaluru', '+91-80-5550-0006', TRUE),
+    ('997b1b4b-63c2-5528-8930-8caf9a24f07f', 'Silverline Hospital', '14 Whitefield Main Road', 'Bengaluru', '+91-80-5550-0007', TRUE),
+    ('a01dde2a-d1eb-555b-9b43-54e4af4a6cde', 'Marina Bay Medical Centre', '32 Anna Salai', 'Chennai', '+91-44-5550-0008', TRUE),
+    ('ba84012c-d185-5f40-9d87-5002d6bb5711', 'Adyar Wellness Hospital', '5 Lattice Bridge Road, Adyar', 'Chennai', '+91-44-5550-0009', TRUE),
+    ('7d6f38c8-88e2-5a72-97e9-413cf88134bd', 'Harbourview Hospital', '60 Marine Drive', 'Mumbai', '+91-22-5550-0010', TRUE),
+    ('e5a80b5f-e603-5f18-b871-a6e0a0522c85', 'Meridian Health City', '101 Andheri East Link Road', 'Mumbai', '+91-22-5550-0011', TRUE),
+    ('a6bb6a1c-d6ef-5b31-aee9-f0937398aabf', 'Capital Care Hospital', '9 Connaught Place', 'New Delhi', '+91-11-5550-0012', TRUE),
+    ('efedb4fd-73b0-54fb-a9bf-0343db13a4c9', 'Yamuna Medical Institute', '44 Nehru Place', 'New Delhi', '+91-11-5550-0013', TRUE),
+    ('297a3698-6308-5864-a6b1-9fca316efd7d', 'Deccan Specialty Hospital', '27 FC Road, Shivajinagar', 'Pune', '+91-20-5550-0014', TRUE),
+    ('f533345f-1054-55c5-a563-5070b40393de', 'Lotus Family Clinic', '18 Park Street', 'Kolkata', '+91-33-5550-0015', TRUE),
+    ('0077dec9-5e52-582c-8d9b-feea694b9d07', 'Coastal Care Hospital', '3 Beach Road', 'Visakhapatnam', '+91-891-5550-0016', TRUE),
+    ('1b77b0bd-37b2-5c0a-b47f-a9806f6d79a4', 'Riverside Eye and ENT Centre', '12 Riverside Colony', 'Vijayawada', '+91-866-5550-0017', TRUE),
+    ('1620f8bc-83d6-5baf-80fa-ac4a892f5611', 'Pinnacle Cancer and Research Centre', '50 Tank Bund Road', 'Hyderabad', '+91-40-5550-0018', TRUE)
+ON DUPLICATE KEY UPDATE hospital_id = hospital_id;
+
 INSERT INTO specialisations (specialisation_id, specialisation_name, description) VALUES
     ('ad359f48-c0c7-51ea-8063-61773f0eacbd', 'Cardiology', 'Heart and cardiovascular care'),
     ('f0db8612-077c-57be-9c68-f1981fc5c99c', 'General Medicine', 'Primary care and general health'),
     ('a0c52501-cb94-5716-bfe2-d60bd58e0636', 'Dermatology', 'Skin, hair and nail care'),
     ('ce73354d-4129-5790-b12e-14d25c0bd183', 'Paediatrics', 'Care for infants and children'),
     ('e54e5198-0dc5-5afa-b631-d888c7a531f5', 'Orthopaedics', 'Bones, joints and muscles')
+ON DUPLICATE KEY UPDATE specialisation_id = specialisation_id;
+
+INSERT INTO specialisations (specialisation_id, specialisation_name, description) VALUES
+    ('544b2523-e2a1-5b78-adab-e26afacc5b7e', 'Gynaecology and Obstetrics', 'Women''s health, pregnancy and childbirth'),
+    ('cb40a0a1-82b9-52ef-ba7d-9448f667a2b1', 'ENT (Otolaryngology)', 'Ear, nose and throat care'),
+    ('fe72fd60-697f-5a57-84c4-373e817bc98f', 'Ophthalmology', 'Eye and vision care'),
+    ('aede1d92-4e5a-5055-b607-0872a82f74ff', 'Neurology', 'Brain, spine and nervous system'),
+    ('cce05fe9-4848-54a1-b21a-f1016238c6b1', 'Psychiatry', 'Mental health and behavioural care'),
+    ('d59a24ad-9c01-5533-a783-64906d6a423b', 'Gastroenterology', 'Digestive system and liver'),
+    ('77d9aea4-7c1a-5a80-aadb-16b218e3ad61', 'Pulmonology', 'Lungs and breathing disorders'),
+    ('aa7eefb6-ebc8-572e-9396-a8df969f5dc2', 'Endocrinology', 'Hormones, diabetes and thyroid'),
+    ('beddf60f-aa0d-5b56-9d1a-6d9ee259c414', 'Nephrology', 'Kidney care'),
+    ('27aff8fd-b7f0-5c0b-b2df-5706bc5c8813', 'Urology', 'Urinary tract and male reproductive health'),
+    ('8ffd5b94-e1fa-5082-adb9-d5298a5e159d', 'Oncology', 'Cancer diagnosis and treatment'),
+    ('2dbca9ca-cd55-5dfa-949a-7f4f75561eb5', 'General Surgery', 'Common surgical procedures'),
+    ('a0120fe9-10f7-5362-bf5b-e857e72e2299', 'Dentistry', 'Teeth, gums and oral health'),
+    ('5354ddfc-10a6-5485-92ea-bb126ff36d15', 'Rheumatology', 'Arthritis and autoimmune conditions'),
+    ('4f4cbb15-4e84-571c-bf1e-5041adbf80f8', 'Physiotherapy', 'Rehabilitation and movement therapy'),
+    ('9db88746-c633-5c52-ac11-19a40690f132', 'Dietetics and Nutrition', 'Diet planning and nutrition counselling')
 ON DUPLICATE KEY UPDATE specialisation_id = specialisation_id;
 
 INSERT INTO users (user_id, email, password_hash, role, is_active) VALUES

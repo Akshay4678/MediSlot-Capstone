@@ -251,6 +251,7 @@ jobs:
         shell: bash
         env:
           DB_USERNAME_INPUT: ${{ vars.MEDISLOT_DB_USERNAME }}
+          RESTORE_SNAPSHOT_VAR: ${{ vars.MEDISLOT_RESTORE_SNAPSHOT }}
         run: |
           set -euo pipefail
 
@@ -263,6 +264,41 @@ jobs:
             DELETION_PROTECTION=true
           else
             DELETION_PROTECTION=false
+          fi
+
+          # ---- Keep the data when the stacks were deleted and are being created again ----
+          # Deleting this stack takes a final snapshot of the database (DeletionPolicy: Snapshot).
+          # On a brand-new stack we restore the newest snapshot instead of creating an empty database.
+          # On an existing stack we pass back the value it already has: changing it would replace the DB.
+          SNAPSHOT_ID=""
+          if EXISTING_SNAPSHOT="$(aws cloudformation describe-stacks \
+                --stack-name "${STACK_NAME}" --region "${AWS_REGION}" \
+                --query "Stacks[0].Parameters[?ParameterKey=='DBSnapshotIdentifier'].ParameterValue | [0]" \
+                --output text 2>/dev/null)"; then
+            [[ "${EXISTING_SNAPSHOT}" == "None" ]] && EXISTING_SNAPSHOT=""
+            SNAPSHOT_ID="${EXISTING_SNAPSHOT}"
+            echo "Data stack already exists; keeping its database (snapshot parameter: '${SNAPSHOT_ID}')."
+          elif [[ "${RESTORE_SNAPSHOT_VAR}" == "none" ]]; then
+            echo "MEDISLOT_RESTORE_SNAPSHOT=none: creating an EMPTY database on purpose."
+          elif [[ -n "${RESTORE_SNAPSHOT_VAR}" ]]; then
+            SNAPSHOT_ID="${RESTORE_SNAPSHOT_VAR}"
+            echo "Restoring the database from snapshot ${SNAPSHOT_ID} (MEDISLOT_RESTORE_SNAPSHOT)."
+          else
+            STACK_PREFIX="$(echo "${STACK_NAME}" | tr 'A-Z' 'a-z')"
+            BACKUP_PREFIX="${PROJECT_NAME}-${ENVIRONMENT_NAME}-backup-"
+            if SNAPSHOT_ID="$(aws rds describe-db-snapshots --snapshot-type manual --region "${AWS_REGION}" \
+                  --query "reverse(sort_by(DBSnapshots[?Status=='available' && (starts_with(DBSnapshotIdentifier, '${STACK_PREFIX}') || starts_with(DBSnapshotIdentifier, '${BACKUP_PREFIX}'))], &SnapshotCreateTime))[0].DBSnapshotIdentifier" \
+                  --output text)"; then
+              [[ "${SNAPSHOT_ID}" == "None" ]] && SNAPSHOT_ID=""
+            else
+              echo "::warning::Could not list RDS snapshots (the deploy role needs rds:DescribeDBSnapshots). A new EMPTY database will be created."
+              SNAPSHOT_ID=""
+            fi
+            if [[ -n "${SNAPSHOT_ID}" ]]; then
+              echo "New data stack: restoring the database from the newest snapshot ${SNAPSHOT_ID}."
+            else
+              echo "New data stack and no snapshot found: creating an empty database."
+            fi
           fi
 
           echo "Deploying Data Stack: ${STACK_NAME}"
@@ -279,6 +315,7 @@ jobs:
               "DBName=${DB_NAME}" \
               "DBUsername=${DB_USERNAME}" \
               "EnableDeletionProtection=${DELETION_PROTECTION}" \
+              "DBSnapshotIdentifier=${SNAPSHOT_ID}" \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
 
@@ -798,12 +835,16 @@ jobs:
       # ==========================================
       - name: Initialize RDS MySQL schema
         shell: bash
+        env:
+          ALLOW_SCHEMA_REBUILD_VAR: ${{ vars.MEDISLOT_ALLOW_SCHEMA_REBUILD }}
         run: |
           set -euo pipefail
 
           AUTH_FUNCTION="${PROJECT_NAME}-${ENVIRONMENT_NAME}-auth"
-          # A pre-ER (Milestone 2) schema is rebuilt once, in dev only. Data is dropped.
-          if [[ "${ENVIRONMENT_NAME}" == "dev" ]]; then ALLOW_REBUILD=true; else ALLOW_REBUILD=false; fi
+          # Never drop tables automatically: a rebuild deletes every registered account.
+          # Set the GitHub variable MEDISLOT_ALLOW_SCHEMA_REBUILD=true for ONE deploy only if you
+          # really want a dev reset, then remove it again.
+          if [[ "${ENVIRONMENT_NAME}" == "dev" && "${ALLOW_SCHEMA_REBUILD_VAR:-}" == "true" ]]; then ALLOW_REBUILD=true; else ALLOW_REBUILD=false; fi
           BOOTSTRAP_FUNCTION="${PROJECT_NAME}-${ENVIRONMENT_NAME}-schema-bootstrap-${GITHUB_RUN_ID}"
           PACKAGE_DIR="${RUNNER_TEMP}/schema-bootstrap-package"
           ZIP_FILE="${RUNNER_TEMP}/schema-bootstrap.zip"

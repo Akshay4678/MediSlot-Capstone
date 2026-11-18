@@ -263,3 +263,7 @@ td input,td select{padding:.35rem .4rem}.tag{display:inline-block;padding:.1rem 
   }
 
 }
+.pw-wrap{position:relative}
+.pw-wrap input{padding-right:4.2rem}
+.pw-toggle{position:absolute;right:.35rem;top:50%;transform:translateY(-50%);width:auto;margin:0;padding:.2rem .55rem;font-size:.8rem;background:#e2e8f0;color:#0f172a;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer}
+input[type="password"]::-ms-reveal,input[type="password"]::-ms-clear{display:none}

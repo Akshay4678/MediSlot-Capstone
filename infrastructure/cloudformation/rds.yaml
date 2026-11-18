@@ -64,6 +64,14 @@ Parameters:
     MinValue: 20
     MaxValue: 1000
 
+  DBSnapshotIdentifier:
+    Type: String
+    Default: ''
+    Description: >
+      Optional. RDS snapshot to restore the database from (keeps all accounts and data after the
+      stacks were deleted). Empty = new empty database. The deploy pipeline fills this in.
+      Changing it on an existing stack REPLACES the database.
+
   EnableDeletionProtection:
     Type: String
     Default: 'false'
@@ -77,6 +85,11 @@ Parameters:
 # ============================================================
 
 Conditions:
+  RestoreFromSnapshot: !Not
+    - !Equals
+      - !Ref DBSnapshotIdentifier
+      - ''
+
   IsProd: !Equals
     - !Ref EnvironmentName
     - prod
@@ -145,9 +158,21 @@ Resources:
       StorageType: gp3
       StorageEncrypted: true
 
-      DBName: !Ref DBName
+      # When restoring from a snapshot the database name and master user come from the snapshot.
+      DBSnapshotIdentifier: !If
+        - RestoreFromSnapshot
+        - !Ref DBSnapshotIdentifier
+        - !Ref AWS::NoValue
 
-      MasterUsername: !Ref DBUsername
+      DBName: !If
+        - RestoreFromSnapshot
+        - !Ref AWS::NoValue
+        - !Ref DBName
+
+      MasterUsername: !If
+        - RestoreFromSnapshot
+        - !Ref AWS::NoValue
+        - !Ref DBUsername
       MasterUserPassword: !Sub
         - '{{resolve:secretsmanager:${SecretArn}:SecretString:password}}'
         - SecretArn: !Ref DatabaseSecret

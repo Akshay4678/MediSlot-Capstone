@@ -350,6 +350,10 @@ jobs:
 
           STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-dynamodb"
 
+          # If a token table was deleted by hand, CloudFormation would not re-create it and every login
+          # would fail with HTTP 500. This re-creates the (tiny) stack in that case.
+          bash scripts/ensure_dynamodb_stack.sh "${STACK_NAME}" "${AWS_REGION}"
+
           echo "Deploying DynamoDB Stack: ${STACK_NAME}"
 
           aws cloudformation deploy \

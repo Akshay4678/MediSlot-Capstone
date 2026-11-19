@@ -14,7 +14,8 @@ from application.patient_api import discovery, profile
 SCHEMA = """
 CREATE TABLE users (user_id TEXT PRIMARY KEY, email TEXT, is_active INT DEFAULT 1);
 CREATE TABLE patients (patient_id TEXT PRIMARY KEY, user_id TEXT UNIQUE, first_name TEXT, last_name TEXT,
-  date_of_birth TEXT, gender TEXT, phone TEXT, address TEXT, city TEXT, emergency_contact TEXT);
+  date_of_birth TEXT, gender TEXT, phone TEXT, address TEXT, city TEXT, emergency_contact TEXT,
+  is_active INT DEFAULT 1);
 CREATE TABLE hospitals (hospital_id TEXT PRIMARY KEY, hospital_name TEXT, city TEXT, is_active INT DEFAULT 1);
 CREATE TABLE specialisations (specialisation_id TEXT PRIMARY KEY, specialisation_name TEXT);
 CREATE TABLE doctors (doctor_id TEXT PRIMARY KEY, user_id TEXT, hospital_id TEXT, specialisation_id TEXT,
@@ -111,11 +112,18 @@ def test_delete_is_refused_with_upcoming_appointments(conn):
     assert conn.q("SELECT is_active FROM users WHERE user_id = 'u-a'") == [(1,)]
 
 
-def test_delete_erases_personal_details_and_closes_the_account(conn):
+def test_delete_is_a_soft_delete_details_are_kept_and_the_account_is_closed(conn):
     status, _ = profile.delete(conn, "u-a", NOW)
     assert status == 200
-    assert conn.q("SELECT first_name, last_name, phone FROM patients WHERE patient_id = 'p-a'") == [("Deleted", "Patient", None)]
-    assert conn.q("SELECT is_active FROM users WHERE user_id = 'u-a'") == [(0,)]
+    # Nothing is erased: only the is_active flags change.
+    assert conn.q("SELECT first_name, last_name, phone, is_active FROM patients WHERE patient_id = 'p-a'") == [
+        ("Alice", "Aaa", "+91 98765 43210", 0)]
+    assert conn.q("SELECT email, is_active FROM users WHERE user_id = 'u-a'") == [("a@x", 0)]
+    assert conn.q("SELECT is_active FROM patients WHERE patient_id = 'p-b'") == [(1,)]
+    # A closed profile can no longer be read, changed or deleted through the API.
+    assert err(lambda: profile.get(conn, "u-a")).code == "PATIENT_NOT_FOUND"
+    assert err(lambda: profile.update(conn, "u-a", {"city": "X"})).code == "PATIENT_NOT_FOUND"
+    assert err(lambda: profile.delete(conn, "u-a", NOW)).code == "PATIENT_NOT_FOUND"
     assert conn.q("SELECT first_name FROM patients WHERE patient_id = 'p-b'") == [("Bob",)]
 
 

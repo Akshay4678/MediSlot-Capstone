@@ -668,3 +668,68 @@ def test_protected_test_token_route_requires_authorizer_context():
 
     assert status == 200
     assert data["user_id"] == "user-1"
+
+
+# ---------------------------------------------------------------------------
+# Closed (soft-deleted) accounts: the email can be registered again by a new person.
+# Uses a real SQL engine so the users.active_email UNIQUE rule is exercised, not faked.
+# ---------------------------------------------------------------------------
+USERS_SCHEMA = """
+CREATE TABLE users (
+  user_id TEXT PRIMARY KEY, email TEXT NOT NULL, password_hash TEXT, role TEXT,
+  is_active INT NOT NULL DEFAULT 1,
+  active_email TEXT GENERATED ALWAYS AS (CASE WHEN is_active THEN email END) VIRTUAL);
+CREATE UNIQUE INDEX uq_users_active_email ON users (active_email);
+CREATE TABLE patients (patient_id TEXT PRIMARY KEY, user_id TEXT UNIQUE, first_name TEXT, last_name TEXT,
+  phone TEXT, is_active INT NOT NULL DEFAULT 1);
+"""
+
+
+@pytest.fixture
+def sql_users(monkeypatch):
+    from sqlite_mysql import Conn
+
+    conn = Conn(USERS_SCHEMA)
+    monkeypatch.setattr(ah, "get_connection", lambda: conn)
+    return conn
+
+
+def _register_patient(first="Ann", last="Lee", email="ann@example.com"):
+    return call(
+        "/auth/patients/register",
+        {"email": email, "password": "Passw0rd123", "first_name": first, "last_name": last},
+    )
+
+
+def _close_account(conn, email):
+    conn.db.execute("UPDATE patients SET is_active = 0 WHERE user_id IN (SELECT user_id FROM users WHERE email = ?)", (email,))
+    conn.db.execute("UPDATE users SET is_active = 0 WHERE email = ?", (email,))
+
+
+def test_second_active_registration_with_the_same_email_is_refused(sql_users):
+    assert _register_patient()[0] == 201
+    status, data = _register_patient(first="Bob")
+    assert status == 409 and data["error"] == "EMAIL_EXISTS"
+    assert sql_users.q("SELECT COUNT(*) FROM users") == [(1,)]
+
+
+def test_email_can_be_registered_again_after_the_account_was_closed(sql_users):
+    assert _register_patient()[0] == 201
+    assert call("/auth/patients/login", {"email": "ann@example.com", "password": "Passw0rd123"})[0] == 200
+
+    _close_account(sql_users, "ann@example.com")
+    # A closed account cannot sign in (same message as a wrong password, so nothing is revealed).
+    status, data = call("/auth/patients/login", {"email": "ann@example.com", "password": "Passw0rd123"})
+    assert status == 401 and data["error"] == "INVALID_CREDENTIALS"
+
+    # A new person can now use the address.
+    status, _ = _register_patient(first="Zoe", last="New")
+    assert status == 201
+    assert call("/auth/patients/login", {"email": "ann@example.com", "password": "Passw0rd123"})[0] == 200
+
+    # Both accounts exist; only one is active; the old one is untouched.
+    assert sql_users.q("SELECT is_active FROM users WHERE email = 'ann@example.com' ORDER BY is_active") == [(0,), (1,)]
+    assert sql_users.q("SELECT first_name, is_active FROM patients ORDER BY is_active") == [("Ann", 0), ("Zoe", 1)]
+
+    # ... and the rule still protects the active one.
+    assert _register_patient(first="Third")[0] == 409

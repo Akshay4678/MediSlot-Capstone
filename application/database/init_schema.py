@@ -241,6 +241,47 @@ def _ensure_extra_indexes(cursor):
             cursor.execute(f"CREATE INDEX `{name}` ON `{table}` ({columns})")
 
 
+def _ensure_patient_is_active(cursor):
+    """patients.is_active: a closed account is soft-deleted (flag off, details kept)."""
+    if _table_exists(cursor, "patients") and not _column_exists(cursor, "patients", "is_active"):
+        logger.info("Adding patients.is_active")
+        cursor.execute(
+            "ALTER TABLE patients ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE "
+            "COMMENT 'FALSE = account closed (soft delete); the row and its details are kept' "
+            "AFTER emergency_contact"
+        )
+        # Accounts that were already closed keep their closed state.
+        cursor.execute(
+            "UPDATE patients p JOIN users u ON u.user_id = p.user_id SET p.is_active = u.is_active"
+        )
+
+
+def _ensure_email_reuse(cursor):
+    """Let an email be registered again after its account was closed.
+
+    The old rule was UNIQUE(email), which kept a closed account's address locked forever.
+    The new rule is UNIQUE(active_email) where active_email is NULL for closed accounts, so only
+    one ACTIVE account can own an email. Safe to run on every deploy (each step checks first).
+    """
+    if not _table_exists(cursor, "users"):
+        return
+    if not _column_exists(cursor, "users", "active_email"):
+        logger.info("Adding users.active_email")
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN active_email VARCHAR(254) "
+            "GENERATED ALWAYS AS (IF(is_active, email, NULL)) VIRTUAL AFTER is_active"
+        )
+    if not _index_exists(cursor, "users", "uq_users_active_email"):
+        logger.info("Creating unique index uq_users_active_email")
+        cursor.execute("CREATE UNIQUE INDEX uq_users_active_email ON users (active_email)")
+    if not _index_exists(cursor, "users", "ix_users_email"):
+        logger.info("Creating index ix_users_email")
+        cursor.execute("CREATE INDEX ix_users_email ON users (email)")
+    if _index_exists(cursor, "users", "uq_users_email"):
+        logger.info("Dropping the old UNIQUE(email) index")
+        cursor.execute("DROP INDEX uq_users_email ON users")
+
+
 def _prepare_consultation_type_split(cursor):
     """Step 1: detach and rename the old per-doctor table so schema.sql can create the new ones.
 
@@ -360,6 +401,8 @@ def initialize_database():
                 _finish_consultation_type_split(cursor)
 
             _ensure_extra_indexes(cursor)
+            _ensure_patient_is_active(cursor)
+            _ensure_email_reuse(cursor)
 
             cursor.execute(
                 "INSERT INTO schema_meta (id, version) VALUES (1, %s) "

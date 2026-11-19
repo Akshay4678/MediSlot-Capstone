@@ -23,9 +23,13 @@ def _view(row):
     return out
 
 
-def _fetch(conn, user_id):
+def _fetch(conn, user_id, active_only=True):
+    """The patient's row. A closed (soft-deleted) profile is treated as not found unless asked for."""
+    sql = "SELECT " + ", ".join(COLUMNS) + " FROM patients WHERE user_id = %s"
+    if active_only:
+        sql += " AND is_active = TRUE"
     with conn.cursor() as cur:
-        cur.execute("SELECT " + ", ".join(COLUMNS) + " FROM patients WHERE user_id = %s", (user_id,))
+        cur.execute(sql, (user_id,))
         return cur.fetchone()
 
 
@@ -71,7 +75,7 @@ def get(conn, user_id):
 
 def create(conn, user_id, body):
     values = validate(body, creating=True)
-    if _fetch(conn, user_id):
+    if _fetch(conn, user_id, active_only=False):
         raise ApiError(409, "PROFILE_EXISTS", "Your patient profile already exists; use PUT to change it.")
     columns = ["patient_id", "user_id"] + list(values)
     with conn.cursor() as cur:
@@ -99,9 +103,11 @@ def update(conn, user_id, body):
 
 
 def delete(conn, user_id, now_utc=None):
-    """Close the account: personal details are erased and login is disabled.
+    """Soft delete: close the account by switching is_active off. Nothing is erased.
 
-    The row itself stays (appointments and refunds reference it), but nothing identifying remains.
+    The patient row keeps its name and details (appointments, refunds and the doctor's history
+    still point at it) and the users row keeps its email. Login is blocked because users.is_active
+    is FALSE, and the same email can be registered again as a brand-new account.
     Refused while the patient still has upcoming confirmed appointments.
     """
     row = _fetch(conn, user_id)
@@ -117,9 +123,7 @@ def delete(conn, user_id, now_utc=None):
         if int(found["n"] if isinstance(found, dict) else found[0]):
             raise ApiError(409, "HAS_ACTIVE_APPOINTMENTS",
                            "Cancel your upcoming appointments before deleting your profile.")
-        cur.execute(
-            "UPDATE patients SET first_name = 'Deleted', last_name = 'Patient', date_of_birth = NULL, gender = NULL, "
-            "phone = NULL, address = NULL, city = NULL, emergency_contact = NULL WHERE user_id = %s", (user_id,))
+        cur.execute("UPDATE patients SET is_active = FALSE WHERE user_id = %s", (user_id,))
         cur.execute("UPDATE users SET is_active = FALSE WHERE user_id = %s", (user_id,))
     conn.commit()
     return 200, {"message": "Your profile was deleted and your account is closed."}

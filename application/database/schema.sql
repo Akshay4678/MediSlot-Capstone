@@ -21,10 +21,15 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash VARCHAR(255) NOT NULL,
     role ENUM('PATIENT','DOCTOR') NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    -- The email of an ACTIVE account only (NULL once the account is closed). Its UNIQUE key means
+    -- two active accounts can never share an email, while a closed account keeps its row and its
+    -- email and the same address can be registered again by a new person.
+    active_email VARCHAR(254) GENERATED ALWAYS AS (IF(is_active, email, NULL)) VIRTUAL,
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (user_id),
-    UNIQUE KEY uq_users_email (email),
+    UNIQUE KEY uq_users_active_email (active_email),
+    KEY ix_users_email (email),
     KEY ix_users_role_active (role, is_active)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
@@ -59,6 +64,7 @@ CREATE TABLE IF NOT EXISTS patients (
     address TEXT NULL,
     city VARCHAR(100) NULL,
     emergency_contact VARCHAR(150) NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE COMMENT 'FALSE = account closed (soft delete); the row and its details are kept',
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (patient_id),

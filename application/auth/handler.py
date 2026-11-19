@@ -213,7 +213,7 @@ def _register(body, path_role):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT user_id FROM users WHERE email = %s LIMIT 1", (email,))
+            cur.execute("SELECT user_id FROM users WHERE email = %s AND is_active = TRUE LIMIT 1", (email,))
             if cur.fetchone():
                 return _json_error(409, "EMAIL_EXISTS", "An account with this email already exists.")
             cur.execute(
@@ -253,7 +253,8 @@ def _login(body, path_role):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT user_id, password_hash, role, is_active FROM users WHERE email = %s LIMIT 1", (email,))
+                "SELECT user_id, password_hash, role, is_active FROM users "
+                "WHERE email = %s AND is_active = TRUE LIMIT 1", (email,))
             user = cur.fetchone()
     finally:
         conn.close()

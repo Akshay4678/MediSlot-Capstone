@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Appointment - MediSlot{% endblock %}
+{% block content %}
+<section class="page-head">
+  <h1>Appointment with {{ a.doctor.name }}</h1>
+  <p><span class="tag {{ 'blocked' if a.status not in ('CONFIRMED', 'COMPLETED') else '' }}">{{ a.status.replace('_', ' ').title() }}</span></p>
+</section>
+
+<div class="card">
+  <dl class="facts">
+    <dt>When</dt><dd>{{ a.date }}, {{ a.start_time }} &ndash; {{ a.end_time }} <span class="muted">({{ a.timezone }})</span></dd>
+    <dt>Consultation</dt><dd>{{ a.consultation_type.type_name }}</dd>
+    <dt>Where</dt><dd>{{ a.doctor.hospital_name }}, {{ a.doctor.city }} &middot; {{ a.doctor.specialisation }}</dd>
+    <dt>Fee paid</dt><dd>&#8377;{{ '%.2f' % a.fee }}</dd>
+    {% if a.notes %}<dt>Your note</dt><dd>{{ a.notes }}</dd>{% endif %}
+    <dt>Reference</dt><dd class="muted small">{{ a.appointment_id }}</dd>
+  </dl>
+</div>
+
+{% if a.refund %}
+<div class="card">
+  <h2>Refund</h2>
+  <p><strong>&#8377;{{ '%.2f' % a.refund.amount }}</strong> ({{ '%g' % a.refund.percentage }}% of the fee) &middot; {{ a.refund.tier.replace('_', ' ').title() }} &middot; {{ a.refund.status.replace('_', ' ').title() }}</p>
+  {% if a.cancellation_reason %}<p class="muted">Reason: {{ a.cancellation_reason }}</p>{% endif %}
+</div>
+{% endif %}
+
+{% if a.can_cancel %}
+<div class="card">
+  <h2>Cancel this appointment</h2>
+  <p>If you cancel now you will get <strong>&#8377;{{ '%.2f' % a.refund_preview.amount }}</strong> back ({{ '%g' % a.refund_preview.percentage }}%).</p>
+  <p class="muted small">Refund policy: 100% when cancelled 48 hours or more before the start, 75% from 24 hours, 50% from 6 hours, nothing within the last 6 hours. If the doctor cancels, you always get 100%.</p>
+  <form method="post" action="{{ url_for('patient.cancel', appointment_id=a.appointment_id) }}" onsubmit="return confirm('Cancel this appointment?');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Reason (optional)<input name="reason" maxlength="255"></label>
+    <p><button class="danger" type="submit">Cancel appointment</button></p>
+  </form>
+</div>
+{% endif %}
+<p><a href="{{ url_for('patient.appointments') }}">&larr; Back to my appointments</a></p>
+{% endblock %}

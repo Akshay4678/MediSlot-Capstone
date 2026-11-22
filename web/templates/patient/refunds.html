@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Refunds - MediSlot{% endblock %}
+{% block content %}
+<section class="page-head">
+  <h1>My refunds</h1>
+  <p class="muted">Total refunded: <strong>&#8377;{{ '%.2f' % data.total_refunded }}</strong></p>
+</section>
+{% if data['items'] %}
+<div class="card">
+  <div class="table-wrap">
+  <table id="refund-ledger">
+    <thead><tr><th>Appointment</th><th>Doctor</th><th>Fee</th><th>Refund</th><th>Policy</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for r in data['items'] %}
+      <tr>
+        <td><a href="{{ url_for('patient.appointment', appointment_id=r.appointment_id) }}">{{ r.appointment_date }} {{ r.appointment_start }}</a></td>
+        <td>{{ r.doctor_name }}<br><span class="muted small">{{ r.type_name }}</span></td>
+        <td>&#8377;{{ '%.2f' % r.fee }}</td>
+        <td><strong>&#8377;{{ '%.2f' % r.amount }}</strong> <span class="muted small">({{ '%g' % r.percentage }}%)</span></td>
+        <td>{{ r.tier.replace('_', ' ').title() }}</td>
+        <td><span class="tag">{{ r.status.replace('_', ' ').title() }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+<p class="actions pager">
+  {% if offset > 0 %}<a class="btn secondary" href="{{ url_for('patient.refunds', offset=[offset - page_size, 0]|max) }}">&larr; Previous</a>{% endif %}
+  <span class="muted">Showing {{ offset + 1 }}&ndash;{{ offset + data['items']|length }} of {{ data.total }}</span>
+  {% if data.has_more %}<a class="btn secondary" href="{{ url_for('patient.refunds', offset=offset + page_size) }}">Next &rarr;</a>{% endif %}
+</p>
+{% else %}
+<div class="card empty"><p class="muted">No refunds yet. A refund appears here when an appointment is cancelled.</p></div>
+{% endif %}
+{% endblock %}

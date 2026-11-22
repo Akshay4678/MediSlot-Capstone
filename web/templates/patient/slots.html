@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Available slots - MediSlot{% endblock %}
 {% block content %}
-<h1>Available slots</h1>
-<p class="muted">Doctor timezone: <strong>{{ data.timezone }}</strong></p>
+<section class="page-head">
+  <h1>Available slots</h1>
+  <p class="muted">Times are shown in the doctor's timezone: <strong>{{ data.timezone }}</strong></p>
+</section>
 
 <div class="card">
   <form method="get" class="form-grid">
@@ -16,26 +18,30 @@
   </form>
 </div>
 
-<div class="card">
-  {% if data.slots %}
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Date</th><th>Consultation</th><th>Time</th><th>Fee</th><th>Free seats</th></tr></thead>
-        <tbody>
-        {% for s in data.slots %}
-          <tr>
-            <td>{{ s.date }}</td>
-            <td>{{ s.type_name }} ({{ s.duration_minutes }} min)</td>
-            <td>{{ s.start_time }} - {{ s.end_time }}</td>
-            <td>₹{{ s.fee }}</td>
-            <td>{{ s.available_seats }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
+{% if data.slots %}
+  {% for day in data.days if day.slots %}
+  <div class="card">
+    <h2>{{ day.date }}</h2>
+    <div class="slot-grid">
+    {% for s in day.slots %}
+      <form method="post" action="{{ url_for('patient.book') }}" class="slot-tile" data-slot="{{ s.slot_id }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
+        <input type="hidden" name="doctor_id" value="{{ doctor_id }}">
+        <input type="hidden" name="date" value="{{ date }}">
+        <input type="hidden" name="to" value="{{ until }}">
+        <input type="hidden" name="idempotency_key" value="{{ booking_key }}-{{ loop.index }}-{{ day.date }}">
+        <strong class="slot-time">{{ s.start_time }} &ndash; {{ s.end_time }}</strong>
+        <span class="slot-type">{{ s.type_name }} &middot; {{ s.duration_minutes }} min</span>
+        <span class="slot-fee">&#8377;{{ '%g' % s.fee }}</span>
+        <span class="tag {{ 'full' if s.available_seats == 1 and s.capacity > 1 else '' }}">{{ s.available_seats }} of {{ s.capacity }} seat{{ '' if s.capacity == 1 else 's' }} free</span>
+        <button type="submit">Book</button>
+      </form>
+    {% endfor %}
     </div>
-  {% else %}
-    <p class="muted">No open slots for this date range.</p>
-  {% endif %}
-</div>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="card empty"><p class="muted">No open slots for this date range.</p></div>
+{% endif %}
 {% endblock %}

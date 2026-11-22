@@ -81,3 +81,13 @@ def refund_bands():
 def max_upcoming_per_doctor():
     """Brief: a patient may hold at most 3 upcoming appointments with the same doctor."""
     return max(1, config.get_int("rules/max-upcoming-per-doctor", 3))
+
+
+def booking_max_attempts():
+    """Bounded retry: how many times one booking may try the version-checked seat update (SSM: rules/booking-max-attempts)."""
+    return max(1, config.get_int("rules/booking-max-attempts", 6))
+
+
+def booking_backoff_ms():
+    """Base of the exponential backoff between retries, in milliseconds (SSM: rules/booking-backoff-ms)."""
+    return max(1, config.get_int("rules/booking-backoff-ms", 25))

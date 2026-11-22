@@ -124,7 +124,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt flake8 pytest
-          python -m flake8 application scripts web tests --select=E9,F --exclude=application/booking,application/notification,application/patient,application/availability,application/refund,application/waitlist,application/doctor
+          python -m flake8 application scripts web tests --select=E9,F --exclude=application/notification,application/patient,application/availability,application/refund,application/waitlist,application/doctor
           python -m pytest tests/unit -q
 
       # ==========================================
@@ -160,7 +160,9 @@ jobs:
             infrastructure/cloudformation/dynamodb.yaml \
             infrastructure/cloudformation/auth.yaml \
             infrastructure/cloudformation/storage.yaml \
+            infrastructure/cloudformation/events.yaml \
             infrastructure/cloudformation/doctor.yaml \
+            infrastructure/cloudformation/patient.yaml \
             infrastructure/cloudformation/api.yaml \
             infrastructure/cloudformation/web.yaml
           do
@@ -567,6 +569,8 @@ jobs:
           put_if_missing "${P}/rules/refund-full-hours" 48
           put_if_missing "${P}/rules/refund-75-hours" 24
           put_if_missing "${P}/rules/refund-50-hours" 6
+          put_if_missing "${P}/rules/booking-max-attempts" 6
+          put_if_missing "${P}/rules/booking-backoff-ms" 25
           if ! aws ssm get-parameter --name "${P}/web/flask-secret-key" --region "${AWS_REGION}" >/dev/null 2>&1; then
             aws ssm put-parameter --name "${P}/web/flask-secret-key" --type SecureString \
               --value "$(openssl rand -hex 32)" --region "${AWS_REGION}" >/dev/null
@@ -653,6 +657,30 @@ jobs:
           echo "S3 key: ${S3_KEY}"
 
       # ==========================================
+      # STEP 12A0: Appointment event bus (Milestone 5)
+      # ==========================================
+      - name: Deploy Appointment Events Stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-events"
+          aws cloudformation deploy \
+            --template-file infrastructure/cloudformation/events.yaml \
+            --stack-name "${STACK}" \
+            --parameter-overrides \
+              "ProjectName=${PROJECT_NAME}" \
+              "EnvironmentName=${ENVIRONMENT_NAME}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
+          EVENT_BUS_NAME="$(aws cloudformation describe-stacks --stack-name "${STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='EventBusName'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
+          if [[ -z "${EVENT_BUS_NAME}" || "${EVENT_BUS_NAME}" == "None" ]]; then
+            echo "::error::The events stack did not return EventBusName."
+            exit 1
+          fi
+          echo "EVENT_BUS_NAME=${EVENT_BUS_NAME}" >> "${GITHUB_ENV}"
+
+      # ==========================================
       # STEP 12B: Doctor domain stack (doctor API Lambda, slot materialiser, daily schedule)
       # ==========================================
       - name: Deploy Doctor Domain Stack
@@ -664,6 +692,9 @@ jobs:
             --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-doctor" \
             --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
+              "SlotCapacityTableName=${SLOT_CAPACITY_TABLE_NAME}" \
+              "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
+              "EventBusName=${EVENT_BUS_NAME}" \
               "ProjectName=${PROJECT_NAME}" \
               "EnvironmentName=${ENVIRONMENT_NAME}" \
               "LambdaCodeS3Bucket=${LAMBDA_CODE_S3_BUCKET}" \
@@ -689,6 +720,9 @@ jobs:
             --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-patient" \
             --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
+              "SlotCapacityTableName=${SLOT_CAPACITY_TABLE_NAME}" \
+              "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
+              "EventBusName=${EVENT_BUS_NAME}" \
               "ProjectName=${PROJECT_NAME}" \
               "EnvironmentName=${ENVIRONMENT_NAME}" \
               "LambdaCodeS3Bucket=${LAMBDA_CODE_S3_BUCKET}" \

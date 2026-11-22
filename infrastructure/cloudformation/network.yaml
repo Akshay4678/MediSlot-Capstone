@@ -497,6 +497,48 @@ Resources:
           Value: !Ref EnvironmentName
 
   # DynamoDB Gateway Endpoint: keeps DynamoDB traffic inside AWS without NAT.
+  # EventBridge: the booking engine publishes AppointmentBooked / AppointmentCancelled / SlotSeatFreed.
+  EventsInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.events'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateAppSubnet1
+        - !Ref PrivateAppSubnet2
+      SecurityGroupIds:
+        - !Ref AwsServiceEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-events-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # CloudWatch metrics (BookingConflictRetries, CancellationsByTier) are sent through PutMetricData.
+  MonitoringInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.monitoring'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateAppSubnet1
+        - !Ref PrivateAppSubnet2
+      SecurityGroupIds:
+        - !Ref AwsServiceEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-monitoring-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
   DynamoDbGatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:

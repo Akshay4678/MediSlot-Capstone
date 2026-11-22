@@ -267,3 +267,44 @@ td input,td select{padding:.35rem .4rem}.tag{display:inline-block;padding:.1rem 
 .pw-wrap input{padding-right:4.2rem}
 .pw-toggle{position:absolute;right:.35rem;top:50%;transform:translateY(-50%);width:auto;margin:0;padding:.2rem .55rem;font-size:.8rem;background:#e2e8f0;color:#0f172a;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer}
 input[type="password"]::-ms-reveal,input[type="password"]::-ms-clear{display:none}
+
+/* ------------------------------------------------------------------ Milestone 5 polish */
+:root{--shadow:0 1px 2px rgba(15,23,42,.05),0 6px 18px rgba(15,23,42,.05);--radius:14px}
+body{background:linear-gradient(180deg,#eaf4f3 0,var(--bg) 220px) no-repeat,var(--bg)}
+header.top{background:linear-gradient(90deg,#0b4f4a,var(--brand));box-shadow:0 2px 10px rgba(0,0,0,.15)}
+.nav a{padding:.25rem .55rem;border-radius:999px}.nav a:hover{background:rgba(255,255,255,.16);text-decoration:none}
+.card{border-radius:var(--radius);box-shadow:var(--shadow)}
+button,.btn{border-radius:999px;transition:transform .05s,background .15s}button:active,.btn:active{transform:translateY(1px)}
+.btn.secondary{background:#e6eef0;color:#0f172a}.btn.secondary:hover{background:#d5e3e6}
+.page-head h1{margin-bottom:.2rem}.page-head p{margin:.1rem 0 1rem}
+.search-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.4rem 1rem;align-items:end}
+.search-actions{align-self:end;padding-bottom:.1rem}
+.results-head{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin:.4rem 0}.results-head h2{margin:0}
+.chip{display:inline-block;padding:.1rem .6rem;border-radius:999px;background:#e0f2f1;color:var(--brand-dark);font-size:.82rem;margin:.1rem .2rem .1rem 0}
+.chip.type{background:#eef2ff;color:#3730a3}
+.doctor-list{display:grid;gap:.8rem}
+.doctor-card{display:grid;grid-template-columns:auto 1fr auto;gap:1rem;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:1rem 1.2rem;box-shadow:var(--shadow)}
+.doctor-card h3{margin:.1rem 0;font-size:1.1rem}.doctor-card p{margin:.2rem 0}
+.doctor-card:hover{border-color:#99c9c4}
+.doctor-actions{display:flex;gap:.5rem;flex-wrap:wrap}
+.avatar{width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,var(--brand),#34d399);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;letter-spacing:.03em}
+.avatar.big{width:84px;height:84px;font-size:1.6rem}
+.profile-head{display:flex;gap:1.2rem;align-items:center;margin:.5rem 0 1.2rem}.profile-head h1{margin:0}.profile-head p{margin:.2rem 0}
+.pager{justify-content:center;margin:1.2rem 0}
+.empty{text-align:center;padding:2rem}
+.slot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:.8rem}
+.slot-tile{display:flex;flex-direction:column;gap:.3rem;border:1px solid var(--line);border-radius:12px;padding:.9rem;background:#fbfdfd}
+.slot-tile:hover{border-color:var(--brand);box-shadow:0 3px 10px rgba(15,118,110,.12)}
+.slot-time{font-size:1.15rem}.slot-type{color:var(--muted);font-size:.9rem}.slot-fee{font-weight:700;color:var(--brand-dark)}
+.slot-tile button{margin-top:.4rem}
+.tabs{display:flex;gap:.4rem;margin:0 0 1rem;flex-wrap:wrap}
+.tab{padding:.4rem 1rem;border-radius:999px;background:#e6eef0;color:#0f172a;text-decoration:none;font-weight:600}
+.tab.active{background:var(--brand);color:#fff}
+.date-badge{width:56px;text-align:center;border:1px solid var(--line);border-radius:12px;padding:.35rem 0;background:#f0fdfa}
+.date-badge strong{display:block;font-size:1.35rem;line-height:1}.date-badge span{font-size:.75rem;color:var(--muted)}
+.appt.cancelled_by_patient,.appt.cancelled_by_doctor{opacity:.8;background:#fafafa}
+dl.facts{display:grid;grid-template-columns:140px 1fr;gap:.5rem 1rem;margin:0}dl.facts dt{color:var(--muted);font-weight:600}dl.facts dd{margin:0}
+.table-wrap{overflow-x:auto}
+form.cancel-slot{margin-top:.6rem;display:flex;gap:.4rem;flex-wrap:wrap}form.cancel-slot input{flex:1;min-width:160px;padding:.35rem .5rem}
+form.cancel-slot button{padding:.35rem .8rem;font-size:.85rem}
+@media (max-width:640px){.doctor-card{grid-template-columns:auto 1fr}.doctor-actions{grid-column:1/-1}dl.facts{grid-template-columns:1fr}.nav{gap:.4rem}}

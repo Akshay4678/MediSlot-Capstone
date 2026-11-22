@@ -1,5 +1,6 @@
-"""Patient portal (Milestone 4): profile, doctor search, doctor page and slot browsing."""
+"""Patient portal (Milestones 4-5): profile, doctor search, slots, booking, appointments and refunds."""
 
+import uuid
 from datetime import date
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
@@ -7,6 +8,8 @@ from flask import Blueprint, flash, redirect, render_template, request, url_for
 from web import api_client
 from web.api_client import ApiError
 from web.portals.common import add_auth_routes, role_required
+
+CONSULTATION_TYPES = ("Quick Consult", "Standard Consult", "Detailed Consult", "Health Camp Session")
 
 bp = Blueprint("patient", __name__, url_prefix="/patient")
 add_auth_routes(bp, "patient")
@@ -38,6 +41,7 @@ def home():
         "hospital": request.args.get("hospital", "").strip(),
         "city": request.args.get("city", "").strip(),
         "specialisation": request.args.get("specialisation", "").strip(),
+        "consultation_type": request.args.get("consultation_type", "").strip(),
     }
     try:
         offset = max(0, int(request.args.get("offset", "0")))
@@ -62,6 +66,7 @@ def home():
         page_size=page_size,
         filters=filters,
         today=date.today().isoformat(),
+        consultation_types=CONSULTATION_TYPES,
     )
 
 
@@ -78,7 +83,81 @@ def slots(doctor_id):
         data=data,
         date=chosen,
         until=until,
+        booking_key=uuid.uuid4().hex,  # one key per page view: a double click or a resubmit books only once
     )
+
+
+@bp.route("/book", methods=["POST"], endpoint="book")
+@role_required("patient")
+def book():
+    slot_id = request.form.get("slot_id", "").strip()
+    doctor_id = request.form.get("doctor_id", "").strip()
+    key = request.form.get("idempotency_key", "").strip() or uuid.uuid4().hex
+    body = {"slot_id": slot_id}
+    notes = request.form.get("notes", "").strip()
+    if notes:
+        body["notes"] = notes
+    try:
+        data = api_client.call("POST", "/appointments", body, headers={"Idempotency-Key": key})
+    except ApiError as exc:
+        flash(exc.message, "error")
+        if doctor_id:
+            return redirect(url_for("patient.slots", doctor_id=doctor_id, date=request.form.get("date", ""),
+                                    to=request.form.get("to", "")))
+        return redirect(url_for("patient.home"))
+    flash("Your appointment is confirmed.", "success")
+    return redirect(url_for("patient.appointment", appointment_id=data["appointment"]["appointment_id"]))
+
+
+@bp.route("/appointments", endpoint="appointments")
+@role_required("patient")
+def appointments():
+    scope = request.args.get("scope", "upcoming")
+    if scope not in ("upcoming", "past", "all"):
+        scope = "upcoming"
+    try:
+        offset = max(0, int(request.args.get("offset", "0")))
+    except ValueError:
+        offset = 0
+    page_size = 10
+    data = api_client.call("GET", "/appointments", params={"scope": scope, "limit": page_size, "offset": offset})
+    return render_template("patient/appointments.html", data=data, scope=scope, offset=offset, page_size=page_size)
+
+
+@bp.route("/appointments/<appointment_id>", endpoint="appointment")
+@role_required("patient")
+def appointment(appointment_id):
+    data = api_client.call("GET", f"/appointments/{appointment_id}")
+    return render_template("patient/appointment.html", a=data["appointment"])
+
+
+@bp.route("/appointments/<appointment_id>/cancel", methods=["POST"], endpoint="cancel")
+@role_required("patient")
+def cancel(appointment_id):
+    body = {}
+    reason = request.form.get("reason", "").strip()
+    if reason:
+        body["reason"] = reason
+    try:
+        data = api_client.call("POST", f"/appointments/{appointment_id}/cancel", body)
+    except ApiError as exc:
+        flash(exc.message, "error")
+        return redirect(url_for("patient.appointment", appointment_id=appointment_id))
+    refund = data["appointment"].get("refund") or {}
+    flash(f"Appointment cancelled. Refund: \u20b9{refund.get('amount', 0):.2f} ({refund.get('percentage', 0):g}%).", "success")
+    return redirect(url_for("patient.appointment", appointment_id=appointment_id))
+
+
+@bp.route("/refunds", endpoint="refunds")
+@role_required("patient")
+def refunds():
+    try:
+        offset = max(0, int(request.args.get("offset", "0")))
+    except ValueError:
+        offset = 0
+    page_size = 10
+    data = api_client.call("GET", "/refunds", params={"limit": page_size, "offset": offset})
+    return render_template("patient/refunds.html", data=data, offset=offset, page_size=page_size)
 
 
 @bp.route("/doctor/<doctor_id>", endpoint="doctor")

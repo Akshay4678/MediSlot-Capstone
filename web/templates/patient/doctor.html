@@ -1,11 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Dr. {{ doctor.first_name }} {{ doctor.last_name }} - MediSlot{% endblock %}
 {% block content %}
-<h1>Dr. {{ doctor.first_name }} {{ doctor.last_name }}</h1>
-<div class="card">
-  <p><strong>{{ doctor.specialisation }}</strong> &middot; {{ doctor.hospital_name }}, {{ doctor.city }}</p>
-  <p class="muted">{{ doctor.qualifications or "" }}{% if doctor.qualifications %} &middot; {% endif %}{{ doctor.experience_years }} years of experience</p>
-</div>
+<section class="profile-head">
+  <div class="avatar big" aria-hidden="true">{{ doctor.first_name[:1] }}{{ doctor.last_name[:1] }}</div>
+  <div>
+    <h1>Dr. {{ doctor.first_name }} {{ doctor.last_name }}</h1>
+    <p><strong>{{ doctor.specialisation }}</strong> &middot; {{ doctor.hospital_name }}, {{ doctor.city }}</p>
+    <p class="muted">{{ doctor.qualifications or "" }}{% if doctor.qualifications %} &middot; {% endif %}{{ doctor.experience_years }} years of experience</p>
+  </div>
+</section>
 <div class="card">
   <h2>Consultation types and fees</h2>
   {% if consultation_types %}
@@ -20,6 +23,6 @@
   {% else %}
     <p class="muted">This doctor has not published any consultation types yet.</p>
   {% endif %}
-  <p><a class="button-link" href="{{ url_for('patient.slots', doctor_id=doctor_id) }}">View available slots</a></p>
+  <p><a class="btn" href="{{ url_for('patient.slots', doctor_id=doctor_id) }}">View available slots</a></p>
 </div>
 {% endblock %}

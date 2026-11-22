@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}My appointments - MediSlot{% endblock %}
+{% block content %}
+<section class="page-head"><h1>My appointments</h1></section>
+<div class="tabs">
+  {% for key, label in (('upcoming', 'Upcoming'), ('past', 'Past and cancelled'), ('all', 'All')) %}
+  <a class="tab {{ 'active' if scope == key else '' }}" href="{{ url_for('patient.appointments', scope=key) }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+{% if data['items'] %}
+<div class="doctor-list">
+  {% for a in data['items'] %}
+  <article class="doctor-card appt {{ a.status|lower }}">
+    <div class="date-badge"><strong>{{ a.date[8:10] if a.date else '' }}</strong><span>{{ a.date[5:7] if a.date else '' }}/{{ a.date[2:4] if a.date else '' }}</span></div>
+    <div class="doctor-main">
+      <h3><a href="{{ url_for('patient.appointment', appointment_id=a.appointment_id) }}">{{ a.doctor.name }}</a></h3>
+      <p class="muted">{{ a.consultation_type.type_name }} &middot; {{ a.start_time }}&ndash;{{ a.end_time }} ({{ a.timezone }}) &middot; &#8377;{{ '%g' % a.fee }}</p>
+      <p><span class="tag {{ 'blocked' if a.status != 'CONFIRMED' and a.status != 'COMPLETED' else '' }}">{{ a.status.replace('_', ' ').title() }}</span>
+      {% if a.refund %}<span class="tag">Refund &#8377;{{ '%.2f' % a.refund.amount }}</span>{% endif %}</p>
+    </div>
+    <div class="doctor-actions"><a class="btn secondary" href="{{ url_for('patient.appointment', appointment_id=a.appointment_id) }}">Details</a></div>
+  </article>
+  {% endfor %}
+</div>
+<p class="actions pager">
+  {% if offset > 0 %}<a class="btn secondary" href="{{ url_for('patient.appointments', scope=scope, offset=[offset - page_size, 0]|max) }}">&larr; Previous</a>{% endif %}
+  <span class="muted">Showing {{ offset + 1 }}&ndash;{{ offset + data['items']|length }} of {{ data.total }}</span>
+  {% if data.has_more %}<a class="btn secondary" href="{{ url_for('patient.appointments', scope=scope, offset=offset + page_size) }}">Next &rarr;</a>{% endif %}
+</p>
+{% else %}
+<div class="card empty"><p class="muted">Nothing here yet. <a href="{{ url_for('patient.home') }}">Find a doctor</a> to book your first appointment.</p></div>
+{% endif %}
+{% endblock %}

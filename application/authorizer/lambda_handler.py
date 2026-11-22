@@ -41,8 +41,8 @@ ALLOWED_ROLES = ("patient", "doctor")
 # Resource patterns (after /<stage>/<METHOD>/) that a role may NOT call.
 DENIED_FOR_ROLE = {
     "patient": ["doctors/me", "doctors/me/*"],
-    "doctor": ["patients/me", "patients/me/*", "appointments", "appointments/*",
-               "slots/*", "waitlist-offers/*"],
+    "doctor": ["patients/me", "patients/me/*", "patient/me", "appointments", "appointments/*",
+               "refunds", "slots/*", "waitlist-offers/*"],
 }
 
 

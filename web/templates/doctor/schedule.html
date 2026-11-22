@@ -277,6 +277,19 @@ Schedule - MediSlot
 
         {% endif %}
 
+        {% if s.status in ('OPEN', 'FULL', 'BLOCKED') and s.slot_id %}
+        <form class="cancel-slot" method="post" action="{{ url_for('doctor.cancel_slot') }}"
+              onsubmit="return confirm('Cancel this slot? Every booked patient is refunded in full.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
+          <input type="hidden" name="date" value="{{ day.date }}">
+          <input name="reason" maxlength="255" placeholder="Reason (shown to patients)">
+          <button class="danger" type="submit">Cancel slot{% if s.appointments %} &amp; refund {{ s.appointments|length }}{% endif %}</button>
+        </form>
+        {% elif s.status == 'CLOSED' %}
+        <span class="tag blocked">Cancelled</span>
+        {% endif %}
+
       </div>
 
     </div>

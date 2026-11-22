@@ -1,5 +1,5 @@
-"""Doctor-domain Lambda (Milestone 3): profile, photo, consultation types, availability,
-blackouts and schedule, plus the hospital / specialisation reference lists.
+"""Doctor-domain Lambda (Milestones 3 and 5): profile, photo, consultation types, availability,
+blackouts and schedule, appointments and slot cancellation, plus the hospital / specialisation lists.
 
 Identity comes ONLY from the API Gateway authorizer context (userId, role). The request
 body, query string and headers are never used to decide who is acting.
@@ -11,7 +11,8 @@ import logging
 from application.common.api import ApiError
 from application.common.http import request_body, request_method, response
 from application.database.connection import get_connection
-from application.doctor_api import availability, blackouts, catalogue, consultation_types, photo, profile, schedule
+from application.doctor_api import (appointments, availability, blackouts, catalogue, consultation_types, photo, profile,
+                                    schedule)
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -68,6 +69,9 @@ ROUTES = {
     ("POST", "/doctors/me/blackouts"): blackouts.create,
     ("DELETE", "/doctors/me/blackouts/{id}"): blackouts.delete,
     ("GET", "/doctors/me/schedule"): schedule.get,
+    ("GET", "/doctors/me/appointments"): appointments.list_,
+    ("GET", "/doctors/me/appointments/{appointment_id}"): appointments.get,
+    ("POST", "/doctors/me/slots/cancel"): appointments.cancel_slot,
     ("GET", "/hospitals"): catalogue.hospitals,
     ("GET", "/specialisations"): catalogue.specialisations,
 }

@@ -124,12 +124,14 @@ def rebuild_future_slots(conn, doctor_id, tz_name, now_utc=None):
     """After a pattern/timezone change: drop future slots nobody has booked, then re-materialise.
 
     Slots that already have bookings are never deleted (deterministic ids mean an unchanged
-    booked slot is simply left as it is).
+    booked slot is simply left as it is). Slots a doctor CANCELLED (status CLOSED) are kept too, so
+    they are not silently re-created as open slots.
     """
     now_utc = now_utc or datetime.now(UTC)
     with conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM materialised_slots WHERE doctor_id = %s AND start_utc > %s AND booked_count = 0",
+            "DELETE FROM materialised_slots WHERE doctor_id = %s AND start_utc > %s AND booked_count = 0 "
+            "AND status <> 'CLOSED'",
             (doctor_id, now_utc.replace(tzinfo=None)),
         )
         removed = cur.rowcount or 0

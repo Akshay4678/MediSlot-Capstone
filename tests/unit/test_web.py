@@ -45,6 +45,8 @@ class FakeApi:
         self.put_error = None  # (status, body) to make PUT /doctors/me fail
         self.extra_types = []  # extra consultation types returned by the types endpoint
         self.has_bookings_on_blackout = False  # POST /doctors/me/blackouts needs a keep/cancel choice
+        self.headers_seen = []  # (method, path, headers) of every call
+        self.book_error = None  # (status, body) to make POST /appointments fail
 
         self.profile = {
             "doctor_id": "d1",
@@ -77,6 +79,7 @@ class FakeApi:
         ).replace("Bearer ", "")
 
         self.calls.append((method, path, token, json, params))
+        self.headers_seen.append((method, path, dict(headers or {})))
 
         if path.endswith("/doctors/login"):
             return FakeResponse(
@@ -261,8 +264,53 @@ class FakeApi:
                 },
             )
 
+        appt = {"appointment_id": "a1", "status": "CONFIRMED", "slot_id": "slot#1", "date": "2026-11-13",
+                "start_time": "09:00", "end_time": "09:30", "start_utc": "2026-11-13T03:30:00Z", "timezone": "Asia/Kolkata",
+                "fee": 500.0, "notes": "", "cancelled_at": None, "cancellation_reason": None, "refund": None,
+                "consultation_type": {"consultation_type_id": "t1", "type_name": "Standard Consult"},
+                "doctor": {"doctor_id": "d9", "name": "Dr. Asha Rao", "hospital_name": "Apollo", "city": "Hyderabad",
+                           "specialisation": "Cardiology"},
+                "can_cancel": True, "refund_preview": {"tier": "FULL", "percentage": 100, "amount": 500.0}}
+
+        if path == "/appointments" and method == "POST":
+            if self.book_error:
+                return FakeResponse(*self.book_error)
+            return FakeResponse(201, {"appointment": appt})
+
         if path == "/appointments" and method == "GET":
-            return FakeResponse(200, {"items": []})
+            return FakeResponse(200, {"items": [appt], "count": 1, "total": 1, "limit": 10, "offset": 0, "has_more": False})
+
+        if path == "/appointments/a1" and method == "GET":
+            return FakeResponse(200, {"appointment": appt})
+
+        if path == "/appointments/a1/cancel" and method == "POST":
+            done = dict(appt, status="CANCELLED_BY_PATIENT", can_cancel=False,
+                        refund={"tier": "FULL", "percentage": 100.0, "amount": 500.0, "status": "CALCULATED"})
+            return FakeResponse(200, {"appointment": done})
+
+        if path == "/refunds" and method == "GET":
+            return FakeResponse(200, {"items": [{"refund_id": "r1", "appointment_id": "a1", "tier": "TIER_75",
+                                                 "percentage": 75.0, "amount": 375.0, "fee": 500.0, "status": "CALCULATED",
+                                                 "appointment_status": "CANCELLED_BY_PATIENT", "doctor_name": "Dr. Asha Rao",
+                                                 "type_name": "Standard Consult", "appointment_date": "2026-11-13",
+                                                 "appointment_start": "09:00", "created_at": "2026-11-10T06:00:00Z"}],
+                                      "count": 1, "total": 1, "limit": 10, "offset": 0, "has_more": False,
+                                      "total_refunded": 375.0})
+
+        if path == "/doctors/d9/slots" and method == "GET":
+            slot = {"slot_id": "slot#1", "date": "2026-11-13", "start_time": "09:00", "end_time": "09:30",
+                    "capacity": 3, "booked_count": 2, "available_seats": 1, "status": "OPEN", "type_name": "Standard Consult",
+                    "duration_minutes": 30, "fee": 500.0, "consultation_type_id": "t1"}
+            return FakeResponse(200, {"doctor_id": "d9", "timezone": "Asia/Kolkata", "slots": [slot],
+                                      "days": [{"date": "2026-11-13", "slots": [slot]}]})
+
+        if path == "/doctors/me/appointments" and method == "GET":
+            return FakeResponse(200, {"items": [dict(appt, patient={"patient_id": "p1", "name": "Pat One", "phone": "1"})],
+                                      "count": 1, "total": 1, "limit": 15, "offset": 0, "has_more": False})
+
+        if path == "/doctors/me/slots/cancel" and method == "POST":
+            return FakeResponse(200, {"slot_id": (json or {}).get("slot_id"), "status": "CLOSED",
+                                      "cancelled_appointments": 2, "refunds_total": 1000.0})
 
         if path == "/patient/me" and method == "GET":
             return FakeResponse(200, {"patient": {"first_name": "Pat", "last_name": "One", "phone": "+91 98765 43210",
@@ -1134,3 +1182,127 @@ def test_blackout_confirmation_passes_the_choice_to_the_api(client, api):
     posts = [c[3] for c in api.calls if c[0] == "POST" and c[1] == "/doctors/me/blackouts"]
 
     assert posts[-1]["existing_bookings"] == "keep"
+
+
+# -------------------------------------------------------
+# Milestone 5: search filter, booking, appointments, refunds, doctor slot cancellation
+# -------------------------------------------------------
+
+def test_search_offers_a_consultation_type_filter_and_passes_it_to_the_api(client, api):
+    login(client, "patient")
+    html = client.get("/patient/?consultation_type=Health+Camp+Session").get_data(as_text=True)
+    assert 'name="consultation_type"' in html and "Quick Consult" in html and "Health Camp Session" in html
+    assert 'value="Health Camp Session" selected' in html
+    params = [c[4] for c in api.calls if c[1] == "/doctors/search"][-1]
+    assert params["consultation_type"] == "Health Camp Session"
+
+
+def test_the_pager_keeps_the_consultation_type_filter(client):
+    login(client, "patient")
+    html = client.get("/patient/?consultation_type=Quick+Consult&offset=10").get_data(as_text=True)
+    assert "consultation_type=Quick+Consult" in html and "offset=20" in html and "offset=0" in html
+
+
+def test_the_slots_page_has_a_book_button_with_a_csrf_token_and_an_idempotency_key(client):
+    login(client, "patient")
+    html = client.get("/patient/slots/d9?date=2026-11-13").get_data(as_text=True)
+    assert 'action="/patient/book"' in html and 'name="slot_id" value="slot#1"' in html
+    assert 'name="idempotency_key"' in html and 'name="csrf_token"' in html and "1 of 3 seats free" in html
+
+
+def test_booking_sends_the_slot_and_an_idempotency_key_then_shows_the_appointment(client, api):
+    login(client, "patient")
+    token = extract_csrf_token(client.get("/patient/slots/d9?date=2026-11-13").get_data(as_text=True), "slots")
+    response = client.post("/patient/book", data={"slot_id": "slot#1", "doctor_id": "d9", "idempotency_key": "key-1",
+                                                 "csrf_token": token})
+    assert response.headers["Location"].endswith("/patient/appointments/a1")
+    method, path, _, body, _ = [c for c in api.calls if c[1] == "/appointments" and c[0] == "POST"][-1]
+    assert body == {"slot_id": "slot#1"}
+    sent = [h for m, p, h in api.headers_seen if (m, p) == ("POST", "/appointments")][-1]
+    assert sent["Idempotency-Key"] == "key-1"
+    assert "Your appointment is confirmed" in client.get("/patient/appointments/a1").get_data(as_text=True)
+
+
+def test_a_full_slot_shows_the_api_message_and_returns_to_the_slots(client, api):
+    api.book_error = (409, {"error": "SLOT_FULL", "message": "This slot is full."})
+    login(client, "patient")
+    token = extract_csrf_token(client.get("/patient/slots/d9?date=2026-11-13").get_data(as_text=True), "slots")
+    response = client.post("/patient/book", data={"slot_id": "slot#1", "doctor_id": "d9", "date": "2026-11-13",
+                                                 "csrf_token": token})
+    assert "/patient/slots/d9" in response.headers["Location"]
+    assert "This slot is full." in client.get(response.headers["Location"]).get_data(as_text=True)
+
+
+def test_booking_needs_a_csrf_token(client, api):
+    login(client, "patient")
+    client.post("/patient/book", data={"slot_id": "slot#1"})  # rejected before it reaches the route
+    assert not [c for c in api.calls if c[1] == "/appointments" and c[0] == "POST"]
+
+
+def test_my_appointments_page_lists_and_links_to_details(client, api):
+    login(client, "patient")
+    html = client.get("/patient/appointments").get_data(as_text=True)
+    assert "Dr. Asha Rao" in html and "/patient/appointments/a1" in html and "Upcoming" in html
+    assert [c[4] for c in api.calls if c[1] == "/appointments"][-1]["scope"] == "upcoming"
+    client.get("/patient/appointments?scope=past&offset=10")
+    assert [c[4] for c in api.calls if c[1] == "/appointments"][-1] == {"scope": "past", "limit": 10, "offset": 10}
+    client.get("/patient/appointments?scope=bogus")
+    assert [c[4] for c in api.calls if c[1] == "/appointments"][-1]["scope"] == "upcoming"
+
+
+def test_appointment_detail_shows_the_refund_preview_and_a_cancel_form(client):
+    login(client, "patient")
+    html = client.get("/patient/appointments/a1").get_data(as_text=True)
+    assert "&#8377;500.00" in html and "Cancel appointment" in html and "/patient/appointments/a1/cancel" in html
+    assert "48 hours or more" in html
+
+
+def test_cancelling_calls_the_api_and_reports_the_refund(client, api):
+    login(client, "patient")
+    token = extract_csrf_token(client.get("/patient/appointments/a1").get_data(as_text=True), "detail")
+    response = client.post("/patient/appointments/a1/cancel", data={"reason": "plans changed", "csrf_token": token})
+    assert response.headers["Location"].endswith("/patient/appointments/a1")
+    assert [c[3] for c in api.calls if c[1] == "/appointments/a1/cancel"][-1] == {"reason": "plans changed"}
+    assert "Refund: \u20b9500.00 (100%)" in client.get("/patient/appointments/a1").get_data(as_text=True)
+
+
+def test_refund_ledger_page_shows_each_refund_and_the_total(client):
+    login(client, "patient")
+    html = client.get("/patient/refunds").get_data(as_text=True)
+    assert 'id="refund-ledger"' in html and "&#8377;375.00" in html and "Tier 75" in html and "Dr. Asha Rao" in html
+
+
+def test_navigation_links_to_the_new_pages(client):
+    html = login(client, "patient") and client.get("/patient/").get_data(as_text=True)
+    assert "/patient/appointments" in html and "/patient/refunds" in html
+    c2 = create_app().test_client()
+    login(c2, "doctor")
+    assert "/doctor/appointments" in c2.get("/doctor/").get_data(as_text=True)
+
+
+def test_doctor_appointments_page_lists_patients(client, api):
+    login(client, "doctor")
+    html = client.get("/doctor/appointments?status=CONFIRMED&from=2026-11-01").get_data(as_text=True)
+    assert "Pat One" in html and 'id="doctor-appointments"' in html
+    assert [c[4] for c in api.calls if c[1] == "/doctors/me/appointments"][-1] == {
+        "limit": 15, "offset": 0, "from": "2026-11-01", "status": "CONFIRMED"}
+
+
+def test_schedule_has_a_cancel_slot_form_and_cancelling_reports_the_refunds(client, api):
+    login(client, "doctor")
+    html = client.get("/doctor/schedule").get_data(as_text=True)
+    assert 'action="/doctor/slots/cancel"' in html and "Cancel slot" in html
+    token = extract_csrf_token(html, "schedule")
+    response = client.post("/doctor/slots/cancel", data={"slot_id": "x", "reason": "Storm", "date": "2026-11-02",
+                                                        "csrf_token": token})
+    assert "/doctor/schedule" in response.headers["Location"]
+    assert [c[3] for c in api.calls if c[1] == "/doctors/me/slots/cancel"][-1] == {"slot_id": "x", "reason": "Storm"}
+    assert "2 appointment(s) refunded in full" in client.get(response.headers["Location"]).get_data(as_text=True)
+
+
+def test_patients_cannot_open_the_doctor_pages_and_doctors_cannot_book(client):
+    login(client, "patient")
+    assert client.get("/doctor/appointments").status_code in (302, 403)
+    c2 = create_app().test_client()
+    login(c2, "doctor")
+    assert c2.get("/patient/appointments").status_code in (302, 403)

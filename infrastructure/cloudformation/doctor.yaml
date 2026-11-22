@@ -26,6 +26,15 @@ Parameters:
     Default: medislot
   PhotoBucketName:
     Type: String
+  SlotCapacityTableName:
+    Type: String
+    Description: DynamoDB table holding the version-checked seat counter of each slot.
+  IdempotencyTableName:
+    Type: String
+    Description: DynamoDB table holding Idempotency-Key records.
+  EventBusName:
+    Type: String
+    Description: EventBridge bus that receives the appointment events.
   MaterialiserScheduleExpression:
     Type: String
     Default: 'cron(15 0 * * ? *)'
@@ -67,6 +76,27 @@ Resources:
                   - s3:PutObject
                   - s3:GetObject
                 Resource: !Sub 'arn:${AWS::Partition}:s3:::${PhotoBucketName}/doctors/*'
+              - Sid: SeatCounterAndIdempotency
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${SlotCapacityTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${IdempotencyTableName}'
+              - Sid: PublishAppointmentEvents
+                Effect: Allow
+                Action: events:PutEvents
+                Resource: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}'
+              - Sid: PublishMetrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: MediSlot
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -95,6 +125,9 @@ Resources:
           DB_HOST: !Ref DatabaseHost
           DB_NAME: !Ref DatabaseName
           PHOTO_BUCKET: !Ref PhotoBucketName
+          SLOT_CAPACITY_TABLE_NAME: !Ref SlotCapacityTableName
+          IDEMPOTENCY_TABLE_NAME: !Ref IdempotencyTableName
+          EVENT_BUS_NAME: !Ref EventBusName
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds
         SecurityGroupIds:

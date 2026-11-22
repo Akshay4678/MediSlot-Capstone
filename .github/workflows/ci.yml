@@ -42,7 +42,9 @@ jobs:
             infrastructure/cloudformation/dynamodb.yaml \
             infrastructure/cloudformation/storage.yaml \
             infrastructure/cloudformation/auth.yaml \
+            infrastructure/cloudformation/events.yaml \
             infrastructure/cloudformation/doctor.yaml \
+            infrastructure/cloudformation/patient.yaml \
             infrastructure/cloudformation/api.yaml \
             infrastructure/cloudformation/web.yaml
 
@@ -59,7 +61,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt flake8 pytest
       - name: Lint
-        run: python -m flake8 application scripts web tests --select=E9,F --exclude=application/booking,application/notification,application/patient,application/availability,application/refund,application/waitlist,application/doctor
+        run: python -m flake8 application scripts web tests --select=E9,F --exclude=application/notification,application/patient,application/availability,application/refund,application/waitlist,application/doctor
       - name: Unit tests
         env:
           PYTHONPATH: .

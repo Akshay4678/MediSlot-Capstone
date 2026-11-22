@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Appointments - MediSlot{% endblock %}
+{% block content %}
+<section class="page-head">
+  <h1>Appointments</h1>
+  <p class="muted">Everyone who has booked with you. Cancel a whole slot from the <a href="{{ url_for('doctor.schedule') }}">schedule</a>.</p>
+</section>
+<div class="card">
+  <form method="get" class="form-grid">
+    <label>From<input type="date" name="from" value="{{ filters['from'] }}"></label>
+    <label>To<input type="date" name="to" value="{{ filters['to'] }}"></label>
+    <label>Status
+      <select name="status">
+        <option value="">Any</option>
+        {% for s in ('CONFIRMED', 'CANCELLED_BY_PATIENT', 'CANCELLED_BY_DOCTOR', 'COMPLETED', 'NO_SHOW') %}
+        <option value="{{ s }}" {{ 'selected' if filters.status == s else '' }}>{{ s.replace('_', ' ').title() }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="actions"><button type="submit">Filter</button><a class="btn secondary" href="{{ url_for('doctor.appointments') }}">Clear</a></div>
+  </form>
+</div>
+{% if data['items'] %}
+<div class="card">
+  <div class="table-wrap">
+  <table id="doctor-appointments">
+    <thead><tr><th>When</th><th>Patient</th><th>Consultation</th><th>Fee</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for a in data['items'] %}
+      <tr>
+        <td class="nowrap">{{ a.date }}<br><span class="muted small">{{ a.start_time }}&ndash;{{ a.end_time }}</span></td>
+        <td>{{ a.patient.name }}<br><span class="muted small">{{ a.patient.phone }}</span></td>
+        <td>{{ a.consultation_type.type_name }}</td>
+        <td>&#8377;{{ '%g' % a.fee }}</td>
+        <td><span class="tag {{ 'blocked' if a.status != 'CONFIRMED' and a.status != 'COMPLETED' else '' }}">{{ a.status.replace('_', ' ').title() }}</span>
+          {% if a.refund %}<br><span class="muted small">Refunded &#8377;{{ '%.2f' % a.refund.amount }}</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+<p class="actions pager">
+  {% if offset > 0 %}<a class="btn secondary" href="{{ url_for('doctor.appointments', offset=[offset - page_size, 0]|max, status=filters.status, **{'from': filters['from'], 'to': filters['to']}) }}">&larr; Previous</a>{% endif %}
+  <span class="muted">Showing {{ offset + 1 }}&ndash;{{ offset + data['items']|length }} of {{ data.total }}</span>
+  {% if data.has_more %}<a class="btn secondary" href="{{ url_for('doctor.appointments', offset=offset + page_size, status=filters.status, **{'from': filters['from'], 'to': filters['to']}) }}">Next &rarr;</a>{% endif %}
+</p>
+{% else %}
+<div class="card empty"><p class="muted">No appointments match.</p></div>
+{% endif %}
+{% endblock %}

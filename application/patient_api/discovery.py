@@ -5,14 +5,17 @@ Search index choices (see docs/milestone-4.md for the full justification):
 * hospital       -> prefix match on hospitals.hospital_name (ix_hospitals_name)
 * city           -> prefix match on hospitals.city (ix_hospitals_city_active)
 * specialisation -> substring match on specialisations.specialisation_name (tiny reference table, unique index)
+* consultation_type -> exact type name; doctors who OFFER it (EXISTS on doctor_consultation_types, whose primary key
+                       (doctor_id, consultation_type_id) makes the lookup a single index probe per doctor)
 A prefix pattern ('abc%') can use a B-tree index; a leading wildcard ('%abc%') cannot.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from application.common.api import ApiError, as_date, fmt_time, money, parse_date
+from application.common import slot_query
+from application.common.api import ApiError, money, parse_date
 
-MAX_RANGE_DAYS = 14
+MAX_RANGE_DAYS = slot_query.MAX_RANGE_DAYS
 MAX_LIMIT = 50
 
 
@@ -61,6 +64,13 @@ def search(conn, q):
     if specialisation:
         conditions.append("s.specialisation_name LIKE %s")
         values.append("%" + _like_escape(specialisation) + "%")
+    consultation_type = q.get("consultation_type")
+    if consultation_type:
+        conditions.append(
+            "EXISTS (SELECT 1 FROM doctor_consultation_types dct JOIN consultation_types ct "
+            "ON ct.consultation_type_id = dct.consultation_type_id "
+            "WHERE dct.doctor_id = d.doctor_id AND ct.type_name = %s)")
+        values.append(consultation_type)
     legacy = q.get("search")  # kept for the older single-box search: doctor name OR hospital
     if legacy:
         conditions.append("(d.last_name LIKE %s OR d.first_name LIKE %s OR h.hospital_name LIKE %s)")
@@ -79,8 +89,27 @@ def search(conn, q):
             + joins + " ORDER BY d.last_name, d.first_name, d.doctor_id LIMIT %s OFFSET %s",
             tuple(values + [limit, offset]))
         rows = cur.fetchall()
+        _attach_consultation_types(cur, rows)
     return 200, {"items": rows, "count": len(rows), "total": total, "limit": limit, "offset": offset,
                  "has_more": offset + len(rows) < total}
+
+
+def _attach_consultation_types(cur, rows):
+    """Add consultation_types [{type_name, duration_minutes, fee}] to each doctor on the page (one query)."""
+    if not rows:
+        return
+    ids = [r["doctor_id"] for r in rows]
+    cur.execute(
+        "SELECT dct.doctor_id, ct.type_name, ct.duration_minutes, dct.fee "
+        "FROM doctor_consultation_types dct JOIN consultation_types ct "
+        "ON ct.consultation_type_id = dct.consultation_type_id "
+        f"WHERE dct.doctor_id IN ({', '.join(['%s'] * len(ids))}) ORDER BY ct.duration_minutes, ct.type_name", ids)
+    by_doctor = {}
+    for t in cur.fetchall():
+        by_doctor.setdefault(t["doctor_id"], []).append(
+            {"type_name": t["type_name"], "duration_minutes": int(t["duration_minutes"]), "fee": money(t["fee"])})
+    for r in rows:
+        r["consultation_types"] = by_doctor.get(r["doctor_id"], [])
 
 
 def doctor_profile(conn, doctor_id):
@@ -123,7 +152,11 @@ def _range(q):
 
 
 def slots(conn, doctor_id, q, now_utc=None):
-    """Open slots with free seats for one date (?date=) or a date range (?from=&to=, max 14 days)."""
+    """Open slots with free seats for one date (?date=) or a date range (?from=&to=, max 14 days).
+
+    The rows come from application.common.slot_query (shared with the doctor's schedule); this
+    function only keeps the ones a patient can still book.
+    """
     if not doctor_id:
         raise ApiError(400, "MISSING_PARAMETERS", "doctor_id is required.")
     start, end, single = _range(q)
@@ -133,35 +166,10 @@ def slots(conn, doctor_id, q, now_utc=None):
         doctor = cur.fetchone()
         if not doctor:
             raise ApiError(404, "DOCTOR_NOT_FOUND", "Doctor was not found.")
-        cur.execute(
-            "SELECT s.slot_id, s.`date`, s.start_time, s.end_time, s.start_utc, s.end_utc, s.capacity, s.booked_count, "
-            "s.status, ct.consultation_type_id, ct.type_name, ct.duration_minutes, dct.fee "
-            "FROM materialised_slots s "
-            "JOIN consultation_types ct ON ct.consultation_type_id = s.consultation_type_id "
-            "JOIN doctor_consultation_types dct ON dct.doctor_id = s.doctor_id "
-            "     AND dct.consultation_type_id = s.consultation_type_id "
-            "WHERE s.doctor_id = %s AND s.`date` BETWEEN %s AND %s AND s.start_utc > %s "
-            "ORDER BY s.start_utc", (doctor_id, start, end, now_utc))
-        rows = cur.fetchall()
-    items, by_day = [], {}
-    day = start
-    while day <= end:
-        by_day[day.isoformat()] = []
-        day += timedelta(days=1)
-    for r in rows:
-        free = max(0, int(r["capacity"]) - int(r["booked_count"]))
-        if r["status"] != "OPEN" or free == 0:
-            continue
-        item = {"slot_id": r["slot_id"], "date": as_date(r["date"]).isoformat(),
-                "start_time": fmt_time(r["start_time"]), "end_time": fmt_time(r["end_time"]),
-                "start_utc": r["start_utc"], "end_utc": r["end_utc"], "capacity": int(r["capacity"]),
-                "booked_count": int(r["booked_count"]), "available_seats": free, "status": r["status"],
-                "consultation_type_id": r["consultation_type_id"], "type_name": r["type_name"],
-                "duration_minutes": int(r["duration_minutes"]), "fee": money(r["fee"])}
-        items.append(item)
-        by_day[item["date"]].append(item)
+    items = [s for s in slot_query.fetch_slots(conn, doctor_id, start, end, after_utc=now_utc)
+             if slot_query.is_bookable(s)]
     body = {"doctor_id": doctor_id, "timezone": doctor["timezone"], "from": start.isoformat(), "to": end.isoformat(),
-            "slots": items, "days": [{"date": d, "slots": s} for d, s in by_day.items()]}
+            "slots": items, "days": slot_query.group_by_day(items, start, end)}
     if single:
         body["date"] = start.isoformat()
     return 200, body

@@ -10,3 +10,6 @@ Doctor appointment booking platform on AWS (Lambda, API Gateway, RDS MySQL, Dyna
 * `docs/` - data model, milestone notes (`docs/milestone-3.md`)
 
 Run the tests locally: `pip install -r requirements-dev.txt && python -m pytest tests/unit -v`
+
+## Milestone 5
+Booking, cancellation and refunds: see docs/milestone-5.md and docs/concurrency-design-note.md. Live checks: scripts/smoke_test.py, scripts/concurrency_check.py.

@@ -3,6 +3,7 @@
 import re
 import sqlite3
 from datetime import date, datetime
+from decimal import Decimal
 
 
 class Cursor:
@@ -18,12 +19,14 @@ class Cursor:
 
     @staticmethod
     def _sql(sql):
-        sql = sql.replace("%s", "?").replace("`", '"').replace("GREATEST(", "MAX(")
+        sql = sql.replace("%s", "?").replace("`", '"').replace("GREATEST(", "MAX(").replace(" FOR UPDATE", "")
         # MySQL's LIKE escape character is a backslash by default; SQLite needs it spelled out.
         return re.sub(r"LIKE \?", "LIKE ? ESCAPE '\\\\'", sql)
 
     @staticmethod
     def _arg(value):
+        if isinstance(value, Decimal):
+            return float(value)  # PyMySQL sends Decimal natively; SQLite needs a float
         if isinstance(value, datetime):
             return value.isoformat(sep=" ")
         if isinstance(value, date):
@@ -59,6 +62,64 @@ class Conn:
 
     def close(self):
         pass
+
+    def q(self, sql, *params):
+        return self.db.execute(sql, params).fetchall()
+
+
+class FileDb:
+    """A SQLite FILE shared by many connections, for tests that run bookings on real threads.
+
+    Every connection is its own transaction scope. A write transaction is opened lazily with
+    BEGIN IMMEDIATE just before the first INSERT/UPDATE/DELETE, so the read-and-reserve phase of a
+    booking (before it writes anything) really runs concurrently in every thread, as it does on MySQL.
+    """
+
+    def __init__(self, path, schema):
+        self.path = str(path)
+        boot = sqlite3.connect(self.path)
+        boot.executescript(schema)
+        boot.commit()
+        boot.close()
+
+    def connect(self):
+        return _FileConn(self.path)
+
+
+class _FileCursor(Cursor):
+    def __init__(self, conn):
+        self._conn = conn
+        self._c = conn.db.cursor()
+        self.rowcount = 0
+
+    def execute(self, sql, params=()):
+        if re.match(r"\s*(INSERT|UPDATE|DELETE)", sql, re.I) and not self._conn.in_tx:
+            self._conn.db.execute("BEGIN IMMEDIATE")
+            self._conn.in_tx = True
+        super().execute(sql, params)
+
+
+class _FileConn:
+    def __init__(self, path):
+        self.db = sqlite3.connect(path, timeout=60, isolation_level=None, check_same_thread=False)
+        self.in_tx = False
+
+    def cursor(self):
+        return _FileCursor(self)
+
+    def commit(self):
+        if self.in_tx:
+            self.db.execute("COMMIT")
+            self.in_tx = False
+
+    def rollback(self):
+        if self.in_tx:
+            self.db.execute("ROLLBACK")
+            self.in_tx = False
+
+    def close(self):
+        self.rollback()
+        self.db.close()
 
     def q(self, sql, *params):
         return self.db.execute(sql, params).fetchall()

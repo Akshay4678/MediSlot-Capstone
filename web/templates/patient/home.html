@@ -1,11 +1,13 @@
 {% extends "base.html" %}
-{% block title %}Patient - MediSlot{% endblock %}
+{% block title %}Find a doctor - MediSlot{% endblock %}
 {% block content %}
-<h1>Patient portal</h1>
+<section class="page-head">
+  <h1>Find a doctor</h1>
+  <p class="muted">Search by name, hospital, city, specialisation or the kind of consultation you need.</p>
+</section>
 
-<div class="card">
-  <h2>Find a doctor</h2>
-  <form method="get" action="{{ url_for('patient.home') }}" class="form-grid">
+<div class="card search-card">
+  <form method="get" action="{{ url_for('patient.home') }}" class="search-grid">
     <label>Doctor name
       <input name="name" value="{{ filters.name }}" placeholder="Asha or Asha Rao">
     </label>
@@ -18,43 +20,58 @@
     <label>Specialisation
       <input name="specialisation" value="{{ filters.specialisation }}" placeholder="Cardiology">
     </label>
-    <div class="actions">
+    <label>Consultation type
+      <select name="consultation_type">
+        <option value="">Any type</option>
+        {% for t in consultation_types %}
+        <option value="{{ t }}" {{ 'selected' if filters.consultation_type == t else '' }}>{{ t }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="actions search-actions">
       <button type="submit">Search</button>
-      <a href="{{ url_for('patient.home') }}">Clear</a>
+      <a class="btn secondary" href="{{ url_for('patient.home') }}">Clear</a>
     </div>
   </form>
 </div>
 
-<div class="card">
+<div class="results-head">
   <h2>Doctors <span class="muted small">({{ total }} found)</span></h2>
-  {% if doctors %}
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Doctor</th><th>Specialisation</th><th>Hospital</th><th>Experience</th><th></th></tr></thead>
-        <tbody>
-        {% for d in doctors %}
-          <tr>
-            <td><a href="{{ url_for('patient.doctor', doctor_id=d.doctor_id) }}">Dr. {{ d.first_name }} {{ d.last_name }}</a></td>
-            <td>{{ d.specialisation }}</td>
-            <td>{{ d.hospital_name }}, {{ d.city }}</td>
-            <td>{{ d.experience_years }} years</td>
-            <td><a class="button-link" href="{{ url_for('patient.slots', doctor_id=d.doctor_id) }}">View slots</a></td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <p class="actions" id="pager">
-      {% if offset > 0 %}
-        <a class="button-link" href="{{ url_for('patient.home', name=filters.name, hospital=filters.hospital, city=filters.city, specialisation=filters.specialisation, offset=[offset - page_size, 0]|max) }}">&larr; Previous</a>
-      {% endif %}
-      <span class="muted">Showing {{ offset + 1 }}&ndash;{{ offset + doctors|length }} of {{ total }}</span>
-      {% if has_more %}
-        <a class="button-link" href="{{ url_for('patient.home', name=filters.name, hospital=filters.hospital, city=filters.city, specialisation=filters.specialisation, offset=offset + page_size) }}">Next &rarr;</a>
-      {% endif %}
-    </p>
-  {% else %}
-    <p class="muted">No active doctors matched your search.</p>
-  {% endif %}
+  {% for key, value in filters.items() if value %}<span class="chip">{{ value }}</span>{% endfor %}
 </div>
+
+{% if doctors %}
+  <div class="doctor-list">
+  {% for d in doctors %}
+    <article class="doctor-card">
+      <div class="avatar" aria-hidden="true">{{ d.first_name[:1] }}{{ d.last_name[:1] }}</div>
+      <div class="doctor-main">
+        <h3><a href="{{ url_for('patient.doctor', doctor_id=d.doctor_id) }}">Dr. {{ d.first_name }} {{ d.last_name }}</a></h3>
+        <p class="muted">{{ d.specialisation }} &middot; {{ d.hospital_name }}, {{ d.city }} &middot; {{ d.experience_years }} years</p>
+        {% if d.consultation_types %}
+        <p class="type-chips">
+          {% for t in d.consultation_types %}<span class="chip type">{{ t.type_name }} &middot; &#8377;{{ '%g' % t.fee }}</span>{% endfor %}
+        </p>
+        {% endif %}
+      </div>
+      <div class="doctor-actions">
+        <a class="btn" href="{{ url_for('patient.slots', doctor_id=d.doctor_id) }}">View slots</a>
+        <a class="btn secondary" href="{{ url_for('patient.doctor', doctor_id=d.doctor_id) }}">Profile</a>
+      </div>
+    </article>
+  {% endfor %}
+  </div>
+
+  <p class="actions pager" id="pager">
+    {% if offset > 0 %}
+      <a class="btn secondary" href="{{ url_for('patient.home', name=filters.name, hospital=filters.hospital, city=filters.city, specialisation=filters.specialisation, consultation_type=filters.consultation_type, offset=[offset - page_size, 0]|max) }}">&larr; Previous</a>
+    {% endif %}
+    <span class="muted">Showing {{ offset + 1 }}&ndash;{{ offset + doctors|length }} of {{ total }}</span>
+    {% if has_more %}
+      <a class="btn secondary" href="{{ url_for('patient.home', name=filters.name, hospital=filters.hospital, city=filters.city, specialisation=filters.specialisation, consultation_type=filters.consultation_type, offset=offset + page_size) }}">Next &rarr;</a>
+    {% endif %}
+  </p>
+{% else %}
+  <div class="card empty"><p class="muted">No active doctors matched your search.</p></div>
+{% endif %}
 {% endblock %}

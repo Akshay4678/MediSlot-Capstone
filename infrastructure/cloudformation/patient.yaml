@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: MediSlot Milestone 4 patient-domain API (profile, doctor search, public doctor profile, slot availability).
+Description: MediSlot patient-domain API (profile, doctor search, slot availability) and the Milestone 5 booking engine (appointments, cancellation, refunds).
 
 Parameters:
   ProjectName:
@@ -24,6 +24,15 @@ Parameters:
   DatabaseName:
     Type: String
     Default: medislot
+  SlotCapacityTableName:
+    Type: String
+    Description: DynamoDB table holding the version-checked seat counter of each slot.
+  IdempotencyTableName:
+    Type: String
+    Description: DynamoDB table holding Idempotency-Key records.
+  EventBusName:
+    Type: String
+    Description: EventBridge bus that receives the appointment events.
 
 Resources:
   PatientApiRole:
@@ -53,6 +62,27 @@ Resources:
                 Effect: Allow
                 Action: ssm:GetParameter
                 Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${EnvironmentName}/rules/*'
+              - Sid: SeatCounterAndIdempotency
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${SlotCapacityTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${IdempotencyTableName}'
+              - Sid: PublishAppointmentEvents
+                Effect: Allow
+                Action: events:PutEvents
+                Resource: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}'
+              - Sid: PublishMetrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: MediSlot
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -78,6 +108,9 @@ Resources:
           DB_HOST: !Ref DatabaseHost
           DB_NAME: !Ref DatabaseName
           SSM_PREFIX: !Sub '/${ProjectName}/${EnvironmentName}'
+          SLOT_CAPACITY_TABLE_NAME: !Ref SlotCapacityTableName
+          IDEMPOTENCY_TABLE_NAME: !Ref IdempotencyTableName
+          EVENT_BUS_NAME: !Ref EventBusName
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds
         SecurityGroupIds:

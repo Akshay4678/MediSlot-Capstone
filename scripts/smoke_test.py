@@ -23,10 +23,10 @@ CODE = os.environ.get("DOCTOR_REGISTRATION_CODE", "")
 steps = 0
 
 
-def call(method, path, token=None, body=None):
+def call(method, path, token=None, body=None, headers=None):
     data = json.dumps(body).encode() if body is not None else None
     request = urllib.request.Request(BASE + path, data=data, method=method,
-                                     headers={"Content-Type": "application/json"})
+                                     headers=dict({"Content-Type": "application/json"}, **(headers or {})))
     if token:
         request.add_header("Authorization", f"Bearer {token}")
     try:
@@ -214,6 +214,61 @@ def main():
     expect("slot range limit", call(
         "GET", f"/doctors/{doctor_id}/slots?from={monday.isoformat()}&to={(monday + timedelta(days=40)).isoformat()}",
         a_token), 400)
+
+    # ------------------------------------------------- booking, cancellation, refunds (Milestone 5)
+    book_day = date.today() + timedelta(days=4)  # >= 3.4 days away, so a cancellation earns a FULL refund
+    while book_day.isoweekday() > 5:
+        book_day += timedelta(days=1)
+    open_slots = expect("slots for the booking day", call(
+        "GET", f"/doctors/{doctor_id}/slots?date={book_day.isoformat()}", a_token), 200)["slots"]
+    assert len(open_slots) >= 2, open_slots
+    slot_one, slot_two = open_slots[0]["slot_id"], open_slots[1]["slot_id"]
+    key = f"smoke-{run}-1"
+
+    first_booking = expect("book a slot", call("POST", "/appointments", a_token, {"slot_id": slot_one},
+                           headers={"Idempotency-Key": key}), 201)["appointment"]
+    assert first_booking["status"] == "CONFIRMED" and first_booking["fee"] == 550.0, first_booking
+    replay = expect("same Idempotency-Key replayed", call("POST", "/appointments", a_token, {"slot_id": slot_one},
+                    headers={"Idempotency-Key": key}), 201)
+    assert replay["idempotent_replay"] is True and replay["appointment"]["appointment_id"] == first_booking["appointment_id"]
+    expect("same key, different request rejected", call("POST", "/appointments", a_token, {"slot_id": slot_two},
+           headers={"Idempotency-Key": key}), 422)
+    expect("full slot returns 409", call("POST", "/appointments", b_token, {"slot_id": slot_one}), 409)
+    expect("unknown slot returns 404", call("POST", "/appointments", b_token, {"slot_id": "no-such-slot"}), 404)
+    expect("patient id in the body is refused", call("POST", "/appointments", b_token,
+           {"slot_id": slot_two, "patient_id": mine["patient_id"]}), 400)
+    gone = {s["slot_id"] for s in call("GET", f"/doctors/{doctor_id}/slots?date={book_day.isoformat()}", a_token)[1]["slots"]}
+    assert slot_one not in gone, "a full slot must disappear from the patient's slot list"
+
+    listing = expect("my appointments", call("GET", "/appointments", a_token), 200)
+    assert listing["total"] == 1 and listing["items"][0]["appointment_id"] == first_booking["appointment_id"], listing
+    expect("appointment detail", call("GET", f"/appointments/{first_booking['appointment_id']}", a_token), 200)
+    expect("another patient cannot read it", call("GET", f"/appointments/{first_booking['appointment_id']}", b_token), 404)
+    expect("another patient cannot cancel it", call("POST", f"/appointments/{first_booking['appointment_id']}/cancel", b_token), 404)
+    assert call("GET", "/appointments", b_token)[1]["total"] == 0
+    expect("doctor token rejected on patient bookings (403)", call("GET", "/appointments", token), 403)
+    seen = expect("doctor sees the booking", call("GET", "/doctors/me/appointments", token), 200)
+    assert seen["total"] == 1 and seen["items"][0]["patient"]["name"] == "Smoke Patient", seen
+    expect("patient token rejected on doctor appointments (403)", call("GET", "/doctors/me/appointments", a_token), 403)
+
+    cancelled = expect("patient cancels (48 h or more ahead)", call(
+        "POST", f"/appointments/{first_booking['appointment_id']}/cancel", a_token, {"reason": "smoke"}), 200)["appointment"]
+    assert cancelled["status"] == "CANCELLED_BY_PATIENT" and cancelled["refund"]["tier"] == "FULL"
+    assert cancelled["refund"]["amount"] == 550.0 and cancelled["refund"]["percentage"] == 100.0, cancelled
+    expect("cancel twice rejected", call("POST", f"/appointments/{first_booking['appointment_id']}/cancel", a_token), 409)
+    reopened_ids = {s["slot_id"] for s in call("GET", f"/doctors/{doctor_id}/slots?date={book_day.isoformat()}", a_token)[1]["slots"]}
+    assert slot_one in reopened_ids, "the cancelled seat must be bookable again"
+
+    second_booking = expect("book the second slot", call("POST", "/appointments", a_token, {"slot_id": slot_two}), 201)["appointment"]
+    expect("doctor cancels the slot", call("POST", "/doctors/me/slots/cancel", token,
+           {"slot_id": slot_two, "reason": "smoke"}), 200)
+    expect("cancelled slot cannot be booked", call("POST", "/appointments", b_token, {"slot_id": slot_two}), 409)
+    after = call("GET", f"/appointments/{second_booking['appointment_id']}", a_token)[1]["appointment"]
+    assert after["status"] == "CANCELLED_BY_DOCTOR" and after["refund"]["tier"] == "DOCTOR_CANCELLED", after
+    ledger = expect("refund ledger", call("GET", "/refunds", a_token), 200)
+    assert ledger["total"] == 2 and ledger["total_refunded"] == 1100.0, ledger
+    expect("other patient has no refunds", call("GET", "/refunds", b_token), 200)
+    expect("doctor token rejected on refunds (403)", call("GET", "/refunds", token), 403)
 
     # Clean up the throw-away patients.
     expect("patient profile delete", call("DELETE", "/patient/me", b_token), 200)

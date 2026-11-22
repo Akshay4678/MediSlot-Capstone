@@ -7,9 +7,10 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from application.common.api import ApiError, as_date, fmt_time, fmt_utc, money, parse_date
+from application.common import slot_query
+from application.common.api import ApiError, as_date, parse_date
 
-MAX_RANGE_DAYS = 14
+MAX_RANGE_DAYS = slot_query.MAX_RANGE_DAYS
 ACTIVE_STATUSES = ("CONFIRMED", "COMPLETED", "NO_SHOW")
 
 
@@ -32,17 +33,9 @@ def get(ctx):
     doctor = ctx.doctor()
     start, end = _range(ctx, doctor)
 
-    with ctx.conn.cursor() as cur:
-        cur.execute(
-            "SELECT s.slot_id, s.`date`, s.start_time, s.end_time, s.start_utc, s.end_utc, s.capacity, "
-            "       s.booked_count, s.status, ct.type_name, ct.duration_minutes, dct.fee "
-            "FROM materialised_slots s JOIN consultation_types ct ON ct.consultation_type_id = s.consultation_type_id "
-            "JOIN doctor_consultation_types dct ON dct.doctor_id = s.doctor_id "
-            "     AND dct.consultation_type_id = s.consultation_type_id "
-            "WHERE s.doctor_id = %s AND s.`date` BETWEEN %s AND %s ORDER BY s.start_utc",
-            (doctor["doctor_id"], start, end))
-        slot_rows = cur.fetchall()
+    slot_rows = slot_query.fetch_slots(ctx.conn, doctor["doctor_id"], start, end)
 
+    with ctx.conn.cursor() as cur:
         bookings = defaultdict(list)
         if slot_rows:
             ids = [r["slot_id"] for r in slot_rows]
@@ -69,14 +62,9 @@ def get(ctx):
                                  "blackout_reason": blackout_by_date.get(day.isoformat(), ""), "slots": []}
         day += timedelta(days=1)
 
-    for r in slot_rows:
-        patients = [b for b in bookings[r["slot_id"]] if b["status"] in ACTIVE_STATUSES]
-        days[as_date(r["date"]).isoformat()]["slots"].append({
-            "slot_id": r["slot_id"], "start_time": fmt_time(r["start_time"]), "end_time": fmt_time(r["end_time"]),
-            "start_utc": fmt_utc(r["start_utc"]), "end_utc": fmt_utc(r["end_utc"]), "type_name": r["type_name"],
-            "duration_minutes": int(r["duration_minutes"]), "fee": money(r["fee"]), "capacity": int(r["capacity"]),
-            "booked_count": int(r["booked_count"]), "available_seats": max(0, int(r["capacity"]) - int(r["booked_count"])),
-            "status": r["status"], "appointments": patients})
+    for slot in slot_rows:
+        slot["appointments"] = [b for b in bookings[slot["slot_id"]] if b["status"] in ACTIVE_STATUSES]
+        days[slot["date"]]["slots"].append(slot)
 
     # A blackout day overrides any weekly availability. Hide the BLOCKED slots the materialiser
     # created, and keep only slots that already hold an active appointment so the doctor stil

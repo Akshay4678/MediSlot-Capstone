@@ -850,3 +850,37 @@ def schedule():
             anchor + step
         ).isoformat(),
     )
+
+# ---------------------------------------------------------------- Milestone 5: appointments and slot cancellation
+@bp.route("/appointments", endpoint="appointments")
+@role_required("doctor")
+def appointments():
+    try:
+        offset = max(0, int(request.args.get("offset", "0")))
+    except ValueError:
+        offset = 0
+    page_size = 15
+    params = {"limit": page_size, "offset": offset}
+    for name in ("from", "to", "status"):
+        if request.args.get(name):
+            params[name] = request.args[name].strip()
+    data = api_client.call("GET", "/doctors/me/appointments", params=params)
+    return render_template("doctor/appointments.html", data=data, offset=offset, page_size=page_size,
+                           filters={k: request.args.get(k, "") for k in ("from", "to", "status")})
+
+
+@bp.route("/slots/cancel", methods=["POST"], endpoint="cancel_slot")
+@role_required("doctor")
+def cancel_slot():
+    body = {"slot_id": request.form.get("slot_id", "").strip()}
+    reason = request.form.get("reason", "").strip()
+    if reason:
+        body["reason"] = reason
+    back = request.form.get("date", "")
+    try:
+        data = api_client.call("POST", "/doctors/me/slots/cancel", body)
+        flash(f"Slot cancelled. {data['cancelled_appointments']} appointment(s) refunded in full "
+              f"(₹{data['refunds_total']:.2f}).", "success")
+    except ApiError as exc:
+        flash(exc.message, "error")
+    return redirect(url_for("doctor.schedule", date=back) if back else url_for("doctor.schedule"))

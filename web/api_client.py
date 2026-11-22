@@ -24,8 +24,9 @@ def base_url():
     return os.environ.get("API_BASE_URL", "").rstrip("/")
 
 
-def _send(method, path, token=None, json_body=None, params=None):
+def _send(method, path, token=None, json_body=None, params=None, extra_headers=None):
     headers = {"Accept": "application/json"}
+    headers.update(extra_headers or {})
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
@@ -52,19 +53,19 @@ def public(method, path, json_body=None):
     return data
 
 
-def call(method, path, json_body=None, params=None):
+def call(method, path, json_body=None, params=None, headers=None):
     """Call a protected endpoint with the session's token; refresh once on 401."""
     session = sessions.current()
     if not session:
         raise SessionExpired()
 
-    status, data = _send(method, path, session["access_token"], json_body, params)
+    status, data = _send(method, path, session["access_token"], json_body, params, headers)
     if status == 401 and session.get("refresh_token"):
         r_status, r_data = _send("POST", "/auth/refresh", json_body={"refresh_token": session["refresh_token"]})
         if r_status == 200 and r_data.get("access_token"):
             session["access_token"] = r_data["access_token"]
             session["refresh_token"] = r_data.get("refresh_token", session["refresh_token"])
-            status, data = _send(method, path, session["access_token"], json_body, params)
+            status, data = _send(method, path, session["access_token"], json_body, params, headers)
     if status == 401:
         sessions.destroy()
         raise SessionExpired()

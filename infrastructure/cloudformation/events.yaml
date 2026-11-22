@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  MediSlot Milestone 5 appointment events. The booking engine publishes AppointmentBooked,
+  AppointmentCancelled and SlotSeatFreed (source medislot.appointments) to this bus. A rule copies every event
+  to a CloudWatch Logs group so the events can be seen and checked; later milestones add more targets
+  (notifications, waitlist) without touching the publisher.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: medislot
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+
+Resources:
+  AppointmentEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-events'
+
+  AppointmentEventLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/events/${ProjectName}-${EnvironmentName}-appointments'
+      RetentionInDays: 30
+
+  AppointmentEventLogPolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: !Sub '${ProjectName}-${EnvironmentName}-appointment-events-to-logs'
+      PolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "EventBridgeToLogs",
+              "Effect": "Allow",
+              "Principal": {"Service": ["events.amazonaws.com", "delivery.logs.amazonaws.com"]},
+              "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+              "Resource": "${AppointmentEventLogGroup.Arn}:*"
+            }
+          ]
+        }
+
+  AppointmentEventsToLogsRule:
+    Type: AWS::Events::Rule
+    DependsOn: AppointmentEventLogPolicy
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-appointment-events-to-logs'
+      EventBusName: !Ref AppointmentEventBus
+      EventPattern:
+        source:
+          - medislot.appointments
+        detail-type:
+          - AppointmentBooked
+          - AppointmentCancelled
+          - SlotSeatFreed
+      State: ENABLED
+      Targets:
+        - Id: AppointmentEventLog
+          Arn: !GetAtt AppointmentEventLogGroup.Arn
+
+Outputs:
+  EventBusName:
+    Description: Name of the appointment event bus.
+    Value: !Ref AppointmentEventBus
+  EventBusArn:
+    Value: !GetAtt AppointmentEventBus.Arn
+  EventLogGroupName:
+    Description: CloudWatch Logs group that receives a copy of every appointment event.
+    Value: !Ref AppointmentEventLogGroup

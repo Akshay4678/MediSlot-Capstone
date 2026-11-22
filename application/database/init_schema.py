@@ -282,6 +282,50 @@ def _ensure_email_reuse(cursor):
         cursor.execute("DROP INDEX uq_users_email ON users")
 
 
+APPOINTMENT_COLUMNS = (
+    ("fee_amount", "DECIMAL(10,2) NOT NULL DEFAULT 0"),
+    ("idempotency_key", "VARCHAR(128) NULL"),
+    ("starts_at_utc", "DATETIME NULL"),
+    ("ends_at_utc", "DATETIME NULL"),
+    ("local_date", "DATE NULL"),
+    ("local_start", "TIME NULL"),
+    ("local_end", "TIME NULL"),
+    ("timezone", "VARCHAR(64) NULL"),
+    ("cancelled_at", "TIMESTAMP(6) NULL"),
+    ("cancellation_reason", "VARCHAR(255) NULL"),
+)
+APPOINTMENT_INDEXES = (
+    ("uq_appt_patient_idem", "UNIQUE", "(patient_id, idempotency_key)"),
+    ("uq_appt_patient_slot_active", "UNIQUE", "(patient_id, slot_id, active_flag)"),
+    ("ix_appointments_patient_start", "", "(patient_id, starts_at_utc)"),
+    ("ix_appointments_doctor_start", "", "(doctor_id, starts_at_utc)"),
+)
+
+
+def _ensure_booking_columns(cursor):
+    """Milestone 5 additions to appointments and refund_ledger. Every step checks first, so it is safe on every deploy."""
+    if _table_exists(cursor, "appointments"):
+        for column, definition in APPOINTMENT_COLUMNS:
+            if not _column_exists(cursor, "appointments", column):
+                logger.info("Adding appointments.%s", column)
+                cursor.execute(f"ALTER TABLE appointments ADD COLUMN {column} {definition}")
+        if not _column_exists(cursor, "appointments", "active_flag"):
+            logger.info("Adding appointments.active_flag")
+            cursor.execute(
+                "ALTER TABLE appointments ADD COLUMN active_flag TINYINT "
+                "GENERATED ALWAYS AS (IF(status = 'CONFIRMED', 1, NULL)) VIRTUAL")
+        for name, kind, columns in APPOINTMENT_INDEXES:
+            if not _index_exists(cursor, "appointments", name):
+                logger.info("Creating index %s", name)
+                prefix = f"{kind} " if kind else ""
+                cursor.execute(f"CREATE {prefix}INDEX {name} ON appointments {columns}")
+    if _table_exists(cursor, "refund_ledger"):
+        if not _column_exists(cursor, "refund_ledger", "fee_amount"):
+            cursor.execute("ALTER TABLE refund_ledger ADD COLUMN fee_amount DECIMAL(10,2) NOT NULL DEFAULT 0")
+        if not _column_exists(cursor, "refund_ledger", "refund_tier"):
+            cursor.execute("ALTER TABLE refund_ledger ADD COLUMN refund_tier VARCHAR(20) NOT NULL DEFAULT 'NONE'")
+
+
 def _prepare_consultation_type_split(cursor):
     """Step 1: detach and rename the old per-doctor table so schema.sql can create the new ones.
 
@@ -403,6 +447,7 @@ def initialize_database():
             _ensure_extra_indexes(cursor)
             _ensure_patient_is_active(cursor)
             _ensure_email_reuse(cursor)
+            _ensure_booking_columns(cursor)
 
             cursor.execute(
                 "INSERT INTO schema_meta (id, version) VALUES (1, %s) "

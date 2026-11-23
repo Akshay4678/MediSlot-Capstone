@@ -268,3 +268,22 @@ def test_a_fresh_schema_and_an_upgraded_one_define_the_same_booking_columns():
     assert "refund_tier VARCHAR(20)" in sql
     for name, _, _ in db_schema.APPOINTMENT_INDEXES:
         assert name in sql
+
+
+# ------------------------------------------------------------------------------ misconfigured tables
+class _MissingTable(Exception):
+    response = {"Error": {"Code": "ResourceNotFoundException", "Message": "Requested resource not found"}}
+
+
+def test_a_missing_dynamodb_table_is_a_clean_503_not_a_stack_trace(world, monkeypatch):
+    conn, deps = world
+
+    def boom(*args, **kwargs):
+        raise _MissingTable()
+
+    monkeypatch.setattr(deps.idempotency, "begin", boom)
+    status, body = call(patient_handler, "POST", "/appointments", body={"slot_id": "slot"}, headers={"Idempotency-Key": "k-1"})
+    assert (status, body["error"]) == (503, "BOOKING_STORE_UNAVAILABLE")
+    assert "ResourceNotFound" not in json.dumps(body)
+    # nothing was booked
+    assert call(patient_handler, "GET", "/appointments")[1]["total"] == 0

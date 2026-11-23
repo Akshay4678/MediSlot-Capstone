@@ -10,6 +10,7 @@ import logging
 
 from application.common.api import ApiError
 from application.common.http import request_body, request_method, response
+from application.booking.errors import is_missing_table
 from application.database.connection import get_connection
 from application.doctor_api import (appointments, availability, blackouts, catalogue, consultation_types, photo, profile,
                                     schedule)
@@ -105,10 +106,12 @@ def lambda_handler(event, context):
         if conn:
             conn.rollback()
         return _error(exc.status, exc.code, exc.message)
-    except Exception:  # noqa: BLE001 - details stay in CloudWatch
+    except Exception as exc:  # noqa: BLE001 - details stay in CloudWatch
         if conn:
             conn.rollback()
         log.error(json.dumps({"event": "unhandled_error", "method": method, "resource": resource}), exc_info=True)
+        if is_missing_table(exc):
+            return _error(503, "BOOKING_STORE_UNAVAILABLE", "Booking is temporarily unavailable. Please try again later.")
         return _error(500, "INTERNAL_SERVER_ERROR", "The request could not be completed.")
     finally:
         if conn:

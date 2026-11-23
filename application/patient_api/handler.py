@@ -16,6 +16,7 @@ from application.common.auth_context import claims
 from application.common.http import request_body, request_method, response
 from application.booking import service as booking
 from application.booking.deps import default_deps
+from application.booking.errors import is_missing_table
 from application.database.connection import get_connection
 from application.patient_api import discovery, profile as patient_profile
 
@@ -132,6 +133,10 @@ def lambda_handler(event, context):
         return _error(400, "INVALID_REQUEST", str(exc))
     except Exception as exc:
         log.exception("Patient API failed")
+        if is_missing_table(exc):
+            log.error("A DynamoDB table named in the Lambda settings does not exist: idempotency=%s slot_capacity=%s",
+                      os.environ.get("IDEMPOTENCY_TABLE_NAME"), os.environ.get("SLOT_CAPACITY_TABLE_NAME"))
+            return _error(503, "BOOKING_STORE_UNAVAILABLE", "Booking is temporarily unavailable. Please try again later.")
         # In dev only, include the real cause so it shows on the web page without opening CloudWatch.
         detail = f" [{type(exc).__name__}: {exc}]" if os.environ.get("ENVIRONMENT_NAME") == "dev" else ""
         return _error(500, "INTERNAL_SERVER_ERROR", "The request could not be completed." + detail)

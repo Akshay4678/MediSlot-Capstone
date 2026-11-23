@@ -17,3 +17,6 @@
 
 Run: `pytest tests/unit` (273 tests). Live: `API_BASE_URL=... python scripts/smoke_test.py` and `python scripts/concurrency_check.py`.
 See `docs/concurrency-design-note.md`.
+
+## Deployment note
+The two booking tables are in `infrastructure/cloudformation/booking-tables.yaml` (stack `<project>-<env>-booking`). The pipeline re-creates that stack automatically if a table was deleted by hand. The smoke test is the last job, after the web stack.

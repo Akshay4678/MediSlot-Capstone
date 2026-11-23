@@ -17,3 +17,9 @@ def is_conditional_failure(exc):
     """True when a DynamoDB call failed only because its ConditionExpression was false."""
     error = (getattr(exc, "response", None) or {}).get("Error", {})
     return error.get("Code") == "ConditionalCheckFailedException"
+
+
+def is_missing_table(exc):
+    """True when DynamoDB says a table does not exist (wrong or deleted table name in the Lambda settings)."""
+    response = getattr(exc, "response", None)
+    return isinstance(response, dict) and (response.get("Error") or {}).get("Code") == "ResourceNotFoundException"

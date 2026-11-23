@@ -308,3 +308,10 @@ dl.facts{display:grid;grid-template-columns:140px 1fr;gap:.5rem 1rem;margin:0}dl
 form.cancel-slot{margin-top:.6rem;display:flex;gap:.4rem;flex-wrap:wrap}form.cancel-slot input{flex:1;min-width:160px;padding:.35rem .5rem}
 form.cancel-slot button{padding:.35rem .8rem;font-size:.85rem}
 @media (max-width:640px){.doctor-card{grid-template-columns:auto 1fr}.doctor-actions{grid-column:1/-1}dl.facts{grid-template-columns:1fr}.nav{gap:.4rem}}
+
+/* Shared slot tile (patient slots page and doctor schedule use the same markup) */
+.slot-tile.slot-full{background:#f6f7f8}
+.slot-tile.slot-closed{opacity:.7}
+.slot-tile .slot-book{margin:0}
+.slot-tile .slot-patients{border-top:1px dashed var(--line);padding-top:.4rem;margin-top:.2rem}
+.slot-tile .cancel-slot{display:flex;flex-direction:column;gap:.35rem;margin-top:.3rem}

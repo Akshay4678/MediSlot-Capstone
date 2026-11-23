@@ -5,6 +5,7 @@ The REST API is replaced by a fake, so no network is used.
 import base64
 import json
 from html.parser import HTMLParser
+from pathlib import Path
 
 import pytest
 
@@ -880,7 +881,7 @@ def test_schedule_lists_booked_patients(client):
     ).get_data(as_text=True)
 
     assert "Pat One" in html
-    assert "09:00 - 09:30" in html
+    assert "09:00 &ndash; 09:30" in html
 
 
 def test_week_view_requests_a_monday_to_sunday_range(client, api):
@@ -1215,12 +1216,14 @@ def test_booking_sends_the_slot_and_an_idempotency_key_then_shows_the_appointmen
     token = extract_csrf_token(client.get("/patient/slots/d9?date=2026-11-13").get_data(as_text=True), "slots")
     response = client.post("/patient/book", data={"slot_id": "slot#1", "doctor_id": "d9", "idempotency_key": "key-1",
                                                  "csrf_token": token})
-    assert response.headers["Location"].endswith("/patient/appointments/a1")
+    # booking returns to the list; cancelling is done from there, not on the confirmation
+    assert response.headers["Location"].endswith("/patient/appointments")
     method, path, _, body, _ = [c for c in api.calls if c[1] == "/appointments" and c[0] == "POST"][-1]
     assert body == {"slot_id": "slot#1"}
     sent = [h for m, p, h in api.headers_seen if (m, p) == ("POST", "/appointments")][-1]
     assert sent["Idempotency-Key"] == "key-1"
-    assert "Your appointment is confirmed" in client.get("/patient/appointments/a1").get_data(as_text=True)
+    page = client.get("/patient/appointments").get_data(as_text=True)
+    assert "Your appointment is confirmed" in page and "Cancel appointment" not in page
 
 
 def test_a_full_slot_shows_the_api_message_and_returns_to_the_slots(client, api):
@@ -1306,3 +1309,13 @@ def test_patients_cannot_open_the_doctor_pages_and_doctors_cannot_book(client):
     c2 = create_app().test_client()
     login(c2, "doctor")
     assert c2.get("/patient/appointments").status_code in (302, 403)
+
+
+def test_patient_and_doctor_pages_render_slots_with_the_same_shared_tile(client):
+    login(client, "patient")
+    patient_html = client.get("/patient/slots/d9?date=2026-11-13").get_data(as_text=True)
+    assert 'class="slot-tile' in patient_html and 'data-slot="slot#1"' in patient_html
+    template = (Path(__file__).resolve().parents[2] / "web" / "templates")
+    for page in ("patient/slots.html", "doctor/schedule.html"):
+        assert 'import slot_card' in (template / page).read_text(), page
+        assert "slot-tile" not in (template / page).read_text(), "tile markup must live only in _slot_card.html"

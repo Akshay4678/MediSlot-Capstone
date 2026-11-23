@@ -1,0 +1,19 @@
+{# ONE slot tile, used by the patient's "Available slots" page and the doctor's "Schedule" page.
+   Both pages show the same facts; only the footer differs (Book button vs. patients + cancel slot):
+
+       {% from "_slot_card.html" import slot_card %}
+       {% call slot_card(slot) %} ...role-specific footer... {% endcall %}
+       {% call slot_card(slot, show_booked=True) %} ... {% endcall %}   (doctor view: booked count + status) #}
+{% macro slot_card(s, show_booked=False) %}
+<div class="slot-tile{{ ' slot-full' if s.available_seats == 0 else '' }}{{ ' slot-closed' if s.status == 'CLOSED' else '' }}" data-slot="{{ s.slot_id }}">
+  <strong class="slot-time">{{ s.start_time }} &ndash; {{ s.end_time }}</strong>
+  <span class="slot-type">{{ s.type_name }} &middot; {{ s.duration_minutes }} min</span>
+  <span class="slot-fee">&#8377;{{ '%g' % (s.fee or 0) }}</span>
+  <span class="tag {{ 'full' if s.available_seats == 0 or (s.available_seats == 1 and s.capacity > 1) else '' }}">{{ s.available_seats }} of {{ s.capacity }} seat{{ '' if s.capacity == 1 else 's' }} free</span>
+  {% if show_booked %}
+  <span class="muted small">{{ s.booked_count }} / {{ s.capacity }} booked
+    &middot; <span class="tag {{ 'blocked' if s.status in ('BLOCKED', 'CLOSED') else ('full' if s.status == 'FULL' else '') }}">{{ s.status }}</span></span>
+  {% endif %}
+  {% if caller is defined %}{{ caller() }}{% endif %}
+</div>
+{% endmacro %}

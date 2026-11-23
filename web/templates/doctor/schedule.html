@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_slot_card.html" import slot_card %}
 
 {% block title %}
 Schedule - MediSlot
@@ -160,142 +161,38 @@ Schedule - MediSlot
 
   {% if day.slots %}
 
-  <div class="schedule-list">
-
+  <div class="slot-grid">
     {% for s in day.slots %}
-
-    <div class="schedule-slot">
-
-      <!-- TIME -->
-
-      <div class="schedule-time">
-
-        <strong>
-          {{ s.start_time }} - {{ s.end_time }}
-        </strong>
-
-      </div>
-
-
-      <!-- CONSULTATION -->
-
-      <div class="schedule-main">
-
-        <strong>
-          {{ s.type_name }}
-        </strong>
-
-        <div class="muted small">
-
-          {{ s.duration_minutes }}
-          min
-
-          &middot;
-
-          Fee {{ s.fee }}
-
+    {% call slot_card(s, show_booked=True) %}
+      {% if s.appointments %}
+      <div class="slot-patients">
+        <strong class="small">Appointments</strong>
+        {% for a in s.appointments %}
+        <div class="patient-row">
+          <span>{{ a.patient_name }}</span>
+          {% if a.patient_phone %}<span class="muted small">{{ a.patient_phone }}</span>{% endif %}
+          <span class="tag">{{ a.status }}</span>
         </div>
-
-
-        <div class="seat-summary">
-
-          <span class="tag
-                {{ 'full' if s.available_seats == 0 else '' }}">
-
-            {{ s.available_seats }}
-
-            seat{{ '' if s.available_seats == 1 else 's' }}
-
-            available
-
-          </span>
-
-
-          <span class="muted small">
-
-            {{ s.booked_count }}
-            /
-            {{ s.capacity }}
-
-            booked
-
-          </span>
-
-
-          <span class="tag
-                {{ 'blocked' if s.status == 'BLOCKED'
-                   else ('full' if s.status == 'FULL' else '') }}">
-
-            {{ s.status }}
-
-          </span>
-
-        </div>
-
+        {% endfor %}
       </div>
+      {% else %}
+      <span class="muted small">No booked patients</span>
+      {% endif %}
 
-
-      <!-- PATIENTS -->
-
-      <div class="schedule-patients">
-
-        {% if s.appointments %}
-
-          <strong>
-            Appointments
-          </strong>
-
-          {% for a in s.appointments %}
-
-          <div class="patient-row">
-
-            <span>
-              {{ a.patient_name }}
-            </span>
-
-            {% if a.patient_phone %}
-
-            <span class="muted small">
-              {{ a.patient_phone }}
-            </span>
-
-            {% endif %}
-
-            <span class="tag">
-              {{ a.status }}
-            </span>
-
-          </div>
-
-          {% endfor %}
-
-        {% else %}
-
-          <span class="muted small">
-            No booked patients
-          </span>
-
-        {% endif %}
-
-        {% if s.status in ('OPEN', 'FULL', 'BLOCKED') and s.slot_id %}
-        <form class="cancel-slot" method="post" action="{{ url_for('doctor.cancel_slot') }}"
-              onsubmit="return confirm('Cancel this slot? Every booked patient is refunded in full.');">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
-          <input type="hidden" name="date" value="{{ day.date }}">
-          <input name="reason" maxlength="255" placeholder="Reason (shown to patients)">
-          <button class="danger" type="submit">Cancel slot{% if s.appointments %} &amp; refund {{ s.appointments|length }}{% endif %}</button>
-        </form>
-        {% elif s.status == 'CLOSED' %}
-        <span class="tag blocked">Cancelled</span>
-        {% endif %}
-
-      </div>
-
-    </div>
-
+      {% if s.status in ('OPEN', 'FULL', 'BLOCKED') and s.slot_id %}
+      <form class="cancel-slot" method="post" action="{{ url_for('doctor.cancel_slot') }}"
+            onsubmit="return confirm('Cancel this slot? Every booked patient is refunded in full.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
+        <input type="hidden" name="date" value="{{ day.date }}">
+        <input name="reason" maxlength="255" placeholder="Reason (shown to patients)">
+        <button class="danger" type="submit">Cancel slot{% if s.appointments %} &amp; refund {{ s.appointments|length }}{% endif %}</button>
+      </form>
+      {% elif s.status == 'CLOSED' %}
+      <span class="tag blocked">Cancelled</span>
+      {% endif %}
+    {% endcall %}
     {% endfor %}
-
   </div>
 
   {% elif day.blackout %}

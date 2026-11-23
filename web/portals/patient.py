@@ -98,15 +98,16 @@ def book():
     if notes:
         body["notes"] = notes
     try:
-        data = api_client.call("POST", "/appointments", body, headers={"Idempotency-Key": key})
+        api_client.call("POST", "/appointments", body, headers={"Idempotency-Key": key})
     except ApiError as exc:
         flash(exc.message, "error")
         if doctor_id:
             return redirect(url_for("patient.slots", doctor_id=doctor_id, date=request.form.get("date", ""),
                                     to=request.form.get("to", "")))
         return redirect(url_for("patient.home"))
+    # Back to the list: cancelling is done from "My appointments", not straight after booking.
     flash("Your appointment is confirmed.", "success")
-    return redirect(url_for("patient.appointment", appointment_id=data["appointment"]["appointment_id"]))
+    return redirect(url_for("patient.appointments"))
 
 
 @bp.route("/appointments", endpoint="appointments")

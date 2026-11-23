@@ -66,7 +66,7 @@ def lambda_handler(event, context):
             "body": "notification published",
         }
 
-    # Handle POST requests for administrative testing
+    # Handle POST requests for manual testing
     if request_method(event) == "POST":
         try:
             body = request_body(event)

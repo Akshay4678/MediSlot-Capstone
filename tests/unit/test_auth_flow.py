@@ -733,3 +733,18 @@ def test_email_can_be_registered_again_after_the_account_was_closed(sql_users):
 
     # ... and the rule still protects the active one.
     assert _register_patient(first="Third")[0] == 409
+
+
+def test_only_patient_and_doctor_roles_exist_in_the_code():
+    """There is no admin role: no code, route or role list may mention one."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    hits = []
+    for folder in ("application", "web", "scripts"):
+        for path in (root / folder).rglob("*"):
+            if path.suffix in (".py", ".html", ".js") and "admin" in path.read_text(errors="ignore").lower():
+                text = path.read_text(errors="ignore")
+                hits.extend(f"{path.relative_to(root)}: {line.strip()}" for line in text.splitlines()
+                            if "admin" in line.lower() and "medislot_admin" not in line)
+    assert not hits, hits
+    assert az.ALLOWED_ROLES == ("patient", "doctor")

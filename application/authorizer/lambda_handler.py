@@ -37,6 +37,7 @@ ssm = boto3.client("ssm", config=_cfg)
 dynamodb = boto3.resource("dynamodb", config=_cfg)
 
 ALLOWED_ROLES = ("patient", "doctor")
+HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 
 # Resource patterns (after /<stage>/<METHOD>/) that a role may NOT call.
 DENIED_FOR_ROLE = {
@@ -130,7 +131,9 @@ def build_policy(claims, method_arn):
     role = str(claims["role"])
 
     statements = [{"Effect": "Allow", "Action": "execute-api:Invoke", "Resource": f"{base}/*/*"}]
-    denied = [f"{base}/*/{pattern}" for pattern in DENIED_FOR_ROLE[role]]
+    # The method must be spelled out: in an IAM resource a "*" also matches "/", so "*/appointments/*" would
+    # wrongly deny GET /doctors/me/appointments (it reads as method "GET/doctors/me").
+    denied = [f"{base}/{method}/{pattern}" for pattern in DENIED_FOR_ROLE[role] for method in HTTP_METHODS]
     if denied:
         statements.append({"Effect": "Deny", "Action": "execute-api:Invoke", "Resource": denied})
 

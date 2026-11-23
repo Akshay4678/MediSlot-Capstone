@@ -1021,8 +1021,7 @@ jobs:
               || { echo "::error::DynamoDB table '${table}' does not exist in ${AWS_REGION}. Fix the Data stack output or recreate the table."; exit 1; }
             echo "table ${table} exists"
           done
-          for fn in $(aws lambda list-functions --region "${AWS_REGION}" \
-              --query "Functions[?starts_with(FunctionName, '${PROJECT_NAME}-${ENVIRONMENT_NAME}-') && (contains(FunctionName,'patient') || contains(FunctionName,'doctor'))].FunctionName" --output text); do
+          for fn in "${PROJECT_NAME}-${ENVIRONMENT_NAME}-patient-api" "${PROJECT_NAME}-${ENVIRONMENT_NAME}-doctor-api"; do
             got_idem="$(aws lambda get-function-configuration --function-name "${fn}" --region "${AWS_REGION}" \
               --query 'Environment.Variables.IDEMPOTENCY_TABLE_NAME' --output text)"
             got_slot="$(aws lambda get-function-configuration --function-name "${fn}" --region "${AWS_REGION}" \

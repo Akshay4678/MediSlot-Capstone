@@ -248,6 +248,26 @@ jobs:
           echo "Database network configuration loaded."
 
       # ==========================================
+      # STEP 8: Remove stacks that belong to later milestones
+      # Notifications (SNS/SQS, EventBridge rules) are Milestone 6 and are not part of this release.
+      # If an earlier run created them, the pipeline deletes them (no manual console work).
+      # ==========================================
+      - name: Remove notification stacks (later milestone)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for suffix in eventbridge sns; do
+            STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-${suffix}"
+            if aws cloudformation describe-stacks --stack-name "${STACK}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+              echo "Deleting ${STACK}"
+              aws cloudformation delete-stack --stack-name "${STACK}" --region "${AWS_REGION}"
+              aws cloudformation wait stack-delete-complete --stack-name "${STACK}" --region "${AWS_REGION}"
+            else
+              echo "${STACK} does not exist; nothing to remove."
+            fi
+          done
+
+      # ==========================================
       # STEP 8: Deploy RDS and Data Stack
       # ==========================================
       - name: Deploy RDS and Data Stack
@@ -259,6 +279,22 @@ jobs:
           set -euo pipefail
 
           STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-data"
+
+          # A previous update that failed leaves the stack rolling back. Wait for that to finish; if the rollback
+          # itself failed (a resource that was deleted by hand), tell CloudFormation to continue.
+          for _ in $(seq 1 60); do
+            STATE="$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" \
+              --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE)"
+            case "${STATE}" in
+              UPDATE_ROLLBACK_IN_PROGRESS|UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS|UPDATE_IN_PROGRESS)
+                echo "${STACK_NAME} is ${STATE}; waiting 20s ..."; sleep 20 ;;
+              UPDATE_ROLLBACK_FAILED)
+                echo "::warning::${STACK_NAME} is UPDATE_ROLLBACK_FAILED; continuing the rollback."
+                aws cloudformation continue-update-rollback --stack-name "${STACK_NAME}" --region "${AWS_REGION}" || true
+                sleep 20 ;;
+              *) break ;;
+            esac
+          done
 
           DB_USERNAME="${DB_USERNAME_INPUT:-medislot_admin}"
           DB_NAME="medislot"
@@ -322,26 +358,6 @@ jobs:
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
 
-
-      # ==========================================
-      # STEP 8: Remove stacks that belong to later milestones
-      # Notifications (SNS/SQS, EventBridge rules) are Milestone 6 and are not part of this release.
-      # If an earlier run created them, the pipeline deletes them (no manual console work).
-      # ==========================================
-      - name: Remove notification stacks (later milestone)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for suffix in eventbridge sns; do
-            STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-${suffix}"
-            if aws cloudformation describe-stacks --stack-name "${STACK}" --region "${AWS_REGION}" >/dev/null 2>&1; then
-              echo "Deleting ${STACK}"
-              aws cloudformation delete-stack --stack-name "${STACK}" --region "${AWS_REGION}"
-              aws cloudformation wait stack-delete-complete --stack-name "${STACK}" --region "${AWS_REGION}"
-            else
-              echo "${STACK} does not exist; nothing to remove."
-            fi
-          done
 
       # ==========================================
       # STEP 8A: Deploy Authentication DynamoDB Tables
@@ -436,24 +452,6 @@ jobs:
             --output text \
             --region "${AWS_REGION}")"
 
-          WAITLIST_TABLE_NAME="$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
-            --query "Stacks[0].Outputs[?OutputKey=='WaitlistTableName'].OutputValue | [0]" \
-            --output text \
-            --region "${AWS_REGION}")"
-
-          NOTIFICATION_DISPATCH_TABLE_NAME="$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
-            --query "Stacks[0].Outputs[?OutputKey=='NotificationDispatchTableName'].OutputValue | [0]" \
-            --output text \
-            --region "${AWS_REGION}")"
-
-          HOLD_OFFERS_TABLE_NAME="$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
-            --query "Stacks[0].Outputs[?OutputKey=='HoldOffersTableName'].OutputValue | [0]" \
-            --output text \
-            --region "${AWS_REGION}")"
-
           # Booking tables (Milestone 5) live in their own small stack.
           BOOKING_STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-booking"
           for pair in IDEMPOTENCY_TABLE_NAME:IdempotencyTableName SLOT_CAPACITY_TABLE_NAME:SlotCapacityTableName; do
@@ -480,7 +478,7 @@ jobs:
             --output text \
             --region "${AWS_REGION}")"
 
-          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME HOLD_OFFERS_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME; do
+          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME; do
             value="${!name}"
             if [[ -z "${value}" || "${value}" == "None" ]]; then
               echo "::error::Required Data Stack output '${name}' is missing from ${STACK_NAME}."
@@ -495,9 +493,6 @@ jobs:
             echo "DB_SECRET_ARN=${DB_SECRET_ARN}"
             echo "IDEMPOTENCY_TABLE_NAME=${IDEMPOTENCY_TABLE_NAME}"
             echo "SLOT_CAPACITY_TABLE_NAME=${SLOT_CAPACITY_TABLE_NAME}"
-            echo "WAITLIST_TABLE_NAME=${WAITLIST_TABLE_NAME}"
-            echo "NOTIFICATION_DISPATCH_TABLE_NAME=${NOTIFICATION_DISPATCH_TABLE_NAME}"
-            echo "HOLD_OFFERS_TABLE_NAME=${HOLD_OFFERS_TABLE_NAME}"
             echo "REFRESH_TOKEN_TABLE_NAME=${REFRESH_TOKEN_TABLE_NAME}"
             echo "TOKEN_ACTIVELIST_TABLE_NAME=${TOKEN_ACTIVELIST_TABLE_NAME}"
           } >> "${GITHUB_ENV}"

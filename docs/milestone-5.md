@@ -19,5 +19,5 @@ Run: `pytest tests/unit` (273 tests). Live: `API_BASE_URL=... python scripts/smo
 See `docs/concurrency-design-note.md`.
 
 ## Deployment note
-(The older Idempotency/SlotCapacity tables in rds.yaml are unused legacy; they stay so the deployed data stack keeps updating cleanly.)
+The data stack (`rds.yaml`) now holds only RDS and the buckets. Waitlist, hold-offer and notification tables belong to later milestones and are not deployed yet.
 The two booking tables are in `infrastructure/cloudformation/booking-tables.yaml` (stack `<project>-<env>-booking`). The pipeline re-creates that stack automatically if a table was deleted by hand. The smoke test is the last job, after the web stack.

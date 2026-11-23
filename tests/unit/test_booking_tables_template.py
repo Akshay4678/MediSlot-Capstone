@@ -15,11 +15,21 @@ def test_booking_stack_defines_both_tables_and_outputs_ending_in_tablename():
     assert "AttributeName: expires_at" in text  # idempotency TTL
 
 
-def test_data_stack_is_left_exactly_as_deployed():
-    # Removing resources/exports from an already deployed stack can fail the update when another stack imports them.
-    # The old (now unused) tables stay in rds.yaml; the Lambdas use the tables from the booking stack.
+def test_data_stack_holds_only_what_this_milestone_uses():
+    # Waitlist, hold-offer and notification-dispatch tables belong to later milestones. They were deleted by hand,
+    # and a retained-but-missing table made the data stack update fail ("Unable to retrieve Arn ... does not exist").
     text = (CFN / "rds.yaml").read_text()
-    assert "IdempotencyTable:" in text and "Name: !Sub '${ProjectName}-${EnvironmentName}-IdempotencyTableName'" in text
+    for gone in ("IdempotencyTable", "SlotCapacityTable", "WaitlistTable", "HoldOffersTable", "NotificationDispatchTable"):
+        assert f"{gone}:" not in text and f"!GetAtt {gone}" not in text, gone
+    assert "MediSlotDatabase:" in text and "ArtifactsBucket:" in text
+
+
+def test_pipeline_no_longer_requires_later_milestone_tables():
+    text = WORKFLOW.read_text()
+    for gone in ("WAITLIST_TABLE_NAME", "NOTIFICATION_DISPATCH_TABLE_NAME", "HOLD_OFFERS_TABLE_NAME"):
+        assert gone not in text, gone
+    # leftover notification stacks are removed BEFORE the data stack is updated (they may import its exports)
+    assert text.index("Remove notification stacks") < text.index("- name: Deploy RDS and Data Stack")
 
 
 def test_pipeline_heals_then_deploys_the_booking_stack_before_reading_its_outputs():

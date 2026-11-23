@@ -746,5 +746,8 @@ def test_only_patient_and_doctor_roles_exist_in_the_code():
                 text = path.read_text(errors="ignore")
                 hits.extend(f"{path.relative_to(root)}: {line.strip()}" for line in text.splitlines()
                             if "admin" in line.lower() and "medislot_admin" not in line)
-    assert not hits, hits
+    assert not hits, ("Old files that still mention an admin role are in your checkout. Delete them with "
+                      "./remove-leftovers.sh (git rm -r application/appointment application/auth/login.py "
+                      "application/auth/logout.py application/auth/refresh.py application/auth/register.py "
+                      "application/common/auth_utils.py). Found: " + "; ".join(hits))
     assert az.ALLOWED_ROLES == ("patient", "doctor")

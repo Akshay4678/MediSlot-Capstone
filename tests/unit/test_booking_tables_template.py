@@ -15,9 +15,11 @@ def test_booking_stack_defines_both_tables_and_outputs_ending_in_tablename():
     assert "AttributeName: expires_at" in text  # idempotency TTL
 
 
-def test_tables_are_not_defined_twice():
-    assert "IdempotencyTable:" not in (CFN / "rds.yaml").read_text()
-    assert "SlotCapacityTable:" not in (CFN / "rds.yaml").read_text()
+def test_data_stack_is_left_exactly_as_deployed():
+    # Removing resources/exports from an already deployed stack can fail the update when another stack imports them.
+    # The old (now unused) tables stay in rds.yaml; the Lambdas use the tables from the booking stack.
+    text = (CFN / "rds.yaml").read_text()
+    assert "IdempotencyTable:" in text and "Name: !Sub '${ProjectName}-${EnvironmentName}-IdempotencyTableName'" in text
 
 
 def test_pipeline_heals_then_deploys_the_booking_stack_before_reading_its_outputs():

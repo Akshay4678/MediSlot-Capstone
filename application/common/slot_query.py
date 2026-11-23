@@ -9,7 +9,8 @@ from datetime import date, timedelta
 
 from application.common.api import as_date, fmt_time, fmt_utc, money
 
-MAX_RANGE_DAYS = 14
+# A patient can book up to rules/booking-window-days (30) ahead, so one request may cover that whole window.
+MAX_RANGE_DAYS = 31
 
 SLOT_COLUMNS = (
     "s.slot_id, s.`date`, s.start_time, s.end_time, s.start_utc, s.end_utc, s.capacity, s.booked_count, "

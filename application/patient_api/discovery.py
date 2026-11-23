@@ -152,7 +152,7 @@ def _range(q):
 
 
 def slots(conn, doctor_id, q, now_utc=None):
-    """Open slots with free seats for one date (?date=) or a date range (?from=&to=, max 14 days).
+    """Open slots with free seats for one date (?date=) or a date range (?from=&to=, max 31 days).
 
     The rows come from application.common.slot_query (shared with the doctor's schedule); this
     function only keeps the ones a patient can still book.

@@ -1,7 +1,7 @@
 """Patient portal (Milestones 4-5): profile, doctor search, slots, booking, appointments and refunds."""
 
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
@@ -10,6 +10,7 @@ from web.api_client import ApiError
 from web.portals.common import add_auth_routes, role_required
 
 CONSULTATION_TYPES = ("Quick Consult", "Standard Consult", "Detailed Consult", "Health Camp Session")
+SLOT_WINDOW_DAYS = 30  # the booking window: patients can book this many days ahead
 
 bp = Blueprint("patient", __name__, url_prefix="/patient")
 add_auth_routes(bp, "patient")
@@ -75,6 +76,12 @@ def home():
 def slots(doctor_id):
     chosen = request.args.get("date", "").strip() or date.today().isoformat()
     until = request.args.get("to", "").strip()
+    if not until:
+        # Show the whole 30-day booking window by default, not a single day.
+        try:
+            until = (date.fromisoformat(chosen) + timedelta(days=SLOT_WINDOW_DAYS - 1)).isoformat()
+        except ValueError:
+            until = ""
     params = {"from": chosen, "to": until} if until else {"date": chosen}
     data = api_client.call("GET", f"/doctors/{doctor_id}/slots", params=params)
     return render_template(

@@ -203,10 +203,17 @@ def test_slots_for_a_date_range_are_grouped_by_day(conn):
     assert [s["slot_id"] for s in body["slots"]] == ["mon", "tue"]
 
 
+def test_a_range_may_cover_the_whole_30_day_booking_window(conn):
+    # 2026-11-13 .. 2026-12-13 is 31 days: allowed. One more day is not.
+    assert discovery.slots(conn, "d1", {"from": "2026-11-13", "to": "2026-12-12"}, NOW)[0] == 200
+    assert discovery.slots(conn, "d1", {"from": "2026-11-13", "to": "2026-12-13"}, NOW)[0] == 200
+    assert err(lambda: discovery.slots(conn, "d1", {"from": "2026-11-13", "to": "2026-12-14"}, NOW)).code == "RANGE_TOO_LARGE"
+
+
 def test_slot_range_limits_and_past_slots(conn):
     add_slot(conn, "past", "2026-11-10", 5)
     assert discovery.slots(conn, "d1", {"date": "2026-11-10"}, NOW)[1]["slots"] == []
-    assert err(lambda: discovery.slots(conn, "d1", {"from": "2026-11-01", "to": "2026-11-30"}, NOW)).code == "RANGE_TOO_LARGE"
+    assert err(lambda: discovery.slots(conn, "d1", {"from": "2026-11-01", "to": "2026-12-05"}, NOW)).code == "RANGE_TOO_LARGE"
     assert err(lambda: discovery.slots(conn, "d1", {"from": "2026-11-05", "to": "2026-11-01"}, NOW)).code == "INVALID_RANGE"
     assert err(lambda: discovery.slots(conn, "d1", {}, NOW)).code == "INVALID_DATE"
     assert err(lambda: discovery.slots(conn, "zzz", {"date": "2026-11-12"}, NOW)).status == 404

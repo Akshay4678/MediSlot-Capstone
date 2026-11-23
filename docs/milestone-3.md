@@ -27,7 +27,7 @@
 | `PUT/DELETE /doctors/me/consultation-types/{id}` | Change fee / delete (409 while used) |
 | `GET/PUT /doctors/me/availability` | Weekly patterns; PUT replaces the schedule and rebuilds unbooked slots |
 | `GET/POST /doctors/me/blackouts`, `DELETE .../{id}` | Leave dates; adding blocks that date's unbooked slots, removing reopens them |
-| `GET /doctors/me/schedule?date=` or `?from=&to=` (max 14 days) | Day / week view with the patients booked into each slot |
+| `GET /doctors/me/schedule?date=` or `?from=&to=` (max 31 days) | Day / week view with the patients booked into each slot |
 | `GET /hospitals`, `GET /specialisations` | Reference lists (any signed-in user) |
 | `GET /auth/test-token` | Any signed-in user: shows the identity the authorizer resolved |
 

@@ -1319,3 +1319,13 @@ def test_patient_and_doctor_pages_render_slots_with_the_same_shared_tile(client)
     for page in ("patient/slots.html", "doctor/schedule.html"):
         assert 'import slot_card' in (template / page).read_text(), page
         assert "slot-tile" not in (template / page).read_text(), "tile markup must live only in _slot_card.html"
+
+
+def test_the_slots_page_asks_for_the_whole_30_day_window_by_default(client, api):
+    login(client, "patient")
+    html = client.get("/patient/slots/d9?date=2026-11-23").get_data(as_text=True)
+    params = [c[4] for c in api.calls if c[1].endswith("/slots")][-1]
+    assert params == {"from": "2026-11-23", "to": "2026-12-22"}
+    assert 'value="2026-12-22"' in html
+    client.get("/patient/slots/d9?date=2026-11-23&to=2026-11-25")
+    assert [c[4] for c in api.calls if c[1].endswith("/slots")][-1] == {"from": "2026-11-23", "to": "2026-11-25"}

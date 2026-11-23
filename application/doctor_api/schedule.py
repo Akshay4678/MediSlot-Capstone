@@ -1,4 +1,4 @@
-"""Doctor schedule: GET /doctors/me/schedule?date=YYYY-MM-DD  or  ?from=YYYY-MM-DD&to=YYYY-MM-DD (max 14 days).
+"""Doctor schedule: GET /doctors/me/schedule?date=YYYY-MM-DD  or  ?from=YYYY-MM-DD&to=YYYY-MM-DD (max 31 days).
 
 Each slot lists the patients booked into it, so the doctor sees the day (or week) at a glance.
 """

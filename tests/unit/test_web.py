@@ -299,6 +299,9 @@ class FakeApi:
                                       "total_refunded": 375.0})
 
         if path == "/doctors/d9/slots" and method == "GET":
+            if (params or {}).get("to", "") > "2027":
+                return FakeResponse(400, {"error": "OUTSIDE_BOOKING_WINDOW",
+                                          "message": "Slots can only be viewed up to 2026-12-23 (30 days ahead)."})
             slot = {"slot_id": "slot#1", "date": "2026-11-13", "start_time": "09:00", "end_time": "09:30",
                     "capacity": 3, "booked_count": 2, "available_seats": 1, "status": "OPEN", "type_name": "Standard Consult",
                     "duration_minutes": 30, "fee": 500.0, "consultation_type_id": "t1"}
@@ -1329,3 +1332,10 @@ def test_the_slots_page_asks_for_the_whole_30_day_window_by_default(client, api)
     assert 'value="2026-12-22"' in html
     client.get("/patient/slots/d9?date=2026-11-23&to=2026-11-25")
     assert [c[4] for c in api.calls if c[1].endswith("/slots")][-1] == {"from": "2026-11-23", "to": "2026-11-25"}
+
+
+def test_a_date_beyond_the_booking_window_shows_the_message_and_the_default_window(client, api):
+    login(client, "patient")
+    html = client.get("/patient/slots/d9?date=2026-11-23&to=2028-01-01").get_data(as_text=True)
+    assert "Slots can only be viewed up to 2026-12-23 (30 days ahead)." in html
+    assert "Book" in html  # the page still lists the default window's slots

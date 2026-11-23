@@ -10,12 +10,12 @@ Search index choices (see docs/milestone-4.md for the full justification):
 A prefix pattern ('abc%') can use a B-tree index; a leading wildcard ('%abc%') cannot.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
-from application.common import slot_query
+from application.common import rules, slot_query
 from application.common.api import ApiError, money, parse_date
 
-MAX_RANGE_DAYS = slot_query.MAX_RANGE_DAYS
 MAX_LIMIT = 50
 
 
@@ -146,16 +146,23 @@ def _range(q):
         end = parse_date((q.get("to") or q.get("from") or "").strip(), "to")
     if end < start:
         raise ApiError(400, "INVALID_RANGE", "to must not be before from.")
-    if (end - start).days + 1 > MAX_RANGE_DAYS:
-        raise ApiError(400, "RANGE_TOO_LARGE", f"The range may cover at most {MAX_RANGE_DAYS} days.")
     return start, end, bool(single)
 
 
-def slots(conn, doctor_id, q, now_utc=None):
-    """Open slots with free seats for one date (?date=) or a date range (?from=&to=, max 31 days).
+def _doctor_today(now_utc, tz_name):
+    try:
+        return now_utc.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(tz_name)).date()
+    except Exception:  # noqa: BLE001 - an unknown timezone falls back to UTC
+        return now_utc.date()
 
-    The rows come from application.common.slot_query (shared with the doctor's schedule); this
-    function only keeps the ones a patient can still book.
+
+def slots(conn, doctor_id, q, now_utc=None):
+    """Open slots with free seats for one date (?date=) or a date range (?from=&to=).
+
+    Any date from today up to the booking window is accepted (the window comes from SSM
+    rules/booking-window-days, 30 days by default). A date beyond the window is a 400 that
+    names the last date that can be viewed. The rows come from application.common.slot_query
+    (shared with the doctor's schedule); this function only keeps the ones a patient can still book.
     """
     if not doctor_id:
         raise ApiError(400, "MISSING_PARAMETERS", "doctor_id is required.")
@@ -166,10 +173,23 @@ def slots(conn, doctor_id, q, now_utc=None):
         doctor = cur.fetchone()
         if not doctor:
             raise ApiError(404, "DOCTOR_NOT_FOUND", "Doctor was not found.")
-    items = [s for s in slot_query.fetch_slots(conn, doctor_id, start, end, after_utc=now_utc)
-             if slot_query.is_bookable(s)]
+
+    window = rules.booking_window_days()
+    today = _doctor_today(now_utc, doctor["timezone"])
+    last_day = today + timedelta(days=window)
+    if end > last_day:
+        raise ApiError(400, "OUTSIDE_BOOKING_WINDOW",
+                       f"Slots can only be viewed up to {last_day.isoformat()} ({window} days ahead). "
+                       "Please choose an earlier date.")
+
+    first = max(start, today)  # days that already passed have nothing left to book
+    items = []
+    if first <= end:
+        items = [s for s in slot_query.fetch_slots(conn, doctor_id, first, end, after_utc=now_utc)
+                 if slot_query.is_bookable(s)]
     body = {"doctor_id": doctor_id, "timezone": doctor["timezone"], "from": start.isoformat(), "to": end.isoformat(),
-            "slots": items, "days": slot_query.group_by_day(items, start, end)}
+            "booking_window_ends": last_day.isoformat(),
+            "slots": items, "days": slot_query.group_by_day(items, first, end) if first <= end else []}
     if single:
         body["date"] = start.isoformat()
     return 200, body

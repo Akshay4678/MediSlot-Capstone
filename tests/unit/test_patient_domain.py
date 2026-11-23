@@ -203,17 +203,33 @@ def test_slots_for_a_date_range_are_grouped_by_day(conn):
     assert [s["slot_id"] for s in body["slots"]] == ["mon", "tue"]
 
 
-def test_a_range_may_cover_the_whole_30_day_booking_window(conn):
-    # 2026-11-13 .. 2026-12-13 is 31 days: allowed. One more day is not.
-    assert discovery.slots(conn, "d1", {"from": "2026-11-13", "to": "2026-12-12"}, NOW)[0] == 200
-    assert discovery.slots(conn, "d1", {"from": "2026-11-13", "to": "2026-12-13"}, NOW)[0] == 200
-    assert err(lambda: discovery.slots(conn, "d1", {"from": "2026-11-13", "to": "2026-12-14"}, NOW)).code == "RANGE_TOO_LARGE"
+def test_any_date_inside_the_booking_window_is_accepted_and_beyond_it_is_an_error(conn):
+    # NOW is 2026-11-10, the window is 30 days: the last viewable day is 2026-12-10, whatever the range length.
+    assert discovery.slots(conn, "d1", {"from": "2026-11-10", "to": "2026-12-10"}, NOW)[0] == 200
+    assert discovery.slots(conn, "d1", {"date": "2026-12-10"}, NOW)[0] == 200
+    assert discovery.slots(conn, "d1", {"from": "2026-12-10", "to": "2026-12-10"}, NOW)[0] == 200
+    too_far = err(lambda: discovery.slots(conn, "d1", {"from": "2026-11-10", "to": "2026-12-11"}, NOW))
+    assert (too_far.status, too_far.code) == (400, "OUTSIDE_BOOKING_WINDOW")
+    assert "2026-12-10" in too_far.message and "30 days" in too_far.message
+    assert err(lambda: discovery.slots(conn, "d1", {"date": "2027-03-01"}, NOW)).code == "OUTSIDE_BOOKING_WINDOW"
+
+
+def test_the_window_follows_the_ssm_setting(conn, monkeypatch):
+    from application.common import rules
+    monkeypatch.setattr(rules, "booking_window_days", lambda: 7)
+    assert discovery.slots(conn, "d1", {"date": "2026-11-17"}, NOW)[0] == 200
+    assert err(lambda: discovery.slots(conn, "d1", {"date": "2026-11-18"}, NOW)).code == "OUTSIDE_BOOKING_WINDOW"
+
+
+def test_a_range_that_starts_in_the_past_only_returns_what_is_left(conn):
+    add_slot(conn, "today", "2026-11-10", 9)
+    body = discovery.slots(conn, "d1", {"from": "2026-01-01", "to": "2026-11-11"}, NOW)[1]
+    assert [d["date"] for d in body["days"]] == ["2026-11-10", "2026-11-11"]
 
 
 def test_slot_range_limits_and_past_slots(conn):
     add_slot(conn, "past", "2026-11-10", 5)
     assert discovery.slots(conn, "d1", {"date": "2026-11-10"}, NOW)[1]["slots"] == []
-    assert err(lambda: discovery.slots(conn, "d1", {"from": "2026-11-01", "to": "2026-12-05"}, NOW)).code == "RANGE_TOO_LARGE"
     assert err(lambda: discovery.slots(conn, "d1", {"from": "2026-11-05", "to": "2026-11-01"}, NOW)).code == "INVALID_RANGE"
     assert err(lambda: discovery.slots(conn, "d1", {}, NOW)).code == "INVALID_DATE"
     assert err(lambda: discovery.slots(conn, "zzz", {"date": "2026-11-12"}, NOW)).status == 404

@@ -83,7 +83,16 @@ def slots(doctor_id):
         except ValueError:
             until = ""
     params = {"from": chosen, "to": until} if until else {"date": chosen}
-    data = api_client.call("GET", f"/doctors/{doctor_id}/slots", params=params)
+    try:
+        data = api_client.call("GET", f"/doctors/{doctor_id}/slots", params=params)
+    except ApiError as exc:
+        if exc.status != 400:
+            raise
+        # e.g. a date beyond the booking window: say so, and show the default window instead
+        flash(exc.message, "error")
+        chosen = date.today().isoformat()
+        until = (date.today() + timedelta(days=SLOT_WINDOW_DAYS - 1)).isoformat()
+        data = api_client.call("GET", f"/doctors/{doctor_id}/slots", params={"from": chosen, "to": until})
     return render_template(
         "patient/slots.html",
         doctor_id=doctor_id,

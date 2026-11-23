@@ -4,7 +4,7 @@
 # (including every place that still mentioned an "admin" role: MediSlot has only patients and doctors).
 set -euo pipefail
 git rm -rf --ignore-unmatch \
-  application/appointment \
+  application/appointment application/reporting application/reschedule application/waitlist \
   application/auth/login.py application/auth/logout.py application/auth/refresh.py application/auth/register.py \
   application/common/auth_utils.py \
   infrastructure/cloudformation/application.yaml infrastructure/cloudformation/iam.yaml infrastructure/cloudformation/scheduler.yaml \

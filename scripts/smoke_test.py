@@ -211,9 +211,13 @@ def main():
     assert len(rng["days"]) == 7 and all("available_seats" in x for x in rng["slots"]), rng
     day_slots = next(d for d in rng["days"] if d["date"] == monday.isoformat())["slots"]
     assert len(day_slots) == 6 and day_slots[0]["available_seats"] == 1, day_slots
-    expect("slot range limit", call(
-        "GET", f"/doctors/{doctor_id}/slots?from={monday.isoformat()}&to={(monday + timedelta(days=40)).isoformat()}",
-        a_token), 400)
+    # Any date inside the 30-day booking window may be viewed; beyond it is a clear 400.
+    edge = date.today() + timedelta(days=30)
+    expect("slots on the last day of the window", call(
+        "GET", f"/doctors/{doctor_id}/slots?date={edge.isoformat()}", a_token), 200)
+    beyond = expect("slots beyond the booking window", call(
+        "GET", f"/doctors/{doctor_id}/slots?date={(edge + timedelta(days=1)).isoformat()}", a_token), 400)
+    assert beyond["error"] == "OUTSIDE_BOOKING_WINDOW", beyond
 
     # ------------------------------------------------- booking, cancellation, refunds (Milestone 5)
     book_day = date.today() + timedelta(days=4)  # >= 3.4 days away, so a cancellation earns a FULL refund

@@ -204,21 +204,31 @@ def test_slots_for_a_date_range_are_grouped_by_day(conn):
 
 
 def test_any_date_inside_the_booking_window_is_accepted_and_beyond_it_is_an_error(conn):
-    # NOW is 2026-11-10, the window is 30 days: the last viewable day is 2026-12-10, whatever the range length.
-    assert discovery.slots(conn, "d1", {"from": "2026-11-10", "to": "2026-12-10"}, NOW)[0] == 200
-    assert discovery.slots(conn, "d1", {"date": "2026-12-10"}, NOW)[0] == 200
-    assert discovery.slots(conn, "d1", {"from": "2026-12-10", "to": "2026-12-10"}, NOW)[0] == 200
-    too_far = err(lambda: discovery.slots(conn, "d1", {"from": "2026-11-10", "to": "2026-12-11"}, NOW))
+    # NOW is 2026-11-10 and the window is 30 days (today + the next 29), so the last viewable day is 2026-12-09:
+    # exactly the last day the slot materialiser creates slots for.
+    assert discovery.slots(conn, "d1", {"from": "2026-11-10", "to": "2026-12-09"}, NOW)[0] == 200
+    assert discovery.slots(conn, "d1", {"date": "2026-12-09"}, NOW)[0] == 200
+    too_far = err(lambda: discovery.slots(conn, "d1", {"from": "2026-11-10", "to": "2026-12-10"}, NOW))
     assert (too_far.status, too_far.code) == (400, "OUTSIDE_BOOKING_WINDOW")
-    assert "2026-12-10" in too_far.message and "30 days" in too_far.message
+    assert "2026-12-09" in too_far.message and "30 days" in too_far.message
     assert err(lambda: discovery.slots(conn, "d1", {"date": "2027-03-01"}, NOW)).code == "OUTSIDE_BOOKING_WINDOW"
+
+
+def test_the_last_viewable_day_is_the_last_day_that_has_slots(conn):
+    from application.slot_materialiser.core import window_dates
+    from application.common import rules
+    from datetime import timezone
+    dates = window_dates(NOW.replace(tzinfo=timezone.utc), "Asia/Kolkata", rules.booking_window_days())
+    assert len(dates) == 30
+    assert discovery.slots(conn, "d1", {"date": dates[-1].isoformat()}, NOW)[0] == 200
+    assert err(lambda: discovery.slots(conn, "d1", {"date": (dates[-1] + timedelta(days=1)).isoformat()}, NOW)).code == "OUTSIDE_BOOKING_WINDOW"
 
 
 def test_the_window_follows_the_ssm_setting(conn, monkeypatch):
     from application.common import rules
     monkeypatch.setattr(rules, "booking_window_days", lambda: 7)
-    assert discovery.slots(conn, "d1", {"date": "2026-11-17"}, NOW)[0] == 200
-    assert err(lambda: discovery.slots(conn, "d1", {"date": "2026-11-18"}, NOW)).code == "OUTSIDE_BOOKING_WINDOW"
+    assert discovery.slots(conn, "d1", {"date": "2026-11-16"}, NOW)[0] == 200
+    assert err(lambda: discovery.slots(conn, "d1", {"date": "2026-11-17"}, NOW)).code == "OUTSIDE_BOOKING_WINDOW"
 
 
 def test_a_range_that_starts_in_the_past_only_returns_what_is_left(conn):

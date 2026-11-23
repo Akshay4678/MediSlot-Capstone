@@ -176,10 +176,11 @@ def slots(conn, doctor_id, q, now_utc=None):
 
     window = rules.booking_window_days()
     today = _doctor_today(now_utc, doctor["timezone"])
-    last_day = today + timedelta(days=window)
+    # The materialiser creates slots for today and the next window-1 days (window dates in total).
+    last_day = today + timedelta(days=window - 1)
     if end > last_day:
         raise ApiError(400, "OUTSIDE_BOOKING_WINDOW",
-                       f"Slots can only be viewed up to {last_day.isoformat()} ({window} days ahead). "
+                       f"Slots can only be viewed up to {last_day.isoformat()} (the next {window} days, including today). "
                        "Please choose an earlier date.")
 
     first = max(start, today)  # days that already passed have nothing left to book

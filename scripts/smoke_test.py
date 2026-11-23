@@ -212,7 +212,7 @@ def main():
     day_slots = next(d for d in rng["days"] if d["date"] == monday.isoformat())["slots"]
     assert len(day_slots) == 6 and day_slots[0]["available_seats"] == 1, day_slots
     # Any date inside the 30-day booking window may be viewed; beyond it is a clear 400.
-    edge = date.today() + timedelta(days=30)
+    edge = date.today() + timedelta(days=29)  # today + the next 29 days = the 30-day window
     expect("slots on the last day of the window", call(
         "GET", f"/doctors/{doctor_id}/slots?date={edge.isoformat()}", a_token), 200)
     beyond = expect("slots beyond the booking window", call(

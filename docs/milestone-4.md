@@ -9,7 +9,7 @@
 | `DELETE /patient/me` | Close the account: personal details are erased and login is disabled. Refused (409 `HAS_ACTIVE_APPOINTMENTS`) while upcoming confirmed appointments exist |
 | `GET /doctors/search?name=&hospital=&specialisation=&city=&limit=&offset=` | Filtered search with pagination (`count`, `total`, `has_more`) |
 | `GET /doctors/{doctor_id}` | Public profile with consultation types and fees |
-| `GET /doctors/{doctor_id}/slots?date=` or `?from=&to=` (max 31 days) | Open slots with `available_seats`, grouped by day |
+| `GET /doctors/{doctor_id}/slots?date=` or `?from=&to=` (any date from today up to the booking window, 30 days; later dates return OUTSIDE_BOOKING_WINDOW) | Open slots with `available_seats`, grouped by day |
 
 ## Patient data isolation
 The patient is identified only from the authorizer context (`userId`). There is no patient id in any URL, query string or body, so one patient cannot ask for another's profile. Proven by unit tests (`tests/unit/test_patient_domain.py`) and by the deployed smoke test, which registers two patients, sends patient A's id as a query parameter and in a body as patient B, and checks B still only ever receives B's own data.

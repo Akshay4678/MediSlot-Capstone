@@ -187,7 +187,7 @@ def slots(conn, doctor_id, q, now_utc=None):
     items = []
     if first <= end:
         items = [s for s in slot_query.fetch_slots(conn, doctor_id, first, end, after_utc=now_utc)
-                 if slot_query.is_bookable(s)]
+                 if slot_query.is_patient_visible(s)]
     body = {"doctor_id": doctor_id, "timezone": doctor["timezone"], "from": start.isoformat(), "to": end.isoformat(),
             "booking_window_ends": last_day.isoformat(),
             "slots": items, "days": slot_query.group_by_day(items, first, end) if first <= end else []}

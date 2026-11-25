@@ -126,6 +126,44 @@ def book():
     return redirect(url_for("patient.appointments"))
 
 
+@bp.route("/waitlist/join", methods=["POST"], endpoint="waitlist_join")
+@role_required("patient")
+def waitlist_join():
+    slot_id = request.form.get("slot_id", "").strip()
+    doctor_id = request.form.get("doctor_id", "").strip()
+    try:
+        api_client.call("POST", "/waitlist", {"slot_id": slot_id})
+        flash("You are now on the waitlist for this slot.", "success")
+    except ApiError as exc:
+        flash(exc.message, "error")
+    return redirect(url_for("patient.slots", doctor_id=doctor_id, date=request.form.get("date", ""), to=request.form.get("to", "")))
+
+@bp.route("/waitlist", endpoint="waitlist")
+@role_required("patient")
+def waitlist():
+    data = api_client.call("GET", "/waitlist")
+    return render_template("patient/waitlist.html", data=data)
+
+@bp.route("/waitlist/<slot_id>/leave", methods=["POST"], endpoint="waitlist_leave")
+@role_required("patient")
+def waitlist_leave(slot_id):
+    try:
+        api_client.call("DELETE", f"/waitlist/{slot_id}")
+        flash("You left the waitlist.", "success")
+    except ApiError as exc:
+        flash(exc.message, "error")
+    return redirect(url_for("patient.waitlist"))
+
+@bp.route("/waitlist/offers/<offer_id>/accept", methods=["POST"], endpoint="waitlist_offer_accept")
+@role_required("patient")
+def waitlist_offer_accept(offer_id):
+    try:
+        api_client.call("POST", f"/waitlist/offers/{offer_id}/accept", {})
+        flash("Your waitlist offer was accepted and the appointment is confirmed.", "success")
+    except ApiError as exc:
+        flash(exc.message, "error")
+    return redirect(url_for("patient.waitlist"))
+
 @bp.route("/appointments", endpoint="appointments")
 @role_required("patient")
 def appointments():
@@ -147,6 +185,26 @@ def appointment(appointment_id):
     data = api_client.call("GET", f"/appointments/{appointment_id}")
     return render_template("patient/appointment.html", a=data["appointment"])
 
+
+@bp.route("/appointments/<appointment_id>/reschedule", methods=["GET", "POST"], endpoint="reschedule")
+@role_required("patient")
+def reschedule(appointment_id):
+    if request.method == "POST":
+        target_slot_id = request.form.get("target_slot_id", "").strip()
+        try:
+            api_client.call("POST", f"/appointments/{appointment_id}/reschedule", {"target_slot_id": target_slot_id})
+            flash("Reschedule requested. The workflow is processing your new slot.", "success")
+            return redirect(url_for("patient.appointment", appointment_id=appointment_id))
+        except ApiError as exc:
+            flash(exc.message, "error")
+    a = api_client.call("GET", f"/appointments/{appointment_id}")["appointment"]
+    start = date.today().isoformat()
+    end = (date.today() + timedelta(days=SLOT_WINDOW_DAYS - 1)).isoformat()
+    try:
+        slots_data = api_client.call("GET", f"/doctors/{a['doctor']['doctor_id']}/slots", params={"from": start, "to": end})
+    except ApiError:
+        slots_data = {"days": []}
+    return render_template("patient/reschedule.html", a=a, data=slots_data)
 
 @bp.route("/appointments/<appointment_id>/cancel", methods=["POST"], endpoint="cancel")
 @role_required("patient")

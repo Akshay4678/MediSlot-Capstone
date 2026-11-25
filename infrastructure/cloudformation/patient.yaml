@@ -33,6 +33,12 @@ Parameters:
   EventBusName:
     Type: String
     Description: EventBridge bus that receives the appointment events.
+  WaitlistTableName:
+    Type: String
+  HoldOffersTableName:
+    Type: String
+  RescheduleStateMachineArn:
+    Type: String
 
 Resources:
   PatientApiRole:
@@ -72,6 +78,24 @@ Resources:
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${SlotCapacityTableName}'
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${IdempotencyTableName}'
+              - Sid: WaitlistAndHoldAccess
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:TransactWriteItems
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${WaitlistTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${WaitlistTableName}/index/*'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${HoldOffersTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${HoldOffersTableName}/index/*'
+              - Sid: StartRescheduleWorkflow
+                Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref RescheduleStateMachineArn
               - Sid: PublishAppointmentEvents
                 Effect: Allow
                 Action: events:PutEvents
@@ -111,6 +135,11 @@ Resources:
           SLOT_CAPACITY_TABLE_NAME: !Ref SlotCapacityTableName
           IDEMPOTENCY_TABLE_NAME: !Ref IdempotencyTableName
           EVENT_BUS_NAME: !Ref EventBusName
+          WAITLIST_TABLE_NAME: !Ref WaitlistTableName
+          HOLD_OFFERS_TABLE_NAME: !Ref HoldOffersTableName
+          WAITLIST_MAX_SIZE: '5'
+          HOLD_OFFER_MINUTES: '15'
+          RESCHEDULE_STATE_MACHINE_ARN: !Ref RescheduleStateMachineArn
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds
         SecurityGroupIds:

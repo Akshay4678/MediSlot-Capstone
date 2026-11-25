@@ -67,6 +67,11 @@ def is_bookable(slot):
     return slot["status"] == "OPEN" and slot["available_seats"] > 0
 
 
+def is_patient_visible(slot):
+    """Show full slots too: they can accept a waitlist entry. Blocked/closed slots stay hidden."""
+    return slot["status"] not in ("BLOCKED", "CLOSED")
+
+
 def group_by_day(slots, start, end):
     """[{date, slots}] for every day in the range, including empty days."""
     days, day = {}, start

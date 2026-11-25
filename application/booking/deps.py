@@ -22,6 +22,7 @@ class Deps:
     events: object
     metrics: object
     now: object = _utcnow  # naive UTC "now"; tests replace it with a fixed clock
+    waitlist: object = None
 
 
 _cached = None
@@ -43,5 +44,14 @@ def default_deps():
                                          ttl_hours=rules.idempotency_ttl_hours()),
             events=EventPublisher(boto3.client("events", config=cfg), os.environ.get("EVENT_BUS_NAME", "default")),
             metrics=Metrics(boto3.client("cloudwatch", config=cfg), environment=env),
+            waitlist=None,
         )
+        if os.environ.get("WAITLIST_TABLE_NAME") and os.environ.get("HOLD_OFFERS_TABLE_NAME"):
+            from application.waitlist.store import default_store as default_waitlist_store
+            _cached.waitlist = default_waitlist_store()
     return _cached
+
+# Helpers used by waitlist workers without coupling them to the booking clock.
+def _epoch_now():
+    import time
+    return int(time.time())

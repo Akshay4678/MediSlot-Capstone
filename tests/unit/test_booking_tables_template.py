@@ -24,12 +24,12 @@ def test_data_stack_holds_only_what_this_milestone_uses():
     assert "MediSlotDatabase:" in text and "ArtifactsBucket:" in text
 
 
-def test_pipeline_no_longer_requires_later_milestone_tables():
+def test_pipeline_requires_milestone6_tables_and_workflow_stack():
     text = WORKFLOW.read_text()
-    for gone in ("WAITLIST_TABLE_NAME", "NOTIFICATION_DISPATCH_TABLE_NAME", "HOLD_OFFERS_TABLE_NAME"):
-        assert gone not in text, gone
-    # leftover notification stacks are removed BEFORE the data stack is updated (they may import its exports)
-    assert text.index("Remove notification stacks") < text.index("- name: Deploy RDS and Data Stack")
+    for required in ("WAITLIST_TABLE_NAME", "NOTIFICATION_DISPATCH_TABLE_NAME", "HOLD_OFFERS_TABLE_NAME", "infrastructure/cloudformation/workflow.yaml"):
+        assert required in text, required
+    assert "RescheduleStateMachineArn" in text
+
 
 
 def test_pipeline_heals_then_deploys_the_booking_stack_before_reading_its_outputs():

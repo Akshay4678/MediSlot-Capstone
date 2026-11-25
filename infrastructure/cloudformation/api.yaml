@@ -484,6 +484,48 @@ Resources:
       ParentId: !Ref AppointmentRes
       PathPart: 'cancel'
 
+  AppointmentRescheduleRes:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ParentId: !Ref AppointmentRes
+      PathPart: 'reschedule'
+
+  WaitlistRes:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ParentId: !GetAtt MediSlotRestApi.RootResourceId
+      PathPart: 'waitlist'
+
+  WaitlistSlotRes:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ParentId: !Ref WaitlistRes
+      PathPart: '{slot_id}'
+
+  WaitlistOffersRes:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ParentId: !Ref WaitlistRes
+      PathPart: 'offers'
+
+  WaitlistOfferRes:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ParentId: !Ref WaitlistOffersRes
+      PathPart: '{offer_id}'
+
+  WaitlistOfferAcceptRes:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ParentId: !Ref WaitlistOfferRes
+      PathPart: 'accept'
+
   RefundsRes:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -1094,6 +1136,97 @@ Resources:
             - PatientApiFunctionArn:
                 Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-PatientApiFunctionArn'
 
+  AppointmentRescheduleMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ResourceId: !Ref AppointmentRescheduleRes
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotAuthorizer
+      RequestParameters:
+        method.request.path.appointment_id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub:
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PatientApiFunctionArn}/invocations'
+            - PatientApiFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-PatientApiFunctionArn'
+
+  WaitlistJoinMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ResourceId: !Ref WaitlistRes
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub:
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PatientApiFunctionArn}/invocations'
+            - PatientApiFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-PatientApiFunctionArn'
+
+  WaitlistListMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ResourceId: !Ref WaitlistRes
+      HttpMethod: GET
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub:
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PatientApiFunctionArn}/invocations'
+            - PatientApiFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-PatientApiFunctionArn'
+
+  WaitlistLeaveMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ResourceId: !Ref WaitlistSlotRes
+      HttpMethod: DELETE
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotAuthorizer
+      RequestParameters:
+        method.request.path.slot_id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub:
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PatientApiFunctionArn}/invocations'
+            - PatientApiFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-PatientApiFunctionArn'
+
+  WaitlistOfferAcceptMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MediSlotRestApi
+      ResourceId: !Ref WaitlistOfferAcceptRes
+      HttpMethod: POST
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MediSlotAuthorizer
+      RequestParameters:
+        method.request.path.offer_id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri:
+          Fn::Sub:
+            - 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PatientApiFunctionArn}/invocations'
+            - PatientApiFunctionArn:
+                Fn::ImportValue: !Sub '${ProjectName}-${EnvironmentName}-PatientApiFunctionArn'
+
   RefundsGetMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -1200,6 +1333,11 @@ Resources:
       - AppointmentsListMethod
       - AppointmentGetMethod
       - AppointmentCancelMethod
+      - AppointmentRescheduleMethod
+      - WaitlistJoinMethod
+      - WaitlistListMethod
+      - WaitlistLeaveMethod
+      - WaitlistOfferAcceptMethod
       - RefundsGetMethod
       - DoctorAppointmentsListMethod
       - DoctorAppointmentGetMethod

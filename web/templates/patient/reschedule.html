@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Reschedule appointment - MediSlot{% endblock %}
+{% block content %}
+<section class="page-head"><h1>Reschedule appointment</h1><p class="muted">Current: {{ a.date }} {{ a.start_time }}&ndash;{{ a.end_time }}</p></section>
+{% for day in data.days if day.slots %}
+<div class="card"><h2>{{ day.date }}</h2><div class="slot-grid">
+{% for s in day.slots %}
+<div class="slot-tile">
+  <strong class="slot-time">{{ s.start_time }} &ndash; {{ s.end_time }}</strong>
+  <span class="slot-type">{{ s.type_name }} &middot; {{ s.duration_minutes }} min</span>
+  <span class="slot-fee">&#8377;{{ '%g' % s.fee }}</span>
+  {% if s.available_seats > 0 and s.status == 'OPEN' %}
+  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="target_slot_id" value="{{ s.slot_id }}"><button type="submit">Reschedule here</button></form>
+  {% else %}<span class="tag full">Unavailable</span>{% endif %}
+</div>
+{% endfor %}
+</div></div>
+{% endfor %}
+<p><a href="{{ url_for('patient.appointment', appointment_id=a.appointment_id) }}">&larr; Back</a></p>
+{% endblock %}

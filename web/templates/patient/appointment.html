@@ -25,6 +25,14 @@
 </div>
 {% endif %}
 
+{% if a.status == 'CONFIRMED' %}
+<div class="card">
+  <h2>Reschedule</h2>
+  <p class="muted">Choose another available slot. The reschedule saga claims the new seat first and compensates if the original seat cannot be released.</p>
+  <a class="btn secondary" href="{{ url_for('patient.reschedule', appointment_id=a.appointment_id) }}">Choose another slot</a>
+</div>
+{% endif %}
+
 {% if a.can_cancel %}
 <div class="card">
   <h2>Cancel this appointment</h2>

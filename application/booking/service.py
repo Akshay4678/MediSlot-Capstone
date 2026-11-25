@@ -208,6 +208,9 @@ def _check_slot_and_patient(cur, deps, patient_id, slot, now):
                        f"Slots can be booked at most {rules.booking_window_days()} days ahead.")
     if slot["status"] in ("BLOCKED", "CLOSED"):
         raise ApiError(409, "SLOT_UNAVAILABLE", "This slot is no longer available.")
+    hold = deps.waitlist.get_hold(slot["slot_id"]) if getattr(deps, "waitlist", None) else None
+    if hold and hold.get("status") == "LIVE" and int(hold.get("expires_at", 0)) > int(now.timestamp()):
+        raise ApiError(409, "SLOT_HELD", "This slot is temporarily held for a waitlist patient.")
     if slot["status"] == "FULL" or int(slot["booked_count"]) >= int(slot["capacity"]):
         raise ApiError(409, "SLOT_FULL", "This slot is full.")
 

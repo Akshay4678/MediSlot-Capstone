@@ -65,6 +65,111 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
+  # One logical waitlist per slot. The META row atomically tracks the five-entry cap.
+  # Normal rows use slot_id#patient_id as the key so a patient can join a slot only once.
+  WaitlistTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: waitlist_key
+          AttributeType: S
+        - AttributeName: slot_id
+          AttributeType: S
+        - AttributeName: joined_at
+          AttributeType: S
+        - AttributeName: patient_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: waitlist_key
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: slot_id-joined_at-index
+          KeySchema:
+            - AttributeName: slot_id
+              KeyType: HASH
+            - AttributeName: joined_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: patient_id-index
+          KeySchema:
+            - AttributeName: patient_id
+              KeyType: HASH
+            - AttributeName: joined_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProd, true, false]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # One row per slot, so the slot itself is the uniqueness boundary for a live offer.
+  HoldOffersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: slot_id
+          AttributeType: S
+        - AttributeName: offer_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: slot_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: offer_id-index
+          KeySchema:
+            - AttributeName: offer_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl_at
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProd, true, false]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Exactly-once dispatch ledger keyed by the EventBridge event id.
+  NotificationDispatchTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: dispatch_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dispatch_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProd, true, false]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
 Outputs:
   SlotCapacityTableName:
     Description: DynamoDB slot capacity table name.
@@ -72,3 +177,12 @@ Outputs:
   IdempotencyTableName:
     Description: DynamoDB idempotency table name.
     Value: !Ref IdempotencyTable
+  WaitlistTableName:
+    Description: DynamoDB waitlist table name.
+    Value: !Ref WaitlistTable
+  HoldOffersTableName:
+    Description: DynamoDB hold-offer table name.
+    Value: !Ref HoldOffersTable
+  NotificationDispatchTableName:
+    Description: DynamoDB notification dispatch ledger table name.
+    Value: !Ref NotificationDispatchTable

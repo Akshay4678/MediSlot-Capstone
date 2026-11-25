@@ -26,6 +26,7 @@
     <div class="slot-grid">
     {% for s in day.slots %}
       {% call slot_card(s) %}
+      {% if s.available_seats > 0 and s.status == 'OPEN' %}
       <form method="post" action="{{ url_for('patient.book') }}" class="slot-book">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
@@ -35,6 +36,16 @@
         <input type="hidden" name="idempotency_key" value="{{ booking_key }}-{{ loop.index }}-{{ day.date }}">
         <button type="submit">Book</button>
       </form>
+      {% else %}
+      <form method="post" action="{{ url_for('patient.waitlist_join') }}" class="slot-book">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
+        <input type="hidden" name="doctor_id" value="{{ doctor_id }}">
+        <input type="hidden" name="date" value="{{ date }}">
+        <input type="hidden" name="to" value="{{ until }}">
+        <button type="submit">Join waitlist</button>
+      </form>
+      {% endif %}
       {% endcall %}
     {% endfor %}
     </div>

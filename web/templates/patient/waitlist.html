@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}My waitlist - MediSlot{% endblock %}
+{% block content %}
+<section class="page-head"><h1>My waitlist</h1><p class="muted">A live offer temporarily holds the seat for you. Accept it before it expires.</p></section>
+{% if data.items %}
+<div class="doctor-list">
+{% for w in data.items %}
+<article class="doctor-card">
+  <div class="doctor-main"><h3>Slot {{ w.slot_id }}</h3><p class="muted">Joined {{ w.joined_at }} · Status: {{ w.status }}</p></div>
+  <div class="doctor-actions">
+    {% if w.status == 'HELD' %}<form method="post" action="{{ url_for('patient.waitlist_offer_accept', offer_id=w.offer_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">Accept offer</button></form>{% endif %}
+    <form method="post" action="{{ url_for('patient.waitlist_leave', slot_id=w.slot_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn secondary" type="submit">Leave</button></form>
+  </div>
+</article>
+{% endfor %}
+</div>
+{% else %}<div class="card empty"><p class="muted">You are not on any waitlists.</p></div>{% endif %}
+{% endblock %}

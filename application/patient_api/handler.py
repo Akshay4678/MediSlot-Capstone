@@ -4,8 +4,8 @@ Milestone 5 adds booking: POST/GET /appointments, GET /appointments/{appointment
 /appointments/{appointment_id}/cancel and GET /refunds (logic in application/booking/service.py).
 
 Routes are kept in one Lambda so API Gateway has a single patient-domain integration. Identity is
-taken only from the authorizer context, never from the URL, query string or body. Reschedule,
-waitlist and notifications are later milestones and are not here.
+taken only from the authorizer context, never from the URL, query string or body. Milestone 6 adds
+reschedule saga start, waitlist join/leave/offer acceptance and the asynchronous workflow hooks.
 """
 
 import logging
@@ -19,6 +19,8 @@ from application.booking.deps import default_deps
 from application.booking.errors import is_missing_table
 from application.database.connection import get_connection
 from application.patient_api import discovery, profile as patient_profile
+from application.reschedule.service import start as start_reschedule
+from application.waitlist import service as waitlist_service
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -92,6 +94,27 @@ def _booking_route(method, resource, user_id, event):
     return _with_connection(work)
 
 
+
+def _milestone6_route(method, resource, user_id, event):
+    deps = default_deps()
+    body = request_body(event)
+    def work(conn):
+        if resource == "/appointments/{appointment_id}/reschedule" and method == "POST":
+            appointment_id = ((event.get("pathParameters") or {}).get("appointment_id") or "").strip()
+            return start_reschedule(conn, user_id, appointment_id, body.get("target_slot_id"))
+        if resource == "/waitlist" and method == "POST":
+            return waitlist_service.join(conn, deps.waitlist, user_id, body.get("slot_id"), deps.events)
+        if resource == "/waitlist" and method == "GET":
+            return waitlist_service.list_for_patient(deps.waitlist, user_id)
+        if resource == "/waitlist/{slot_id}" and method == "DELETE":
+            slot_id = ((event.get("pathParameters") or {}).get("slot_id") or "").strip()
+            return waitlist_service.leave(deps.waitlist, user_id, slot_id, deps.events)
+        if resource == "/waitlist/offers/{offer_id}/accept" and method == "POST":
+            offer_id = ((event.get("pathParameters") or {}).get("offer_id") or "").strip()
+            return waitlist_service.accept_offer(conn, deps, user_id, offer_id)
+        return 404, {"error": "ROUTE_NOT_FOUND", "message": "Unsupported patient route."}
+    return _with_connection(work)
+
 _BOOKING_ROUTES = {
     ("POST", "/appointments"), ("GET", "/appointments"), ("GET", "/appointments/{appointment_id}"),
     ("POST", "/appointments/{appointment_id}/cancel"), ("GET", "/refunds"),
@@ -108,6 +131,8 @@ def _route(event, user_id):
         return _availability(event)
     if method == "GET" and resource == "/doctors/{doctor_id}":
         return _doctor_profile(event)
+    if resource in {"/appointments/{appointment_id}/reschedule", "/waitlist", "/waitlist/{slot_id}", "/waitlist/offers/{offer_id}/accept"}:
+        return _milestone6_route(method, resource, user_id, event)
     if (method, resource) in _BOOKING_ROUTES:
         return _booking_route(method, resource, user_id, event)
     if resource == "/patient/me" and method in ("GET", "POST", "PUT", "DELETE"):

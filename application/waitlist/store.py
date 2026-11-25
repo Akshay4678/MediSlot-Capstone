@@ -46,7 +46,7 @@ class WaitlistStore:
         meta = {"waitlist_key": {"S": self._meta_key(slot_id)}, "slot_id": {"S": str(slot_id)}, "item_type": {"S": "META"}, "count": {"N": "0"}}
         try:
             self.client.transact_write_items(TransactItems=[
-                {"Update": {"TableName": self.table.name, "Key": meta["waitlist_key"],
+                {"Update": {"TableName": self.table.name, "Key": {"waitlist_key": meta["waitlist_key"]},
                              "UpdateExpression": "SET #c = if_not_exists(#c, :zero) + :one, #slot = :slot, #type = :type",
                              "ConditionExpression": "attribute_not_exists(#c) OR #c < :max",
                              "ExpressionAttributeNames": {"#c": "count", "#slot": "slot_id", "#type": "item_type"},
@@ -64,7 +64,7 @@ class WaitlistStore:
         return {k: self._decode(v) for k, v in item.items()}, True
 
     def get(self, slot_id, patient_id):
-        r = self.table.get_item(Key={"waitlist_key": self._key(slot_id, patient_id), "ConsistentRead": True})
+        r = self.table.get_item(Key={"waitlist_key": self._key(slot_id, patient_id)}, ConsistentRead=True)
         return self._decode_item(r.get("Item"))
 
     def leave(self, slot_id, patient_id):

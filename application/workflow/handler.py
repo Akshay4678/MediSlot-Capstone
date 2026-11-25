@@ -61,6 +61,7 @@ def claim_target(conn, data):
 def commit_reschedule(conn, data):
     appointment_id, patient_id = data["appointment_id"], data["patient_id"]
     original_slot_id, target_slot_id = data["original_slot_id"], data["target_slot_id"]
+    now = data.get("now") or time.time()
     with conn.cursor() as cur:
         cur.execute("SELECT doctor_id, consultation_type_id, fee_amount FROM materialised_slots WHERE slot_id = %s", (target_slot_id,))
         target = cur.fetchone()

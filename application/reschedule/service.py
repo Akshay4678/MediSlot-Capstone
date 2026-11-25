@@ -1,4 +1,5 @@
 import os, uuid, json
+from urllib.parse import unquote
 from datetime import timedelta
 import boto3
 from botocore.config import Config
@@ -14,6 +15,7 @@ def _client():
 
 
 def start(conn, patient_id, appointment_id, target_slot_id):
+    target_slot_id = unquote(str(target_slot_id or "").strip())
     if not target_slot_id:
         raise ApiError(400, "INVALID_TARGET_SLOT", "target_slot_id is required.")
     with conn.cursor() as cur:

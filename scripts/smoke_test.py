@@ -241,7 +241,10 @@ def main():
     expect("unknown slot returns 404", call("POST", "/appointments", b_token, {"slot_id": "no-such-slot"}), 404)
     expect("patient id in the body is refused", call("POST", "/appointments", b_token,
            {"slot_id": slot_two, "patient_id": mine["patient_id"]}), 400)
-    visible = {s["slot_id"]: s for s in call("GET", f"/doctors/{doctor_id}/slots?date={book_day.isoformat()}", a_token)[1]["slots"]}
+    visible = {
+        s["slot_id"]: s
+        for s in call("GET", f"/doctors/{doctor_id}/slots?date={book_day.isoformat()}", a_token)[1]["slots"]
+    }
     assert slot_one in visible and visible[slot_one]["status"] == "FULL", (
         "a full slot remains visible to patients so it can be used for waitlist entry"
     )

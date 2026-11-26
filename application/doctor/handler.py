@@ -4,7 +4,7 @@ Uses the schema.sql columns in this MediSlot project.
 Supports GET /doctors, /doctors/{doctor_id}, /hospitals, /specialisations.
 """
 
-from application.common.http import response, request_method
+from application.common.http import response
 from application.database.connection import get_connection
 
 

@@ -5,7 +5,7 @@ Consult slots, overlapping them, and the patient was never told. Now a booked sl
 longer produces is cancelled by the doctor (100 % refund, event, seat returned) and CLOSED for good.
 """
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, timezone
 
 import pytest
 from booking_support import NOW, SCHEMA, make_deps, seed

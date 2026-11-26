@@ -1,4 +1,4 @@
-import json, os, boto3
+import json
 from urllib.parse import unquote
 from application.common.api import ApiError
 from application.common.http import response
@@ -20,7 +20,6 @@ def lambda_handler(event, context):
     claims = ((event.get("requestContext") or {}).get("authorizer") or {})
     patient_id = claims.get("userId") or claims.get("principalId")
     try:
-        import pymysql
         from application.database.connection import get_connection
         conn = get_connection()
         try:

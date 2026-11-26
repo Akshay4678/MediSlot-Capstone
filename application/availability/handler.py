@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from application.common.http import response, request_method
 from application.database.connection import get_connection

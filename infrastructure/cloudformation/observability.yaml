@@ -130,7 +130,7 @@ Resources:
           Value: !Sub '${ProjectName}-${EnvironmentName}-rest-api'
         - Name: Stage
           Value: !Ref EnvironmentName
-      Statistic: p99
+      ExtendedStatistic: p99
       Period: 300
       EvaluationPeriods: 3
       Threshold: 5000

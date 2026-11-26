@@ -84,9 +84,12 @@ jobs:
             infrastructure/cloudformation/rds.yaml \
             infrastructure/cloudformation/dynamodb.yaml \
             infrastructure/cloudformation/booking-tables.yaml \
-            infrastructure/cloudformation/workflow.yaml \
             infrastructure/cloudformation/auth.yaml \
             infrastructure/cloudformation/storage.yaml \
+            infrastructure/cloudformation/events.yaml \
+            infrastructure/cloudformation/workflow.yaml \
+            infrastructure/cloudformation/notifications.yaml \
+            infrastructure/cloudformation/observability.yaml \
             infrastructure/cloudformation/doctor.yaml \
             infrastructure/cloudformation/api.yaml \
             infrastructure/cloudformation/web.yaml
@@ -163,9 +166,11 @@ jobs:
             infrastructure/cloudformation/auth.yaml \
             infrastructure/cloudformation/storage.yaml \
             infrastructure/cloudformation/events.yaml \
+            infrastructure/cloudformation/workflow.yaml \
+            infrastructure/cloudformation/notifications.yaml \
+            infrastructure/cloudformation/observability.yaml \
             infrastructure/cloudformation/doctor.yaml \
             infrastructure/cloudformation/patient.yaml \
-            infrastructure/cloudformation/workflow.yaml \
             infrastructure/cloudformation/api.yaml \
             infrastructure/cloudformation/web.yaml
           do
@@ -191,6 +196,7 @@ jobs:
           echo "Deploying Network Stack: ${STACK_NAME}"
 
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/network.yaml \
             --stack-name "${STACK_NAME}" \
             --capabilities CAPABILITY_NAMED_IAM \
@@ -250,11 +256,11 @@ jobs:
           echo "Database network configuration loaded."
 
       # ==========================================
-      # STEP 8: Remove stacks that belong to later milestones
-      # Notifications (SNS/SQS, EventBridge rules) are Milestone 6 and are not part of this release.
-      # If an earlier run created them, the pipeline deletes them (no manual console work).
+      # STEP 8: Remove the superseded standalone eventbridge and sns stacks
+      # Milestone 6 replaced them with the events and notifications stacks. If an earlier run created the old
+      # ones, the pipeline deletes them (no manual console work).
       # ==========================================
-      - name: Remove notification stacks (later milestone)
+      - name: Remove superseded notification stacks
         shell: bash
         run: |
           set -euo pipefail
@@ -345,6 +351,7 @@ jobs:
           echo "Deploying Data Stack: ${STACK_NAME}"
 
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/rds.yaml \
             --stack-name "${STACK_NAME}" \
             --parameter-overrides \
@@ -378,6 +385,7 @@ jobs:
           echo "Deploying DynamoDB Stack: ${STACK_NAME}"
 
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/dynamodb.yaml \
             --stack-name "${STACK_NAME}" \
             --parameter-overrides \
@@ -401,6 +409,7 @@ jobs:
           echo "Deploying Booking Tables Stack: ${STACK_NAME}"
 
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/booking-tables.yaml \
             --stack-name "${STACK_NAME}" \
             --parameter-overrides \
@@ -456,7 +465,9 @@ jobs:
 
           # Booking tables (Milestone 5) live in their own small stack.
           BOOKING_STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-booking"
-          for pair in IDEMPOTENCY_TABLE_NAME:IdempotencyTableName SLOT_CAPACITY_TABLE_NAME:SlotCapacityTableName WAITLIST_TABLE_NAME:WaitlistTableName HOLD_OFFERS_TABLE_NAME:HoldOffersTableName NOTIFICATION_DISPATCH_TABLE_NAME:NotificationDispatchTableName; do
+          for pair in IDEMPOTENCY_TABLE_NAME:IdempotencyTableName SLOT_CAPACITY_TABLE_NAME:SlotCapacityTableName \
+                    WAITLIST_TABLE_NAME:WaitlistTableName HOLD_OFFERS_TABLE_NAME:HoldOffersTableName \
+                    DISPATCH_LOG_TABLE_NAME:DispatchLogTableName; do
             value="$(aws cloudformation describe-stacks \
               --stack-name "${BOOKING_STACK}" \
               --query "Stacks[0].Outputs[?OutputKey=='${pair#*:}'].OutputValue | [0]" \
@@ -480,7 +491,7 @@ jobs:
             --output text \
             --region "${AWS_REGION}")"
 
-          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME HOLD_OFFERS_TABLE_NAME NOTIFICATION_DISPATCH_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME; do
+          for name in DB_HOST DB_NAME DB_SECRET_ARN IDEMPOTENCY_TABLE_NAME SLOT_CAPACITY_TABLE_NAME WAITLIST_TABLE_NAME HOLD_OFFERS_TABLE_NAME DISPATCH_LOG_TABLE_NAME REFRESH_TOKEN_TABLE_NAME TOKEN_ACTIVELIST_TABLE_NAME; do
             value="${!name}"
             if [[ -z "${value}" || "${value}" == "None" ]]; then
               echo "::error::Required Data Stack output '${name}' is missing from ${STACK_NAME}."
@@ -497,7 +508,7 @@ jobs:
             echo "SLOT_CAPACITY_TABLE_NAME=${SLOT_CAPACITY_TABLE_NAME}"
             echo "WAITLIST_TABLE_NAME=${WAITLIST_TABLE_NAME}"
             echo "HOLD_OFFERS_TABLE_NAME=${HOLD_OFFERS_TABLE_NAME}"
-            echo "NOTIFICATION_DISPATCH_TABLE_NAME=${NOTIFICATION_DISPATCH_TABLE_NAME}"
+            echo "DISPATCH_LOG_TABLE_NAME=${DISPATCH_LOG_TABLE_NAME}"
             echo "REFRESH_TOKEN_TABLE_NAME=${REFRESH_TOKEN_TABLE_NAME}"
             echo "TOKEN_ACTIVELIST_TABLE_NAME=${TOKEN_ACTIVELIST_TABLE_NAME}"
           } >> "${GITHUB_ENV}"
@@ -588,6 +599,7 @@ jobs:
           put_if_missing "${P}/rules/hold-offer-minutes" 15
           put_if_missing "${P}/rules/max-reschedules" 2
           put_if_missing "${P}/rules/min-reschedule-hours" 6
+          put_if_missing "${P}/rules/no-show-minutes" 30
           put_if_missing "${P}/rules/refund-full-hours" 48
           put_if_missing "${P}/rules/refund-75-hours" 24
           put_if_missing "${P}/rules/refund-50-hours" 6
@@ -609,6 +621,7 @@ jobs:
         run: |
           set -euo pipefail
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/storage.yaml \
             --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-storage" \
             --parameter-overrides "ProjectName=${PROJECT_NAME}" "EnvironmentName=${ENVIRONMENT_NAME}" \
@@ -687,6 +700,7 @@ jobs:
           set -euo pipefail
           STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-events"
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/events.yaml \
             --stack-name "${STACK}" \
             --parameter-overrides \
@@ -703,14 +717,15 @@ jobs:
           echo "EVENT_BUS_NAME=${EVENT_BUS_NAME}" >> "${GITHUB_ENV}"
 
       # ==========================================
-      # STEP 12B0: Milestone 6 workflow stack
+      # STEP 12A1: Reschedule saga (Step Functions state machine, Milestone 6)
       # ==========================================
-      - name: Deploy Milestone 6 Workflow Stack
+      - name: Deploy Reschedule Workflow Stack
         shell: bash
         run: |
           set -euo pipefail
           STACK="${PROJECT_NAME}-${ENVIRONMENT_NAME}-workflow"
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/workflow.yaml \
             --stack-name "${STACK}" \
             --capabilities CAPABILITY_NAMED_IAM \
@@ -725,14 +740,50 @@ jobs:
               "DatabaseHost=${DB_HOST}" \
               "DatabaseName=${DB_NAME}" \
               "SlotCapacityTableName=${SLOT_CAPACITY_TABLE_NAME}" \
+              "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
               "WaitlistTableName=${WAITLIST_TABLE_NAME}" \
               "HoldOffersTableName=${HOLD_OFFERS_TABLE_NAME}" \
-              "NotificationDispatchTableName=${NOTIFICATION_DISPATCH_TABLE_NAME}" \
               "EventBusName=${EVENT_BUS_NAME}" \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
-          RESCHEDULE_STATE_MACHINE_ARN="$(aws cloudformation describe-stacks --stack-name "${STACK}" --query "Stacks[0].Outputs[?OutputKey=='RescheduleStateMachineArn'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
-          echo "RESCHEDULE_STATE_MACHINE_ARN=${RESCHEDULE_STATE_MACHINE_ARN}" >> "${GITHUB_ENV}"
+          ARN="$(aws cloudformation describe-stacks --stack-name "${STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='RescheduleStateMachineArn'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
+          if [[ -z "${ARN}" || "${ARN}" == "None" ]]; then
+            echo "::error::The workflow stack did not return RescheduleStateMachineArn."
+            exit 1
+          fi
+          echo "RESCHEDULE_STATE_MACHINE_ARN=${ARN}" >> "${GITHUB_ENV}"
+
+      # ==========================================
+      # STEP 12A2: Notifications, queues and background jobs (Milestone 6)
+      # ==========================================
+      - name: Deploy Notifications and Jobs Stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
+            --template-file infrastructure/cloudformation/notifications.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-notifications" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+              "ProjectName=${PROJECT_NAME}" \
+              "EnvironmentName=${ENVIRONMENT_NAME}" \
+              "LambdaCodeS3Bucket=${LAMBDA_CODE_S3_BUCKET}" \
+              "LambdaCodeS3Key=${LAMBDA_CODE_S3_KEY}" \
+              "LambdaSubnetIds=${LAMBDA_SUBNET_1_ID},${LAMBDA_SUBNET_2_ID}" \
+              "LambdaSecurityGroupId=${LAMBDA_SECURITY_GROUP_ID}" \
+              "DatabaseSecretArn=${DB_SECRET_ARN}" \
+              "DatabaseHost=${DB_HOST}" \
+              "DatabaseName=${DB_NAME}" \
+              "SlotCapacityTableName=${SLOT_CAPACITY_TABLE_NAME}" \
+              "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
+              "WaitlistTableName=${WAITLIST_TABLE_NAME}" \
+              "HoldOffersTableName=${HOLD_OFFERS_TABLE_NAME}" \
+              "EventBusName=${EVENT_BUS_NAME}" \
+              "DispatchLogTableName=${DISPATCH_LOG_TABLE_NAME}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
 
       # ==========================================
       # STEP 12B: Doctor domain stack (doctor API Lambda, slot materialiser, daily schedule)
@@ -742,6 +793,7 @@ jobs:
         run: |
           set -euo pipefail
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/doctor.yaml \
             --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-doctor" \
             --capabilities CAPABILITY_NAMED_IAM \
@@ -749,6 +801,8 @@ jobs:
               "SlotCapacityTableName=${SLOT_CAPACITY_TABLE_NAME}" \
               "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
               "EventBusName=${EVENT_BUS_NAME}" \
+              "WaitlistTableName=${WAITLIST_TABLE_NAME}" \
+              "HoldOffersTableName=${HOLD_OFFERS_TABLE_NAME}" \
               "ProjectName=${PROJECT_NAME}" \
               "EnvironmentName=${ENVIRONMENT_NAME}" \
               "LambdaCodeS3Bucket=${LAMBDA_CODE_S3_BUCKET}" \
@@ -770,16 +824,17 @@ jobs:
         run: |
           set -euo pipefail
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/patient.yaml \
             --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-patient" \
             --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               "SlotCapacityTableName=${SLOT_CAPACITY_TABLE_NAME}" \
               "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
+              "EventBusName=${EVENT_BUS_NAME}" \
               "WaitlistTableName=${WAITLIST_TABLE_NAME}" \
               "HoldOffersTableName=${HOLD_OFFERS_TABLE_NAME}" \
               "RescheduleStateMachineArn=${RESCHEDULE_STATE_MACHINE_ARN}" \
-              "EventBusName=${EVENT_BUS_NAME}" \
               "ProjectName=${PROJECT_NAME}" \
               "EnvironmentName=${ENVIRONMENT_NAME}" \
               "LambdaCodeS3Bucket=${LAMBDA_CODE_S3_BUCKET}" \
@@ -807,6 +862,7 @@ jobs:
             exit 0
           fi
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/auth.yaml \
             --stack-name "${STACK_NAME}" \
             --capabilities CAPABILITY_NAMED_IAM \
@@ -870,6 +926,7 @@ jobs:
           echo "Deploying API Stack: ${STACK_NAME}"
 
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/api.yaml \
             --stack-name "${STACK_NAME}" \
             --capabilities CAPABILITY_NAMED_IAM \
@@ -912,6 +969,7 @@ jobs:
           echo "Deploying Authentication Stack: ${STACK_NAME}"
 
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/auth.yaml \
             --stack-name "${STACK_NAME}" \
             --capabilities CAPABILITY_NAMED_IAM \
@@ -1041,6 +1099,46 @@ jobs:
           assert second["errors"] == 0 and second["inserted"] == 0, f"second run created slots: {second}"
           print("Materialiser is idempotent: the second run inserted 0 slots.")
           PY
+
+      # ==========================================
+      # STEP 14A: Observability (Milestone 7): dashboard, alarms, budget
+      # ==========================================
+      - name: Deploy Observability Stack
+        shell: bash
+        env:
+          ALARM_EMAIL_INPUT: ${{ vars.MEDISLOT_ALARM_EMAIL }}
+          MONTHLY_BUDGET_INPUT: ${{ vars.MEDISLOT_MONTHLY_BUDGET_USD }}
+        run: |
+          set -euo pipefail
+          out() {
+            aws cloudformation describe-stacks --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-$1" \
+              --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue | [0]" --output text --region "${AWS_REGION}"
+          }
+          DB_INSTANCE_ID="$(out data DBInstanceIdentifier)"
+          NOTIF_Q="$(out notifications NotificationQueueName)"
+          NOTIF_DLQ="$(out notifications NotificationDeadLetterQueueName)"
+          WL_Q="$(out notifications WaitlistQueueName)"
+          WL_DLQ="$(out notifications WaitlistDeadLetterQueueName)"
+          aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
+            --template-file infrastructure/cloudformation/observability.yaml \
+            --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-observability" \
+            --parameter-overrides \
+              "ProjectName=${PROJECT_NAME}" \
+              "EnvironmentName=${ENVIRONMENT_NAME}" \
+              "DBInstanceIdentifier=${DB_INSTANCE_ID}" \
+              "SlotCapacityTableName=${SLOT_CAPACITY_TABLE_NAME}" \
+              "WaitlistTableName=${WAITLIST_TABLE_NAME}" \
+              "HoldOffersTableName=${HOLD_OFFERS_TABLE_NAME}" \
+              "NotificationQueueName=${NOTIF_Q}" \
+              "NotificationDlqName=${NOTIF_DLQ}" \
+              "WaitlistQueueName=${WL_Q}" \
+              "WaitlistDlqName=${WL_DLQ}" \
+              "StateMachineArn=${RESCHEDULE_STATE_MACHINE_ARN}" \
+              "AlarmEmail=${ALARM_EMAIL_INPUT:-}" \
+              "MonthlyBudgetUsd=${MONTHLY_BUDGET_INPUT:-50}" \
+            --no-fail-on-empty-changeset \
+            --region "${AWS_REGION}"
 
       # ==========================================
       # STEP 13D: Verify the booking tables really exist and the Lambdas point at them
@@ -1181,6 +1279,7 @@ jobs:
           set -euo pipefail
           STACK_NAME="${PROJECT_NAME}-${ENVIRONMENT_NAME}-web"
           aws cloudformation deploy \
+            --tags "Project=${PROJECT_NAME}" "Environment=${ENVIRONMENT_NAME}" "ManagedBy=github-actions" \
             --template-file infrastructure/cloudformation/web.yaml \
             --stack-name "${STACK_NAME}" \
             --parameter-overrides \
@@ -1308,7 +1407,7 @@ jobs:
         shell: bash
         run: |
           echo "MediSlot deployment summary"
-          for stack in network data dynamodb booking storage workflow auth doctor api web; do
+          for stack in network data dynamodb booking storage auth doctor api web; do
             name="${PROJECT_NAME}-${ENVIRONMENT_NAME}-${stack}"
             status="$(aws cloudformation describe-stacks --stack-name "${name}" \
               --query 'Stacks[0].StackStatus' --output text --region "${AWS_REGION}" 2>/dev/null || true)"

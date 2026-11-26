@@ -884,3 +884,26 @@ def cancel_slot():
     except ApiError as exc:
         flash(exc.message, "error")
     return redirect(url_for("doctor.schedule", date=back) if back else url_for("doctor.schedule"))
+
+
+@bp.route("/appointments/<appointment_id>/attendance", methods=["POST"], endpoint="attendance")
+@role_required("doctor")
+def attendance(appointment_id):
+    """Record what happened: the patient was seen (complete) or did not come (no-show, fee kept, slot closed)."""
+    outcome = request.form.get("outcome", "")
+    if outcome not in ("no-show", "complete"):
+        flash("Choose Attended or No-show.", "error")
+    else:
+        try:
+            data = api_client.call("POST", f"/doctors/me/appointments/{appointment_id}/{outcome}")
+            if outcome == "no-show":
+                flash("Marked as a no-show. The fee is kept" + (" and the slot is closed." if data.get("slot_closed") else "."),
+                      "success")
+            else:
+                flash("Marked as attended.", "success")
+        except ApiError as exc:
+            flash(exc.message, "error")
+    back = request.form.get("date", "")
+    if request.form.get("next") == "appointments":
+        return redirect(url_for("doctor.appointments"))
+    return redirect(url_for("doctor.schedule", date=back) if back else url_for("doctor.schedule"))

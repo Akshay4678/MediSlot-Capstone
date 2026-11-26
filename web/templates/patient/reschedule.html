@@ -1,20 +1,35 @@
 {% extends "base.html" %}
-{% block title %}Reschedule appointment - MediSlot{% endblock %}
+{% from "_slot_card.html" import slot_card %}
+{% block title %}Reschedule - MediSlot{% endblock %}
 {% block content %}
-<section class="page-head"><h1>Reschedule appointment</h1><p class="muted">Current: {{ a.date }} {{ a.start_time }}&ndash;{{ a.end_time }}</p></section>
+<section class="page-head">
+  <h1>Reschedule your appointment</h1>
+  <p class="muted">Currently: <strong>{{ a.date }}, {{ a.start_time }} &ndash; {{ a.end_time }}</strong> with {{ a.doctor.name }}
+  ({{ a.consultation_type.type_name }}). You can move it to another slot of the same doctor up to
+  <strong>2 times</strong>, and not within <strong>6 hours</strong> of the start. Your fee stays the same; if the move cannot be completed
+  your original appointment stays exactly as it is.</p>
+</section>
+{% set moves = [] %}
 {% for day in data.days if day.slots %}
-<div class="card"><h2>{{ day.date }}</h2><div class="slot-grid">
-{% for s in day.slots %}
-<div class="slot-tile">
-  <strong class="slot-time">{{ s.start_time }} &ndash; {{ s.end_time }}</strong>
-  <span class="slot-type">{{ s.type_name }} &middot; {{ s.duration_minutes }} min</span>
-  <span class="slot-fee">&#8377;{{ '%g' % s.fee }}</span>
-  {% if s.available_seats > 0 and s.status == 'OPEN' %}
-  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="target_slot_id" value="{{ s.slot_id }}"><button type="submit">Reschedule here</button></form>
-  {% else %}<span class="tag full">Unavailable</span>{% endif %}
+<div class="card">
+  <h2>{{ day.date }}</h2>
+  <div class="slot-grid">
+  {% for s in day.slots if s.slot_id != a.slot_id %}
+    {% call slot_card(s) %}
+    <form method="post" action="{{ url_for('patient.reschedule_post', appointment_id=a.appointment_id) }}" class="slot-book"
+          onsubmit="return confirm('Move your appointment to {{ day.date }} {{ s.start_time }}?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
+      <button type="submit">Move here</button>
+    </form>
+    {% endcall %}
+    {% set _ = moves.append(1) %}
+  {% endfor %}
+  </div>
 </div>
 {% endfor %}
-</div></div>
-{% endfor %}
-<p><a href="{{ url_for('patient.appointment', appointment_id=a.appointment_id) }}">&larr; Back</a></p>
+{% if not moves %}
+<div class="card empty"><p class="muted">The doctor has no other open slots in the next 30 days.</p></div>
+{% endif %}
+<p><a href="{{ url_for('patient.appointment', appointment_id=a.appointment_id) }}">&larr; Back to the appointment</a></p>
 {% endblock %}

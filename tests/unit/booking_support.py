@@ -113,11 +113,18 @@ def make_deps(clock=None, max_attempts=6, on_get=None, slot_table=None, idem_tab
     clock = clock or Clock()
     slot_table = slot_table or FakeTable("slot_id", on_get=on_get)
     idem_table = idem_table or FakeTable("idempotency_key")
+    from application.waitlist.store import WaitlistStore
+    queue = FakeTable("slot_id", range_key="patient_id", indexes={
+        "order-index": ("slot_id", "joined_at"), "patient-index": ("patient_id", "slot_id")}, page_size=2)
+    offers = FakeTable("offer_id", indexes={
+        "slot-index": ("slot_id", "created_at"), "patient-index": ("patient_id", "created_at"),
+        "status-index": ("status", "expires_at")}, page_size=2)
     deps = Deps(
         slots=SlotStore(slot_table, max_attempts=max_attempts, backoff_ms=1, sleep=lambda s: time.sleep(min(s, 0.002))),
         idempotency=IdempotencyStore(idem_table, ttl_hours=24, lock_seconds=30, clock=clock.epoch),
-        events=events or FakeEvents(), metrics=metrics or FakeMetrics(), now=clock)
+        events=events or FakeEvents(), metrics=metrics or FakeMetrics(), now=clock, waitlist=WaitlistStore(queue, offers))
     deps.clock, deps.slot_table, deps.idem_table = clock, slot_table, idem_table
+    deps.queue_table, deps.offers_table = queue, offers
     return deps
 
 

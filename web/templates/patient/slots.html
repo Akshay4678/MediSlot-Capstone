@@ -19,18 +19,15 @@
   </form>
 </div>
 
-{% if data.slots %}
-  {% for day in data.days if day.slots %}
+{% set full_by_day = {} %}
+{% for fd in data.full_days if fd.slots %}{% set _ = full_by_day.update({fd.date: fd.slots}) %}{% endfor %}
+{% if data.slots or data.full_slots %}
+  {% for day in data.days if day.slots or full_by_day.get(day.date) %}
   <div class="card">
     <h2>{{ day.date }}</h2>
     <div class="slot-grid">
     {% for s in day.slots %}
       {% call slot_card(s) %}
-      {% if s.slot_id in booked_slot_ids %}
-      <div class="slot-book">
-        <button type="button" disabled>Already booked</button>
-      </div>
-      {% elif s.available_seats > 0 and s.status == 'OPEN' %}
       <form method="post" action="{{ url_for('patient.book') }}" class="slot-book">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
@@ -40,22 +37,22 @@
         <input type="hidden" name="idempotency_key" value="{{ booking_key }}-{{ loop.index }}-{{ day.date }}">
         <button type="submit">Book</button>
       </form>
+      {% endcall %}
+    {% endfor %}
+    {% for s in full_by_day.get(day.date, []) %}
+      {% call slot_card(s) %}
+      {% if waiting.get(s.slot_id) %}
+        <span class="tag">On the waitlist{% if waiting[s.slot_id].position %} &middot; position {{ waiting[s.slot_id].position }}{% endif %}</span>
+        {% if waiting[s.slot_id].offer %}<a class="btn" href="{{ url_for('patient.waitlist') }}">A seat is held for you</a>{% endif %}
       {% else %}
-        {% if s.slot_id in waitlist_slot_ids or s.slot_id == joined_slot_id %}
-        <div class="slot-book">
-          <button type="button" disabled>Already on waitlist</button>
-          <a class="small" href="{{ url_for('patient.waitlist') }}">View waitlist</a>
-        </div>
-        {% else %}
-        <form method="post" action="{{ url_for('patient.waitlist_join') }}" class="slot-book" onsubmit="this.querySelector('button[type=submit]').disabled=true;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
-          <input type="hidden" name="doctor_id" value="{{ doctor_id }}">
-          <input type="hidden" name="date" value="{{ date }}">
-          <input type="hidden" name="to" value="{{ until }}">
-          <button type="submit">Join waitlist</button>
-        </form>
-        {% endif %}
+      <form method="post" action="{{ url_for('patient.waitlist_join') }}" class="slot-book">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
+        <input type="hidden" name="doctor_id" value="{{ doctor_id }}">
+        <input type="hidden" name="date" value="{{ date }}">
+        <input type="hidden" name="to" value="{{ until }}">
+        <button class="secondary" type="submit">Full &ndash; join waitlist</button>
+      </form>
       {% endif %}
       {% endcall %}
     {% endfor %}

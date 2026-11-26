@@ -9,6 +9,10 @@ import boto3
 import pymysql
 from botocore.config import Config
 
+from application.common import tracing
+
+tracing.enable()  # X-Ray sub-segments for every AWS and database call (no-op outside Lambda)
+
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 

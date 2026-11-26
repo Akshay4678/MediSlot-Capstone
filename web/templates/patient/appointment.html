@@ -25,11 +25,11 @@
 </div>
 {% endif %}
 
-{% if a.status == 'CONFIRMED' %}
+{% if a.can_reschedule %}
 <div class="card">
-  <h2>Reschedule</h2>
-  <p class="muted">Choose another available slot. The reschedule saga claims the new seat first and compensates if the original seat cannot be released.</p>
-  <a class="btn secondary" href="{{ url_for('patient.reschedule', appointment_id=a.appointment_id) }}">Choose another slot</a>
+  <h2>Move to another time</h2>
+  <p>Moved {{ a.reschedule_count }} of 2 times. You keep your fee and the new seat is claimed before the old one is released.</p>
+  <p><a class="btn secondary" href="{{ url_for('patient.reschedule', appointment_id=a.appointment_id) }}">Reschedule</a></p>
 </div>
 {% endif %}
 

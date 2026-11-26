@@ -1,27 +1,44 @@
 {% extends "base.html" %}
-{% block title %}My waitlist - MediSlot{% endblock %}
+{% block title %}My waitlists - MediSlot{% endblock %}
 {% block content %}
-<section class="page-head"><h1>My waitlist</h1><p class="muted">A waitlist entry is not an appointment. When a seat opens, MediSlot creates a temporary offer for you; accept it before it expires.</p></section>
+<section class="page-head">
+  <h1>My waitlists</h1>
+  <p class="muted">You can wait for at most {{ data.limit }} full slots at once. When a seat frees up it is <strong>held</strong> for the first
+  patient in line for a limited time: accept before the hold ends or it passes to the next patient.</p>
+</section>
+
 {% if data['items'] %}
 <div class="doctor-list">
-{% for w in data['items'] %}
-<article class="doctor-card">
-  <div class="doctor-main">
-    {% if w.slot %}
-    <h3>{{ w.slot.type_name }} · {{ w.slot.date }}</h3>
-    <p class="muted">{{ w.slot.start_time }}–{{ w.slot.end_time }} ({{ w.slot.timezone }}) · Joined {{ w.joined_at }}</p>
-    {% else %}
-    <h3>Slot {{ w.slot_id }}</h3>
-    <p class="muted">Joined {{ w.joined_at }}</p>
-    {% endif %}
-    <p><span class="tag">{{ w.status }}</span></p>
-  </div>
-  <div class="doctor-actions">
-    {% if w.status == 'HELD' %}<form method="post" action="{{ url_for('patient.waitlist_offer_accept', offer_id=w.offer_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">Accept offer</button></form>{% endif %}
-    <form method="post" action="{{ url_for('patient.waitlist_leave', slot_id=w.slot_id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn secondary" type="submit">Leave</button></form>
-  </div>
-</article>
-{% endfor %}
+  {% for w in data['items'] %}
+  <article class="doctor-card appt {{ 'confirmed' if w.offer else '' }}">
+    <div class="date-badge"><strong>{{ w.date[8:10] if w.date else '' }}</strong><span>{{ w.date[5:7] if w.date else '' }}/{{ w.date[2:4] if w.date else '' }}</span></div>
+    <div class="doctor-main">
+      <h3>{{ w.doctor_name }}</h3>
+      <p class="muted">{{ w.type_name }} &middot; {{ w.start_time }}&ndash;{{ w.end_time }} &middot; {{ w.hospital_name }}</p>
+      {% if w.offer %}
+      <p><span class="tag">A seat is held for you</span>
+        <span class="muted small">until {{ w.offer.expires_at }} (about <span class="hold-left" data-seconds="{{ w.offer.seconds_left }}">{{ (w.offer.seconds_left / 60)|round(0, 'ceil')|int }} min</span> left)</span></p>
+      {% else %}
+      <p><span class="tag">Waiting &middot; position {{ w.position }}</span></p>
+      {% endif %}
+    </div>
+    <div class="doctor-actions">
+      {% if w.offer %}
+      <form method="post" action="{{ url_for('patient.offer_accept', offer_id=w.offer.offer_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">Accept the seat</button>
+      </form>
+      {% endif %}
+      <form method="post" action="{{ url_for('patient.waitlist_leave') }}" onsubmit="return confirm('Leave this waitlist?{{ ' The held seat will go to the next patient.' if w.offer else '' }}');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="slot_id" value="{{ w.slot_id }}">
+        <button class="secondary" type="submit">{{ 'Decline' if w.offer else 'Leave' }}</button>
+      </form>
+    </div>
+  </article>
+  {% endfor %}
 </div>
-{% else %}<div class="card empty"><p class="muted">You are not on any waitlists.</p></div>{% endif %}
+{% else %}
+<div class="card empty"><p class="muted">You are not waiting for any slot. When a slot you want is full, use <em>Join waitlist</em> on the slots page.</p></div>
+{% endif %}
 {% endblock %}

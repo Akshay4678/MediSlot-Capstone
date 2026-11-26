@@ -22,7 +22,8 @@ class Deps:
     events: object
     metrics: object
     now: object = _utcnow  # naive UTC "now"; tests replace it with a fixed clock
-    waitlist: object = None
+    waitlist: object = None  # application.waitlist.store.WaitlistStore (None: waitlist features answer 503 / are skipped)
+    sfn: object = None  # Step Functions client for the reschedule saga (None: the saga runs in-process)
 
 
 _cached = None
@@ -37,6 +38,11 @@ def default_deps():
         cfg = Config(connect_timeout=2, read_timeout=4, retries={"total_max_attempts": 2, "mode": "standard"})
         dynamodb = boto3.resource("dynamodb", config=cfg)
         env = os.environ.get("ENVIRONMENT_NAME", "dev")
+        waitlist = None
+        if os.environ.get("WAITLIST_TABLE_NAME") and os.environ.get("HOLD_OFFERS_TABLE_NAME"):
+            from application.waitlist.store import WaitlistStore
+            waitlist = WaitlistStore(dynamodb.Table(os.environ["WAITLIST_TABLE_NAME"]),
+                                     dynamodb.Table(os.environ["HOLD_OFFERS_TABLE_NAME"]))
         _cached = Deps(
             slots=SlotStore(dynamodb.Table(os.environ["SLOT_CAPACITY_TABLE_NAME"]),
                             max_attempts=rules.booking_max_attempts(), backoff_ms=rules.booking_backoff_ms()),
@@ -44,14 +50,6 @@ def default_deps():
                                          ttl_hours=rules.idempotency_ttl_hours()),
             events=EventPublisher(boto3.client("events", config=cfg), os.environ.get("EVENT_BUS_NAME", "default")),
             metrics=Metrics(boto3.client("cloudwatch", config=cfg), environment=env),
-            waitlist=None,
+            waitlist=waitlist,
         )
-        if os.environ.get("WAITLIST_TABLE_NAME") and os.environ.get("HOLD_OFFERS_TABLE_NAME"):
-            from application.waitlist.store import default_store as default_waitlist_store
-            _cached.waitlist = default_waitlist_store()
     return _cached
-
-# Helpers used by waitlist workers without coupling them to the booking clock.
-def _epoch_now():
-    import time
-    return int(time.time())

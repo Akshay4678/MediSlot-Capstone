@@ -31,11 +31,15 @@ PATIENT_ROUTES = [
     ("POST", "appointments"), ("GET", "appointments"), ("GET", "appointments/a1"),
     ("POST", "appointments/a1/cancel"), ("GET", "refunds"), ("GET", "patient/me"), ("PUT", "patient/me"),
     ("GET", "doctors/search"), ("GET", "doctors/d1"), ("GET", "doctors/d1/slots"),
+    # Milestone 6
+    ("PATCH", "appointments/a1"), ("POST", "slots/s1%23x/waitlist"), ("DELETE", "slots/s1%23x/waitlist"),
+    ("GET", "patient/me/waitlists"), ("POST", "waitlist-offers/o1/accept"),
 ]
 DOCTOR_ROUTES = [
     ("GET", "doctors/me"), ("PUT", "doctors/me"), ("GET", "doctors/me/appointments"),
     ("GET", "doctors/me/appointments/a1"), ("POST", "doctors/me/slots/cancel"), ("GET", "doctors/me/schedule"),
     ("PUT", "doctors/me/availability"), ("POST", "doctors/me/consultation-types"),
+    ("POST", "doctors/me/appointments/a1/no-show"), ("POST", "doctors/me/appointments/a1/complete"),
 ]
 
 
@@ -49,7 +53,7 @@ def test_doctor_can_use_doctor_routes(method, path):
     assert allowed("doctor", method, path)
 
 
-@pytest.mark.parametrize("method,path", [r for r in PATIENT_ROUTES if r[1].split("/")[0] in ("appointments", "refunds", "patient")])
+@pytest.mark.parametrize("method,path", [r for r in PATIENT_ROUTES if r[1].split("/")[0] in ("appointments", "refunds", "patient", "slots", "waitlist-offers")])
 def test_doctor_cannot_use_patient_only_routes(method, path):
     assert not allowed("doctor", method, path)
 

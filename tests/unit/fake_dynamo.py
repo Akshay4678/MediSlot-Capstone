@@ -161,9 +161,17 @@ class _Parser:
 
 
 class FakeTable:
-    def __init__(self, key, on_get=None):
-        self.key, self.items, self.lock, self.on_get = key, {}, threading.Lock(), on_get
+    """One table. `key` is the partition key; `range_key` (optional) makes the primary key composite and
+    `indexes` maps an index name to (partition attribute, sort attribute) for query(). `page_size` makes
+    query() return LastEvaluatedKey after that many items, so callers that forget to loop are caught."""
+
+    def __init__(self, key, on_get=None, range_key=None, indexes=None, page_size=None):
+        self.key, self.range_key, self.indexes, self.page_size = key, range_key, dict(indexes or {}), page_size
+        self.items, self.lock, self.on_get = {}, threading.Lock(), on_get
         self.calls = []
+
+    def _pk(self, source):
+        return (source[self.key], source[self.range_key]) if self.range_key else source[self.key]
 
     def _check(self, expression, names, values, item):
         if not expression:
@@ -176,7 +184,7 @@ class FakeTable:
 
     def get_item(self, Key, ConsistentRead=False):
         with self.lock:
-            item = self.items.get(Key[self.key])
+            item = self.items.get(self._pk(Key))
             copy = dict(item) if item else None
         if self.on_get:
             self.on_get()
@@ -185,7 +193,7 @@ class FakeTable:
     def put_item(self, Item, ConditionExpression=None, ExpressionAttributeNames=None, ExpressionAttributeValues=None):
         with self.lock:
             self.calls.append("put")
-            current = self.items.get(Item[self.key])
+            current = self.items.get(self._pk(Item))
             if ConditionExpression:
                 ok, parser = self._check(ConditionExpression, ExpressionAttributeNames, ExpressionAttributeValues, current)
                 parser.finish(ExpressionAttributeNames, ExpressionAttributeValues)
@@ -193,14 +201,14 @@ class FakeTable:
                     raise FakeClientError("ConditionalCheckFailedException", "The conditional request failed")
             elif ExpressionAttributeNames or ExpressionAttributeValues:
                 raise ExpressionError("placeholders supplied without an expression")
-            self.items[Item[self.key]] = dict(Item)
+            self.items[self._pk(Item)] = dict(Item)
         return {}
 
     def update_item(self, Key, UpdateExpression, ConditionExpression=None, ExpressionAttributeNames=None,
                     ExpressionAttributeValues=None):
         with self.lock:
             self.calls.append("update")
-            current = self.items.get(Key[self.key])
+            current = self.items.get(self._pk(Key))
             used_n, used_v = set(), set()
             if ConditionExpression:
                 ok, parser = self._check(ConditionExpression, ExpressionAttributeNames, ExpressionAttributeValues, current)
@@ -219,16 +227,68 @@ class FakeTable:
             if set(ExpressionAttributeNames or {}) != used_n or set(ExpressionAttributeValues or {}) != used_v:
                 raise ExpressionError("ExpressionAttributeNames/Values contain unused entries")
             base.update(changes)
-            self.items[Key[self.key]] = base
+            self.items[self._pk(Key)] = base
         return {}
 
     def delete_item(self, Key, ConditionExpression=None, ExpressionAttributeNames=None, ExpressionAttributeValues=None):
         with self.lock:
-            current = self.items.get(Key[self.key])
+            current = self.items.get(self._pk(Key))
             if ConditionExpression:
                 ok, parser = self._check(ConditionExpression, ExpressionAttributeNames, ExpressionAttributeValues, current)
                 parser.finish(ExpressionAttributeNames, ExpressionAttributeValues)
                 if not ok:
                     raise FakeClientError("ConditionalCheckFailedException", "The conditional request failed")
-            self.items.pop(Key[self.key], None)
+            self.items.pop(self._pk(Key), None)
         return {}
+
+    _COND = re.compile(r"^\s*(#\w+)\s*(=|<=|>=|<|>)\s*(:\w+)\s*$")
+
+    def query(self, KeyConditionExpression, ExpressionAttributeNames=None, ExpressionAttributeValues=None,
+              IndexName=None, ExclusiveStartKey=None, Limit=None, ScanIndexForward=True):
+        names, values = ExpressionAttributeNames or {}, ExpressionAttributeValues or {}
+        if IndexName:
+            if IndexName not in self.indexes:
+                raise ExpressionError(f"The table does not have the specified index: {IndexName}")
+            hash_attr, sort_attr = self.indexes[IndexName]
+        else:
+            hash_attr, sort_attr = self.key, self.range_key
+        parts = re.split(r"\s+AND\s+", KeyConditionExpression.strip(), flags=re.I)
+        conditions, used_n, used_v = [], set(), set()
+        for part in parts:
+            m = self._COND.match(part)
+            if not m:
+                raise ExpressionError(f"cannot parse key condition {part!r}")
+            name_token, op, value_token = m.groups()
+            if name_token not in names or value_token not in values:
+                raise ExpressionError("key condition uses an undefined name or value")
+            used_n.add(name_token)
+            used_v.add(value_token)
+            conditions.append((names[name_token], op, values[value_token]))
+        if set(names) != used_n or set(values) != used_v:
+            raise ExpressionError("ExpressionAttributeNames/Values contain unused entries")
+        if conditions[0][0] != hash_attr or conditions[0][1] != "=":
+            raise ExpressionError("a key condition needs an equality on the partition key first")
+        for attr, _, _ in conditions[1:]:
+            if attr != sort_attr:
+                raise ExpressionError(f"{attr} is not the sort key of {IndexName or 'the table'}")
+        ops = {"=": lambda a, b: a == b, "<": lambda a, b: a < b, "<=": lambda a, b: a <= b,
+               ">": lambda a, b: a > b, ">=": lambda a, b: a >= b}
+        with self.lock:
+            matched = []
+            for item in self.items.values():
+                if hash_attr not in item or (sort_attr and sort_attr not in item):
+                    continue  # sparse index: items without the index keys are not in it
+                if all(ops[op](item.get(attr), value) for attr, op, value in conditions):
+                    matched.append(dict(item))
+        order = (lambda i: (i.get(sort_attr), str(self._pk(i)))) if sort_attr else (lambda i: str(self._pk(i)))
+        matched.sort(key=order, reverse=not ScanIndexForward)
+        start = 0
+        if ExclusiveStartKey:
+            marker = str(ExclusiveStartKey["marker"])
+            start = next((i + 1 for i, item in enumerate(matched) if str(self._pk(item)) == marker), len(matched))
+        size = Limit or self.page_size
+        page = matched[start:start + size] if size else matched[start:]
+        result = {"Items": page, "Count": len(page)}
+        if size and start + size < len(matched):
+            result["LastEvaluatedKey"] = {"marker": str(self._pk(page[-1]))}
+        return result

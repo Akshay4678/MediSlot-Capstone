@@ -32,6 +32,12 @@ Parameters:
   IdempotencyTableName:
     Type: String
     Description: DynamoDB table holding Idempotency-Key records.
+  WaitlistTableName:
+    Type: String
+    Description: DynamoDB waitlist queue table.
+  HoldOffersTableName:
+    Type: String
+    Description: DynamoDB hold-offer table.
   EventBusName:
     Type: String
     Description: EventBridge bus that receives the appointment events.
@@ -83,9 +89,14 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:UpdateItem
                   - dynamodb:DeleteItem
+                  - dynamodb:Query
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${SlotCapacityTableName}'
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${IdempotencyTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${WaitlistTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${WaitlistTableName}/index/*'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${HoldOffersTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${HoldOffersTableName}/index/*'
               - Sid: PublishAppointmentEvents
                 Effect: Allow
                 Action: events:PutEvents
@@ -127,6 +138,8 @@ Resources:
           PHOTO_BUCKET: !Ref PhotoBucketName
           SLOT_CAPACITY_TABLE_NAME: !Ref SlotCapacityTableName
           IDEMPOTENCY_TABLE_NAME: !Ref IdempotencyTableName
+          WAITLIST_TABLE_NAME: !Ref WaitlistTableName
+          HOLD_OFFERS_TABLE_NAME: !Ref HoldOffersTableName
           EVENT_BUS_NAME: !Ref EventBusName
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds

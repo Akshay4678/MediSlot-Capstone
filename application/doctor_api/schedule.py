@@ -14,6 +14,11 @@ MAX_RANGE_DAYS = slot_query.MAX_RANGE_DAYS
 ACTIVE_STATUSES = ("CONFIRMED", "COMPLETED", "NO_SHOW")
 
 
+def _naive(value):
+    """fetch_slots returns start_utc as ISO text with a trailing Z."""
+    return datetime.fromisoformat(str(value).replace("Z", "").replace(" ", "T"))
+
+
 def _range(ctx, doctor):
     q = ctx.query
     today = datetime.now(timezone.utc).astimezone(ZoneInfo(doctor["timezone"])).date()
@@ -35,6 +40,8 @@ def get(ctx):
 
     slot_rows = slot_query.fetch_slots(ctx.conn, doctor["doctor_id"], start, end)
 
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    started = {r["slot_id"] for r in slot_rows if _naive(r["start_utc"]) <= now}
     with ctx.conn.cursor() as cur:
         bookings = defaultdict(list)
         if slot_rows:
@@ -64,6 +71,10 @@ def get(ctx):
 
     for slot in slot_rows:
         slot["appointments"] = [b for b in bookings[slot["slot_id"]] if b["status"] in ACTIVE_STATUSES]
+        slot["started"] = slot["slot_id"] in started
+        for b in slot["appointments"]:
+            # the doctor records what happened once the time has come (no-show keeps the fee)
+            b["can_mark_attendance"] = b["status"] == "CONFIRMED" and slot["started"]
         days[slot["date"]]["slots"].append(slot)
 
     # A blackout day overrides any weekly availability. Hide the BLOCKED slots the materialiser

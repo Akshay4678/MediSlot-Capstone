@@ -6,8 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import pymysql
 
 from application.common.api import ApiError, clean_text, new_id, require_uuid
-from application.doctor_api import photo
-from application.slot_materialiser import core as slots
+from application.doctor_api import photo, reconcile
 
 
 # Licence number rules:
@@ -285,10 +284,6 @@ def put(ctx):
         and "timezone" in values
         and values["timezone"] != existing["timezone"]
     ):
-        slots.rebuild_future_slots(
-            ctx.conn,
-            doctor_id,
-            values["timezone"],
-        )
+        reconcile.rebuild(ctx.conn, doctor_id, values["timezone"])
 
     return status, {"profile": load_profile(ctx)}

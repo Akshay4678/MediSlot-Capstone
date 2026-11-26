@@ -159,6 +159,9 @@ def _doctor_today(now_utc, tz_name):
 def slots(conn, doctor_id, q, now_utc=None):
     """Open slots with free seats for one date (?date=) or a date range (?from=&to=).
 
+    Slots that are FULL are returned separately as full_slots / full_days: a patient cannot book them but may join
+    their waitlist (Milestone 6).
+
     Any date from today up to the booking window is accepted (the window comes from SSM
     rules/booking-window-days, 30 days by default). A date beyond the window is a 400 that
     names the last date that can be viewed. The rows come from application.common.slot_query
@@ -184,13 +187,15 @@ def slots(conn, doctor_id, q, now_utc=None):
                        "Please choose an earlier date.")
 
     first = max(start, today)  # days that already passed have nothing left to book
-    items = []
+    items, full = [], []
     if first <= end:
-        items = [s for s in slot_query.fetch_slots(conn, doctor_id, first, end, after_utc=now_utc)
-                 if slot_query.is_patient_visible(s)]
+        rows = slot_query.fetch_slots(conn, doctor_id, first, end, after_utc=now_utc)
+        items = [s for s in rows if slot_query.is_bookable(s)]
+        full = [s for s in rows if s["status"] == "FULL" and s["available_seats"] == 0]  # waitlist can be joined
     body = {"doctor_id": doctor_id, "timezone": doctor["timezone"], "from": start.isoformat(), "to": end.isoformat(),
             "booking_window_ends": last_day.isoformat(),
-            "slots": items, "days": slot_query.group_by_day(items, first, end) if first <= end else []}
+            "slots": items, "days": slot_query.group_by_day(items, first, end) if first <= end else [],
+            "full_slots": full, "full_days": slot_query.group_by_day(full, first, end) if first <= end else []}
     if single:
         body["date"] = start.isoformat()
     return 200, body

@@ -1,5 +1,5 @@
-"""Doctor-domain Lambda (Milestones 3 and 5): profile, photo, consultation types, availability,
-blackouts and schedule, appointments and slot cancellation, plus the hospital / specialisation lists.
+"""Doctor-domain Lambda (Milestones 3, 5 and 6): profile, photo, consultation types, availability,
+blackouts and schedule, appointments, slot cancellation and no-show / completed marking, plus the hospital / specialisation lists.
 
 Identity comes ONLY from the API Gateway authorizer context (userId, role). The request
 body, query string and headers are never used to decide who is acting.
@@ -72,6 +72,8 @@ ROUTES = {
     ("GET", "/doctors/me/schedule"): schedule.get,
     ("GET", "/doctors/me/appointments"): appointments.list_,
     ("GET", "/doctors/me/appointments/{appointment_id}"): appointments.get,
+    ("POST", "/doctors/me/appointments/{appointment_id}/no-show"): appointments.no_show,
+    ("POST", "/doctors/me/appointments/{appointment_id}/complete"): appointments.complete,
     ("POST", "/doctors/me/slots/cancel"): appointments.cancel_slot,
     ("GET", "/hospitals"): catalogue.hospitals,
     ("GET", "/specialisations"): catalogue.specialisations,

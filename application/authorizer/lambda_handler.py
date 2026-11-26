@@ -42,7 +42,7 @@ HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 # Resource patterns (after /<stage>/<METHOD>/) that a role may NOT call.
 DENIED_FOR_ROLE = {
     "patient": ["doctors/me", "doctors/me/*"],
-    "doctor": ["patients/me", "patients/me/*", "patient/me", "appointments", "appointments/*",
+    "doctor": ["patients/me", "patients/me/*", "patient/me", "patient/me/*", "appointments", "appointments/*",
                "refunds", "slots/*", "waitlist-offers/*"],
 }
 

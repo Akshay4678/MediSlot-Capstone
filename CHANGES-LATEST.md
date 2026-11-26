@@ -21,3 +21,10 @@
   `.gitignore` was empty. Correct versions are included.
 * Old unused files came back in your checkout (see `docs/runbooks/README.md` for the `git rm` list). `doctor.yaml` is back to
   generated names.
+
+## Milestones 6 and 7 (latest)
+* Availability change now cancels booked slots the new pattern no longer produces (100% refund, event, seat released); doctor no-show / completed on the schedule.
+* Milestone 6: reschedule saga (Step Functions), waitlist + hold offers, notifications pipeline, reminders, no-show sweeper, new API routes and portal pages.
+* Milestone 7: `observability.yaml` (dashboard, 17 alarms, budget), X-Ray, cost-allocation tags on every stack, 7-day RDS backups, DynamoDB PITR, `scripts/detect_drift.sh`, `scripts/dr_drill.sh`, docs (architecture, API, runbook, test report, DR drill, cost review), infrastructure audit tests.
+* `remove-leftovers.sh` updated: keeps application/reschedule and application/waitlist, removes old dirs and stub templates.
+* Run `./remove-leftovers.sh` after unzipping, commit, push.

@@ -1,169 +1,151 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: MediSlot Milestone 6 workflows, waitlist, notification consumers and scheduled sweepers.
+Description: >
+  MediSlot reschedule saga (Milestone 6): an AWS Step Functions EXPRESS state machine that moves an appointment to
+  another slot of the same doctor. Steps: Validate -> ClaimTarget -> MoveAppointment -> ReleaseOriginal -> Publish.
+  If MoveAppointment or ReleaseOriginal fails AFTER the target seat was claimed, the state machine runs Compensate
+  (put the appointment back, give the target seat back) and ends with the error RescheduleCompensated.
+  The step Lambda runs inside the VPC because it reads and writes RDS.
 
 Parameters:
-  ProjectName: {Type: String, Default: medislot}
-  EnvironmentName: {Type: String, Default: dev, AllowedValues: [dev, test, prod]}
-  LambdaCodeS3Bucket: {Type: String}
-  LambdaCodeS3Key: {Type: String}
-  LambdaSubnetIds: {Type: List<AWS::EC2::Subnet::Id>}
-  LambdaSecurityGroupId: {Type: AWS::EC2::SecurityGroup::Id}
-  DatabaseSecretArn: {Type: String}
-  DatabaseHost: {Type: String}
-  DatabaseName: {Type: String, Default: medislot}
-  SlotCapacityTableName: {Type: String}
-  WaitlistTableName: {Type: String}
-  HoldOffersTableName: {Type: String}
-  NotificationDispatchTableName: {Type: String}
-  EventBusName: {Type: String, Default: default}
+  ProjectName:
+    Type: String
+    Default: medislot
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  LambdaCodeS3Bucket:
+    Type: String
+  LambdaCodeS3Key:
+    Type: String
+  LambdaSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  LambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  DatabaseSecretArn:
+    Type: String
+  DatabaseHost:
+    Type: String
+  DatabaseName:
+    Type: String
+    Default: medislot
+  SlotCapacityTableName:
+    Type: String
+  WaitlistTableName:
+    Type: String
+  HoldOffersTableName:
+    Type: String
+  IdempotencyTableName:
+    Type: String
+  EventBusName:
+    Type: String
 
 Resources:
-  NotificationTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: !Sub '${ProjectName}-${EnvironmentName}-notifications'
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  WorkflowRole:
+  # ------------------------------------------------------------------ the step Lambda
+  RescheduleStepRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${ProjectName}-${EnvironmentName}-workflow-role'
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-reschedule-step-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: {Service: lambda.amazonaws.com}
+            Principal:
+              Service: lambda.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
       Policies:
-        - PolicyName: WorkflowAccess
+        - PolicyName: RescheduleStepAccess
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
+              - Sid: ReadDatabaseCredentials
+                Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !Ref DatabaseSecretArn
-              - Effect: Allow
+              - Sid: ReadBusinessRules
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${EnvironmentName}/rules/*'
+              - Sid: SeatCounters
+                Effect: Allow
                 Action:
                   - dynamodb:GetItem
                   - dynamodb:PutItem
                   - dynamodb:UpdateItem
                   - dynamodb:DeleteItem
                   - dynamodb:Query
-                  - dynamodb:Scan
-                  - dynamodb:TransactWriteItems
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${SlotCapacityTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${IdempotencyTableName}'
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${WaitlistTableName}'
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${WaitlistTableName}/index/*'
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${HoldOffersTableName}'
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${HoldOffersTableName}/index/*'
-                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${NotificationDispatchTableName}'
-              - Effect: Allow
+              - Sid: PublishEvents
+                Effect: Allow
                 Action: events:PutEvents
                 Resource: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}'
-              - Effect: Allow
+              - Sid: PublishMetrics
+                Effect: Allow
                 Action: cloudwatch:PutMetricData
                 Resource: '*'
                 Condition:
-                  StringEquals: {cloudwatch:namespace: MediSlot}
-              - Effect: Allow
-                Action: sns:Publish
-                Resource: !Ref NotificationTopic
-              - Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource: !GetAtt NotificationQueue1.Arn
-              - Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource: !GetAtt NotificationQueue2.Arn
-              - Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource: !GetAtt NotificationQueue3.Arn
-              - Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource: !GetAtt NotificationQueue4.Arn
-              - Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource: !GetAtt NotificationQueue5.Arn
-              - Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource: !GetAtt NotificationQueue6.Arn
-              - Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource: !GetAtt NotificationQueue7.Arn
-              - Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource: !GetAtt NotificationQueue8.Arn
-
-  WorkflowFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-milestone6-workflow'
-      Runtime: python3.12
-      Handler: application.workflow.handler.lambda_handler
-      Role: !GetAtt WorkflowRole.Arn
-      Timeout: 60
-      MemorySize: 512
-      Code: {S3Bucket: !Ref LambdaCodeS3Bucket, S3Key: !Ref LambdaCodeS3Key}
-      Environment:
-        Variables:
-          ENVIRONMENT_NAME: !Ref EnvironmentName
-          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
-          DB_HOST: !Ref DatabaseHost
-          DB_NAME: !Ref DatabaseName
-          SLOT_CAPACITY_TABLE_NAME: !Ref SlotCapacityTableName
-          WAITLIST_TABLE_NAME: !Ref WaitlistTableName
-          HOLD_OFFERS_TABLE_NAME: !Ref HoldOffersTableName
-          NOTIFICATION_DISPATCH_TABLE_NAME: !Ref NotificationDispatchTableName
-          NOTIFICATION_TOPIC_ARN: !Ref NotificationTopic
-          EVENT_BUS_NAME: !Ref EventBusName
-          FORCE_RELEASE_FAILURE: '0'
-      VpcConfig:
-        SubnetIds: !Ref LambdaSubnetIds
-        SecurityGroupIds: [!Ref LambdaSecurityGroupId]
+                  StringEquals:
+                    cloudwatch:namespace: MediSlot
       Tags:
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment
           Value: !Ref EnvironmentName
 
-  WorkflowLogGroup:
+  RescheduleStepFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-reschedule-step'
+      Runtime: python3.12
+      Handler: application.reschedule.handler.lambda_handler
+      Role: !GetAtt RescheduleStepRole.Arn
+      Timeout: 25
+      MemorySize: 512
+      TracingConfig:
+        Mode: Active
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          ENVIRONMENT_NAME: !Ref EnvironmentName
+          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+          DB_HOST: !Ref DatabaseHost
+          DB_NAME: !Ref DatabaseName
+          SSM_PREFIX: !Sub '/${ProjectName}/${EnvironmentName}'
+          SLOT_CAPACITY_TABLE_NAME: !Ref SlotCapacityTableName
+          IDEMPOTENCY_TABLE_NAME: !Ref IdempotencyTableName
+          WAITLIST_TABLE_NAME: !Ref WaitlistTableName
+          HOLD_OFFERS_TABLE_NAME: !Ref HoldOffersTableName
+          EVENT_BUS_NAME: !Ref EventBusName
+      VpcConfig:
+        SubnetIds: !Ref LambdaSubnetIds
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupId
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ------------------------------------------------------------------ the state machine
+  StateMachineLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub '/aws/lambda/${WorkflowFunction}'
+      LogGroupName: !Sub '/aws/vendedlogs/states/${ProjectName}-${EnvironmentName}-reschedule'
       RetentionInDays: 30
 
-  RescheduleStateMachineRole:
+  StateMachineRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub '${ProjectName}-${EnvironmentName}-reschedule-sfn-role'
@@ -171,184 +153,165 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: {Service: states.amazonaws.com}
+            Principal:
+              Service: states.amazonaws.com
             Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
       Policies:
-        - PolicyName: InvokeWorkflowTasks
+        - PolicyName: RunTheSteps
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
+              - Sid: InvokeStepFunction
+                Effect: Allow
                 Action: lambda:InvokeFunction
-                Resource: !GetAtt WorkflowFunction.Arn
+                Resource: !GetAtt RescheduleStepFunction.Arn
+              # AWS requires Resource '*' for these log-delivery and X-Ray actions (no resource-level support).
+              - Sid: DeliverLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: '*'
+              - Sid: TraceWithXRay
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
   RescheduleStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
-      StateMachineName: !Sub '${ProjectName}-${EnvironmentName}-reschedule-saga'
-      RoleArn: !GetAtt RescheduleStateMachineRole.Arn
-      StateMachineType: STANDARD
-      DefinitionString:
-        Fn::Sub: |
-          {
-            "StartAt": "ClaimTarget",
-            "States": {
-              "ClaimTarget": {
-                "Type": "Task",
-                "Resource": "${WorkflowFunction.Arn}",
-                "Parameters": {"action":"reschedule_claim","patient_id.$":"$.patient_id","appointment_id.$":"$.appointment_id","target_slot_id.$":"$.target_slot_id","attempt.$":"$.attempt"},
-                "ResultPath": "$.claim",
-                "Catch": [{"ErrorEquals":["States.ALL"],"ResultPath":"$.error","Next":"Failed"}],
-                "Next":"CommitReschedule"
+      StateMachineName: !Sub '${ProjectName}-${EnvironmentName}-reschedule'
+      StateMachineType: EXPRESS
+      RoleArn: !GetAtt StateMachineRole.Arn
+      TracingConfiguration:
+        Enabled: true
+      LoggingConfiguration:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+      DefinitionSubstitutions:
+        StepFunctionArn: !GetAtt RescheduleStepFunction.Arn
+      DefinitionString: |-
+        {
+          "Comment": "MediSlot reschedule saga: claim the target seat, move the appointment, release the original seat; compensate if a later step fails.",
+          "StartAt": "Validate",
+          "States": {
+            "Validate": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${StepFunctionArn}",
+                "Payload.$": "States.JsonMerge($, States.StringToJson('{\"step\":\"validate\"}'), false)"
               },
-              "CommitReschedule": {
-                "Type": "Task",
-                "Resource": "${WorkflowFunction.Arn}",
-                "Parameters": {"action":"reschedule_commit","patient_id.$":"$.patient_id","appointment_id.$":"$.appointment_id","target_slot_id.$":"$.target_slot_id","original_slot_id.$":"$.claim.original_slot_id"},
-                "ResultPath": "$.result",
-                "Catch": [{"ErrorEquals":["States.ALL"],"ResultPath":"$.error","Next":"Compensate"}],
-                "Next":"Succeeded"
+              "OutputPath": "$.Payload",
+              "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 1, "MaxAttempts": 2, "BackoffRate": 2}],
+              "Next": "ClaimTarget"
+            },
+            "ClaimTarget": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${StepFunctionArn}",
+                "Payload.$": "States.JsonMerge($, States.StringToJson('{\"step\":\"claim_target\"}'), false)"
               },
-              "Compensate": {
-                "Type": "Task",
-                "Resource": "${WorkflowFunction.Arn}",
-                "Parameters": {"action":"reschedule_compensate","patient_id.$":"$.patient_id","appointment_id.$":"$.appointment_id","target_slot_id.$":"$.target_slot_id","original_slot_id.$":"$.claim.original_slot_id"},
-                "ResultPath":"$.compensation",
-                "Catch":[{"ErrorEquals":["States.ALL"],"Next":"CompensationFailed"}],
-                "Next":"Compensated"
+              "OutputPath": "$.Payload",
+              "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 1, "MaxAttempts": 2, "BackoffRate": 2}],
+              "Next": "MoveAppointment"
+            },
+            "MoveAppointment": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${StepFunctionArn}",
+                "Payload.$": "States.JsonMerge($, States.StringToJson('{\"step\":\"move_appointment\"}'), false)"
               },
-              "Compensated":{"Type":"Fail","Error":"RescheduleCompensated","Cause":"Target claim was compensated after release failure."},
-              "CompensationFailed":{"Type":"Fail","Error":"RescheduleCompensationFailed","Cause":"Manual reconciliation is required."},
-              "Failed":{"Type":"Fail","Error":"RescheduleFailed","Cause":"Target slot could not be claimed."},
-              "Succeeded":{"Type":"Succeed"}
+              "OutputPath": "$.Payload",
+              "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 1, "MaxAttempts": 2, "BackoffRate": 2}],
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "Compensate"}],
+              "Next": "ReleaseOriginal"
+            },
+            "ReleaseOriginal": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${StepFunctionArn}",
+                "Payload.$": "States.JsonMerge($, States.StringToJson('{\"step\":\"release_original\"}'), false)"
+              },
+              "OutputPath": "$.Payload",
+              "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 1, "MaxAttempts": 2, "BackoffRate": 2}],
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "Compensate"}],
+              "Next": "Publish"
+            },
+            "Publish": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${StepFunctionArn}",
+                "Payload.$": "States.JsonMerge($, States.StringToJson('{\"step\":\"publish\"}'), false)"
+              },
+              "OutputPath": "$.Payload",
+              "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 1, "MaxAttempts": 2, "BackoffRate": 2}],
+              "Next": "Final"
+            },
+            "Final": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${StepFunctionArn}",
+                "Payload.$": "States.JsonMerge($, States.StringToJson('{\"step\":\"final\"}'), false)"
+              },
+              "OutputPath": "$.Payload",
+              "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 1, "MaxAttempts": 2, "BackoffRate": 2}],
+              "End": true
+            },
+            "Compensate": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${StepFunctionArn}",
+                "Payload.$": "States.JsonMerge($, States.StringToJson('{\"step\":\"compensate\"}'), false)"
+              },
+              "OutputPath": "$.Payload",
+              "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 1, "MaxAttempts": 4, "BackoffRate": 2}],
+              "Next": "RescheduleCompensated"
+            },
+            "RescheduleCompensated": {
+              "Type": "Fail",
+              "Error": "RescheduleCompensated",
+              "Cause": "A step failed after the target seat was claimed; the appointment was put back and the seat released."
             }
           }
-
-  # Eight independent notification consumers. Each has its own DLQ; all are handled by the same
-  # worker Lambda to keep the application code small while preserving the required queue boundary.
-  NotificationDLQ1: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-booked-dlq'}}
-  NotificationDLQ2: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-cancelled-dlq'}}
-  NotificationDLQ3: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-rescheduled-dlq'}}
-  NotificationDLQ4: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-waitlist-joined-dlq'}}
-  NotificationDLQ5: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-waitlist-left-dlq'}}
-  NotificationDLQ6: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-offered-dlq'}}
-  NotificationDLQ7: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-accepted-dlq'}}
-  NotificationDLQ8: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-expired-dlq'}}
-
-  NotificationQueue1: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-booked', RedrivePolicy: {deadLetterTargetArn: !GetAtt NotificationDLQ1.Arn, maxReceiveCount: 3}, VisibilityTimeout: 90}}
-  NotificationQueue2: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-cancelled', RedrivePolicy: {deadLetterTargetArn: !GetAtt NotificationDLQ2.Arn, maxReceiveCount: 3}, VisibilityTimeout: 90}}
-  NotificationQueue3: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-rescheduled', RedrivePolicy: {deadLetterTargetArn: !GetAtt NotificationDLQ3.Arn, maxReceiveCount: 3}, VisibilityTimeout: 90}}
-  NotificationQueue4: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-waitlist-joined', RedrivePolicy: {deadLetterTargetArn: !GetAtt NotificationDLQ4.Arn, maxReceiveCount: 3}, VisibilityTimeout: 90}}
-  NotificationQueue5: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-waitlist-left', RedrivePolicy: {deadLetterTargetArn: !GetAtt NotificationDLQ5.Arn, maxReceiveCount: 3}, VisibilityTimeout: 90}}
-  NotificationQueue6: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-offered', RedrivePolicy: {deadLetterTargetArn: !GetAtt NotificationDLQ6.Arn, maxReceiveCount: 3}, VisibilityTimeout: 90}}
-  NotificationQueue7: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-accepted', RedrivePolicy: {deadLetterTargetArn: !GetAtt NotificationDLQ7.Arn, maxReceiveCount: 3}, VisibilityTimeout: 90}}
-  NotificationQueue8: {Type: AWS::SQS::Queue, Properties: {QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-expired', RedrivePolicy: {deadLetterTargetArn: !GetAtt NotificationDLQ8.Arn, maxReceiveCount: 3}, VisibilityTimeout: 90}}
-
-  QueueMapping1: {Type: AWS::Lambda::EventSourceMapping, Properties: {EventSourceArn: !GetAtt NotificationQueue1.Arn, FunctionName: !Ref WorkflowFunction, BatchSize: 10, FunctionResponseTypes: [ReportBatchItemFailures]}}
-  QueueMapping2: {Type: AWS::Lambda::EventSourceMapping, Properties: {EventSourceArn: !GetAtt NotificationQueue2.Arn, FunctionName: !Ref WorkflowFunction, BatchSize: 10, FunctionResponseTypes: [ReportBatchItemFailures]}}
-  QueueMapping3: {Type: AWS::Lambda::EventSourceMapping, Properties: {EventSourceArn: !GetAtt NotificationQueue3.Arn, FunctionName: !Ref WorkflowFunction, BatchSize: 10, FunctionResponseTypes: [ReportBatchItemFailures]}}
-  QueueMapping4: {Type: AWS::Lambda::EventSourceMapping, Properties: {EventSourceArn: !GetAtt NotificationQueue4.Arn, FunctionName: !Ref WorkflowFunction, BatchSize: 10, FunctionResponseTypes: [ReportBatchItemFailures]}}
-  QueueMapping5: {Type: AWS::Lambda::EventSourceMapping, Properties: {EventSourceArn: !GetAtt NotificationQueue5.Arn, FunctionName: !Ref WorkflowFunction, BatchSize: 10, FunctionResponseTypes: [ReportBatchItemFailures]}}
-  QueueMapping6: {Type: AWS::Lambda::EventSourceMapping, Properties: {EventSourceArn: !GetAtt NotificationQueue6.Arn, FunctionName: !Ref WorkflowFunction, BatchSize: 10, FunctionResponseTypes: [ReportBatchItemFailures]}}
-  QueueMapping7: {Type: AWS::Lambda::EventSourceMapping, Properties: {EventSourceArn: !GetAtt NotificationQueue7.Arn, FunctionName: !Ref WorkflowFunction, BatchSize: 10, FunctionResponseTypes: [ReportBatchItemFailures]}}
-  QueueMapping8: {Type: AWS::Lambda::EventSourceMapping, Properties: {EventSourceArn: !GetAtt NotificationQueue8.Arn, FunctionName: !Ref WorkflowFunction, BatchSize: 10, FunctionResponseTypes: [ReportBatchItemFailures]}}
-
-  EventRuleBooked: {Type: AWS::Events::Rule, Properties: {EventBusName: !Ref EventBusName, EventPattern: {source: ['medislot.appointments'], detail-type: ['AppointmentBooked']}, Targets: [{Id: q1, Arn: !GetAtt NotificationQueue1.Arn}]}}
-  EventRuleCancelled: {Type: AWS::Events::Rule, Properties: {EventBusName: !Ref EventBusName, EventPattern: {source: ['medislot.appointments'], detail-type: ['AppointmentCancelled']}, Targets: [{Id: q2, Arn: !GetAtt NotificationQueue2.Arn}]}}
-  EventRuleRescheduled: {Type: AWS::Events::Rule, Properties: {EventBusName: !Ref EventBusName, EventPattern: {source: ['medislot.appointments'], detail-type: ['AppointmentRescheduled']}, Targets: [{Id: q3, Arn: !GetAtt NotificationQueue3.Arn}]}}
-  EventRuleWaitlistJoined: {Type: AWS::Events::Rule, Properties: {EventBusName: !Ref EventBusName, EventPattern: {source: ['medislot.appointments'], detail-type: ['WaitlistJoined']}, Targets: [{Id: q4, Arn: !GetAtt NotificationQueue4.Arn}]}}
-  EventRuleWaitlistLeft: {Type: AWS::Events::Rule, Properties: {EventBusName: !Ref EventBusName, EventPattern: {source: ['medislot.appointments'], detail-type: ['WaitlistLeft']}, Targets: [{Id: q5, Arn: !GetAtt NotificationQueue5.Arn}]}}
-  EventRuleOffered: {Type: AWS::Events::Rule, Properties: {EventBusName: !Ref EventBusName, EventPattern: {source: ['medislot.appointments'], detail-type: ['WaitlistHoldOffered']}, Targets: [{Id: q6, Arn: !GetAtt NotificationQueue6.Arn}]}}
-  EventRuleAccepted: {Type: AWS::Events::Rule, Properties: {EventBusName: !Ref EventBusName, EventPattern: {source: ['medislot.appointments'], detail-type: ['WaitlistOfferAccepted']}, Targets: [{Id: q7, Arn: !GetAtt NotificationQueue7.Arn}]}}
-  EventRuleExpired: {Type: AWS::Events::Rule, Properties: {EventBusName: !Ref EventBusName, EventPattern: {source: ['medislot.appointments'], detail-type: ['OffersExpired']}, Targets: [{Id: q8, Arn: !GetAtt NotificationQueue8.Arn}]}}
-
-  EventRuleSlotSeatFreed:
-    Type: AWS::Events::Rule
-    Properties:
-      EventBusName: !Ref EventBusName
-      EventPattern: {source: ['medislot.appointments'], detail-type: ['SlotSeatFreed']}
-      Targets:
-        - Id: waitlist-promoter
-          Arn: !GetAtt WorkflowFunction.Arn
-          InputTransformer:
-            InputPathsMap:
-              slotId: $.detail.slot_id
-            InputTemplate: '{"action":"waitlist_promote","slot_id":<slotId>}' 
-
-  EventRuleSlotSeatFreedPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref WorkflowFunction
-      Action: lambda:InvokeFunction
-      Principal: events.amazonaws.com
-      SourceArn: !GetAtt EventRuleSlotSeatFreed.Arn
-
-  HoldExpirySchedule:
-    Type: AWS::Scheduler::Schedule
-    Properties:
-      Name: !Sub '${ProjectName}-${EnvironmentName}-hold-expiry-sweeper'
-      FlexibleTimeWindow: {Mode: 'OFF'}
-      ScheduleExpression: 'rate(5 minutes)'
-      Target:
-        Arn: !GetAtt WorkflowFunction.Arn
-        RoleArn: !GetAtt SchedulerRole.Arn
-        Input: '{"action":"hold_expiry_sweep"}'
-
-  NoShowSchedule:
-    Type: AWS::Scheduler::Schedule
-    Properties:
-      Name: !Sub '${ProjectName}-${EnvironmentName}-no-show-sweeper'
-      FlexibleTimeWindow: {Mode: 'OFF'}
-      ScheduleExpression: 'rate(15 minutes)'
-      Target:
-        Arn: !GetAtt WorkflowFunction.Arn
-        RoleArn: !GetAtt SchedulerRole.Arn
-        Input: '{"action":"no_show_sweep"}'
-
-  ReminderSchedule:
-    Type: AWS::Scheduler::Schedule
-    Properties:
-      Name: !Sub '${ProjectName}-${EnvironmentName}-reminder-dispatcher'
-      FlexibleTimeWindow: {Mode: 'OFF'}
-      ScheduleExpression: 'rate(5 minutes)'
-      Target:
-        Arn: !GetAtt WorkflowFunction.Arn
-        RoleArn: !GetAtt SchedulerRole.Arn
-        Input: '{"action":"reminder_dispatch"}'
-
-  SchedulerRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${ProjectName}-${EnvironmentName}-workflow-scheduler-role'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: {Service: scheduler.amazonaws.com}
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: InvokeWorkflow
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: lambda:InvokeFunction
-                Resource: !GetAtt WorkflowFunction.Arn
-
-  # EventBridge needs permission to place events onto each SQS target.
-  QueuePolicy1: {Type: AWS::SQS::QueuePolicy, Properties: {Queues: [!Ref NotificationQueue1], PolicyDocument: {Version: '2012-10-17', Statement: [{Effect: Allow, Principal: {Service: events.amazonaws.com}, Action: sqs:SendMessage, Resource: !GetAtt NotificationQueue1.Arn, Condition: {ArnEquals: {aws:SourceArn: !GetAtt EventRuleBooked.Arn}}}]}}}
-  QueuePolicy2: {Type: AWS::SQS::QueuePolicy, Properties: {Queues: [!Ref NotificationQueue2], PolicyDocument: {Version: '2012-10-17', Statement: [{Effect: Allow, Principal: {Service: events.amazonaws.com}, Action: sqs:SendMessage, Resource: !GetAtt NotificationQueue2.Arn, Condition: {ArnEquals: {aws:SourceArn: !GetAtt EventRuleCancelled.Arn}}}]}}}
-  QueuePolicy3: {Type: AWS::SQS::QueuePolicy, Properties: {Queues: [!Ref NotificationQueue3], PolicyDocument: {Version: '2012-10-17', Statement: [{Effect: Allow, Principal: {Service: events.amazonaws.com}, Action: sqs:SendMessage, Resource: !GetAtt NotificationQueue3.Arn, Condition: {ArnEquals: {aws:SourceArn: !GetAtt EventRuleRescheduled.Arn}}}]}}}
-  QueuePolicy4: {Type: AWS::SQS::QueuePolicy, Properties: {Queues: [!Ref NotificationQueue4], PolicyDocument: {Version: '2012-10-17', Statement: [{Effect: Allow, Principal: {Service: events.amazonaws.com}, Action: sqs:SendMessage, Resource: !GetAtt NotificationQueue4.Arn, Condition: {ArnEquals: {aws:SourceArn: !GetAtt EventRuleWaitlistJoined.Arn}}}]}}}
-  QueuePolicy5: {Type: AWS::SQS::QueuePolicy, Properties: {Queues: [!Ref NotificationQueue5], PolicyDocument: {Version: '2012-10-17', Statement: [{Effect: Allow, Principal: {Service: events.amazonaws.com}, Action: sqs:SendMessage, Resource: !GetAtt NotificationQueue5.Arn, Condition: {ArnEquals: {aws:SourceArn: !GetAtt EventRuleWaitlistLeft.Arn}}}]}}}
-  QueuePolicy6: {Type: AWS::SQS::QueuePolicy, Properties: {Queues: [!Ref NotificationQueue6], PolicyDocument: {Version: '2012-10-17', Statement: [{Effect: Allow, Principal: {Service: events.amazonaws.com}, Action: sqs:SendMessage, Resource: !GetAtt NotificationQueue6.Arn, Condition: {ArnEquals: {aws:SourceArn: !GetAtt EventRuleOffered.Arn}}}]}}}
-  QueuePolicy7: {Type: AWS::SQS::QueuePolicy, Properties: {Queues: [!Ref NotificationQueue7], PolicyDocument: {Version: '2012-10-17', Statement: [{Effect: Allow, Principal: {Service: events.amazonaws.com}, Action: sqs:SendMessage, Resource: !GetAtt NotificationQueue7.Arn, Condition: {ArnEquals: {aws:SourceArn: !GetAtt EventRuleAccepted.Arn}}}]}}}
-  QueuePolicy8: {Type: AWS::SQS::QueuePolicy, Properties: {Queues: [!Ref NotificationQueue8], PolicyDocument: {Version: '2012-10-17', Statement: [{Effect: Allow, Principal: {Service: events.amazonaws.com}, Action: sqs:SendMessage, Resource: !GetAtt NotificationQueue8.Arn, Condition: {ArnEquals: {aws:SourceArn: !GetAtt EventRuleExpired.Arn}}}]}}}
+        }
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
 
 Outputs:
   RescheduleStateMachineArn:
     Value: !Ref RescheduleStateMachine
-  WorkflowFunctionArn:
-    Value: !GetAtt WorkflowFunction.Arn
-  NotificationTopicArn:
-    Value: !Ref NotificationTopic
+  RescheduleStateMachineName:
+    Value: !GetAtt RescheduleStateMachine.Name
+  RescheduleStepFunctionName:
+    Value: !Ref RescheduleStepFunction

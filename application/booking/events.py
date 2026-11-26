@@ -1,35 +1,46 @@
-"""Domain events published to EventBridge (source medislot.appointments)."""
-import json, logging, uuid
+"""Domain events published to EventBridge (source medislot.appointments).
+
+Detail types: AppointmentBooked, AppointmentCancelled, AppointmentRescheduled, SlotSeatFreed,
+WaitlistOfferIssued, WaitlistOfferExpired (source medislot.appointments) and ReminderDue (also published
+with this source by the reminder dispatcher), AppointmentNoShow.
+Publishing is best effort AFTER the database commit: a failure is logged, never raised, because the
+appointment (RDS) is the system of record and the booking has already succeeded.
+"""
+
+import json
+import logging
+
 log = logging.getLogger()
+
 SOURCE = "medislot.appointments"
 APPOINTMENT_BOOKED = "AppointmentBooked"
 APPOINTMENT_CANCELLED = "AppointmentCancelled"
-APPOINTMENT_RESCHEDULED = "AppointmentRescheduled"
 SLOT_SEAT_FREED = "SlotSeatFreed"
-WAITLIST_JOINED = "WaitlistJoined"
-WAITLIST_LEFT = "WaitlistLeft"
-WAITLIST_HOLD_OFFERED = "WaitlistHoldOffered"
-WAITLIST_OFFER_ACCEPTED = "WaitlistOfferAccepted"
-OFFERS_EXPIRED = "OffersExpired"
-NOTIFICATION_EVENT_TYPES = (
-    APPOINTMENT_BOOKED, APPOINTMENT_CANCELLED, APPOINTMENT_RESCHEDULED,
-    WAITLIST_JOINED, WAITLIST_LEFT, WAITLIST_HOLD_OFFERED,
-    WAITLIST_OFFER_ACCEPTED, OFFERS_EXPIRED,
-)
+APPOINTMENT_RESCHEDULED = "AppointmentRescheduled"
+WAITLIST_OFFER_ISSUED = "WaitlistOfferIssued"
+WAITLIST_OFFER_EXPIRED = "WaitlistOfferExpired"
+REMINDER_DUE = "ReminderDue"
+APPOINTMENT_NO_SHOW = "AppointmentNoShow"
+
 
 class EventPublisher:
     def __init__(self, client, bus_name="default"):
         self.client, self.bus_name = client, bus_name
+
     def publish(self, detail_type, detail):
         try:
-            payload = dict(detail or {})
-            payload.setdefault("event_id", str(uuid.uuid4()))
-            result = self.client.put_events(Entries=[{"Source": SOURCE, "DetailType": detail_type, "EventBusName": self.bus_name, "Detail": json.dumps(payload, default=str)}])
+            result = self.client.put_events(Entries=[{
+                "Source": SOURCE, "DetailType": detail_type, "EventBusName": self.bus_name,
+                "Detail": json.dumps(detail, default=str)}])
             if result.get("FailedEntryCount"):
-                log.error("EventBridge rejected %s: %s", detail_type, result.get("Entries")); return False
+                log.error("EventBridge rejected %s: %s", detail_type, result.get("Entries"))
+                return False
             return True
-        except Exception:
-            log.exception("Could not publish %s", detail_type); return False
+        except Exception:  # noqa: BLE001 - never fail a committed booking because of notifications
+            log.exception("Could not publish %s", detail_type)
+            return False
+
 
 class NullPublisher:
-    def publish(self, detail_type, detail): return False
+    def publish(self, detail_type, detail):
+        return False

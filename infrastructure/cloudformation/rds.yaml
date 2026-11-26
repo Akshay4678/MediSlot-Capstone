@@ -189,10 +189,7 @@ Resources:
         - true
         - false
 
-      BackupRetentionPeriod: !If
-        - IsProd
-        - 7
-        - 1
+      BackupRetentionPeriod: 7
 
       DeletionProtection: !If
         - DeletionProtectionEnabled
@@ -280,6 +277,10 @@ Resources:
 # ============================================================
 
 Outputs:
+
+  DBInstanceIdentifier:
+    Description: RDS instance identifier (used by the dashboard, the alarms and the DR drill).
+    Value: !Ref MediSlotDatabase
 
   DBEndpointAddress:
     Description: Private RDS endpoint hostname.

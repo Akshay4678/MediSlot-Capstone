@@ -180,7 +180,7 @@ def test_both_dashboards_agree_on_the_same_slot_data(world):
     assert doctor_view["camp"]["appointments"][0]["patient_name"] == "Pat1 Test"  # doctors additionally see who booked
 
 
-def test_the_patient_view_shows_full_slots_for_waitlist_but_hides_closed_slots(world):
+def test_the_patient_view_hides_full_and_closed_slots_but_the_doctor_view_shows_them(world):
     conn, deps = world
     call(patient_handler, "POST", "/appointments", body={"slot_id": "slot"})  # capacity 1 -> FULL
     add_slot(conn.db, "closed", START + timedelta(hours=5), status="CLOSED")
@@ -194,7 +194,7 @@ def test_the_patient_view_shows_full_slots_for_waitlist_but_hides_closed_slots(w
 
     patient_ids = {s["slot_id"] for s in discovery.slots(conn, "d1", {"date": "2026-11-13"}, now_utc=NOW)[1]["slots"]}
     doctor_ids = {s["slot_id"] for s in schedule.get(Ctx())[1]["slots"]}
-    assert patient_ids == {"slot", "camp"} and doctor_ids == {"slot", "camp", "closed"}
+    assert patient_ids == {"camp"} and doctor_ids == {"slot", "camp", "closed"}
 
 
 # ------------------------------------------------------------------------------ consultation type filter

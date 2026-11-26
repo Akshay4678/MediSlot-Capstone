@@ -2,7 +2,7 @@
 
 import re
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 
 
@@ -20,6 +20,7 @@ class Cursor:
     @staticmethod
     def _sql(sql):
         sql = sql.replace("%s", "?").replace("`", '"').replace("GREATEST(", "MAX(").replace(" FOR UPDATE", "")
+        sql = sql.replace("INSERT IGNORE", "INSERT OR IGNORE")
         # MySQL's LIKE escape character is a backslash by default; SQLite needs it spelled out.
         return re.sub(r"LIKE \?", "LIKE ? ESCAPE '\\\\'", sql)
 
@@ -27,6 +28,8 @@ class Cursor:
     def _arg(value):
         if isinstance(value, Decimal):
             return float(value)  # PyMySQL sends Decimal natively; SQLite needs a float
+        if isinstance(value, time):
+            return value.strftime("%H:%M")
         if isinstance(value, datetime):
             return value.isoformat(sep=" ")
         if isinstance(value, date):
@@ -35,6 +38,11 @@ class Cursor:
 
     def execute(self, sql, params=()):
         self._c.execute(self._sql(sql), [self._arg(v) for v in params])
+        self.rowcount = self._c.rowcount
+
+    def executemany(self, sql, rows):
+        rows = [[self._arg(v) for v in row] for row in rows]
+        self._c.executemany(self._sql(sql), rows)
         self.rowcount = self._c.rowcount
 
     def fetchone(self):

@@ -57,3 +57,9 @@ def calculate_refund(fee, start_utc, now_utc, bands):
 def doctor_cancellation_refund(fee):
     amount, pct = refund_for(fee, DOCTOR_CANCELLED)
     return {"tier": DOCTOR_CANCELLED, "percentage": pct, "amount": amount}
+
+
+def no_show_refund(fee):
+    """A patient who did not come keeps paying: 0 % refund (tier NONE). The ledger row records the decision."""
+    amount, pct = refund_for(fee, NONE)
+    return {"tier": NONE, "percentage": pct, "amount": amount}

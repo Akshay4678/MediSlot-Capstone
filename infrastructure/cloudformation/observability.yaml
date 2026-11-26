@@ -1,0 +1,470 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  MediSlot observability (Milestone 7): the medislot-operations CloudWatch dashboard, the six alarm categories
+  (API, Lambda, queues, database, business metrics, workflow and DynamoDB) delivering to one SNS topic, and the AWS Budget
+  that watches the cost of everything tagged Project=medislot.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: medislot
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  DBInstanceIdentifier:
+    Type: String
+  SlotCapacityTableName:
+    Type: String
+  WaitlistTableName:
+    Type: String
+  HoldOffersTableName:
+    Type: String
+  NotificationQueueName:
+    Type: String
+  NotificationDlqName:
+    Type: String
+  WaitlistQueueName:
+    Type: String
+  WaitlistDlqName:
+    Type: String
+  StateMachineArn:
+    Type: String
+  AlarmEmail:
+    Type: String
+    Default: ''
+    Description: Optional e-mail address subscribed to the alarm topic (it must confirm the subscription).
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 50
+
+Conditions:
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, '']]
+
+Resources:
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-${EnvironmentName}-alarms'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmEmail
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  AlarmTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref AlarmTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudWatchAlarms
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref AlarmTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: AllowBudgets
+            Effect: Allow
+            Principal:
+              Service: budgets.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref AlarmTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  # ------------------------------------------------------------------ dashboard
+  OperationsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: medislot-operations
+      DashboardBody: !Sub |
+        {"widgets":[{"type":"text","x":0,"y":0,"width":24,"height":2,"properties":{"markdown":"# MediSlot operations (${EnvironmentName})\nTraffic, errors and latency on top; booking, reschedule, waitlist and notification business metrics in the middle; data stores and queues below. Alarms notify the SNS topic `${ProjectName}-${EnvironmentName}-alarms`."}},{"type":"metric","x":0,"y":2,"width":8,"height":6,"properties":{"title":"API requests / 4XX / 5XX","region":"${AWS::Region}","metrics":[["AWS/ApiGateway","Count","ApiName","${ProjectName}-${EnvironmentName}-rest-api","Stage","${EnvironmentName}",{"stat":"Sum","period":300}],["AWS/ApiGateway","4XXError","ApiName","${ProjectName}-${EnvironmentName}-rest-api","Stage","${EnvironmentName}",{"stat":"Sum","period":300}],["AWS/ApiGateway","5XXError","ApiName","${ProjectName}-${EnvironmentName}-rest-api","Stage","${EnvironmentName}",{"stat":"Sum","period":300}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":8,"y":2,"width":8,"height":6,"properties":{"title":"API latency (p50 / p99, ms)","region":"${AWS::Region}","metrics":[["AWS/ApiGateway","Latency","ApiName","${ProjectName}-${EnvironmentName}-rest-api","Stage","${EnvironmentName}",{"stat":"p50","period":300}],["AWS/ApiGateway","Latency","ApiName","${ProjectName}-${EnvironmentName}-rest-api","Stage","${EnvironmentName}",{"stat":"p99","period":300}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":16,"y":2,"width":8,"height":6,"properties":{"title":"Lambda errors","region":"${AWS::Region}","metrics":[["AWS/Lambda","Errors","FunctionName","${ProjectName}-${EnvironmentName}-patient-api",{"stat":"Sum","period":300,"label":"patient-api"}],["AWS/Lambda","Errors","FunctionName","${ProjectName}-${EnvironmentName}-doctor-api",{"stat":"Sum","period":300,"label":"doctor-api"}],["AWS/Lambda","Errors","FunctionName","${ProjectName}-${EnvironmentName}-auth",{"stat":"Sum","period":300,"label":"auth"}],["AWS/Lambda","Errors","FunctionName","${ProjectName}-${EnvironmentName}-authorizer",{"stat":"Sum","period":300,"label":"authorizer"}],["AWS/Lambda","Errors","FunctionName","${ProjectName}-${EnvironmentName}-reschedule-step",{"stat":"Sum","period":300,"label":"reschedule-step"}],["AWS/Lambda","Errors","FunctionName","${ProjectName}-${EnvironmentName}-jobs",{"stat":"Sum","period":300,"label":"jobs"}],["AWS/Lambda","Errors","FunctionName","${ProjectName}-${EnvironmentName}-notification-consumer",{"stat":"Sum","period":300,"label":"notification-consumer"}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":0,"y":8,"width":8,"height":6,"properties":{"title":"Lambda duration p95 (ms)","region":"${AWS::Region}","metrics":[["AWS/Lambda","Duration","FunctionName","${ProjectName}-${EnvironmentName}-patient-api",{"stat":"p95","period":300,"label":"patient-api"}],["AWS/Lambda","Duration","FunctionName","${ProjectName}-${EnvironmentName}-doctor-api",{"stat":"p95","period":300,"label":"doctor-api"}],["AWS/Lambda","Duration","FunctionName","${ProjectName}-${EnvironmentName}-reschedule-step",{"stat":"p95","period":300,"label":"reschedule-step"}],["AWS/Lambda","Duration","FunctionName","${ProjectName}-${EnvironmentName}-jobs",{"stat":"p95","period":300,"label":"jobs"}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":8,"y":8,"width":8,"height":6,"properties":{"title":"Lambda throttles and concurrent executions","region":"${AWS::Region}","metrics":[["AWS/Lambda","Throttles","FunctionName","${ProjectName}-${EnvironmentName}-patient-api",{"stat":"Sum","period":300,"label":"patient-api throttles"}],["AWS/Lambda","Throttles","FunctionName","${ProjectName}-${EnvironmentName}-doctor-api",{"stat":"Sum","period":300,"label":"doctor-api throttles"}],["AWS/Lambda","Throttles","FunctionName","${ProjectName}-${EnvironmentName}-jobs",{"stat":"Sum","period":300,"label":"jobs throttles"}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":16,"y":8,"width":8,"height":6,"properties":{"title":"Bookings: confirmed / rejected","region":"${AWS::Region}","metrics":[["MediSlot","BookingsConfirmed","Environment","${EnvironmentName}",{"stat":"Sum","period":300,"label":"confirmed"}],["MediSlot","BookingsRejected","Environment","${EnvironmentName}","Reason","SLOT_FULL",{"stat":"Sum","period":300,"label":"rejected: slot full"}],["MediSlot","BookingsRejected","Environment","${EnvironmentName}","Reason","CONTENTION",{"stat":"Sum","period":300,"label":"rejected: contention"}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":0,"y":14,"width":8,"height":6,"properties":{"title":"BookingConflictRetries (optimistic concurrency)","region":"${AWS::Region}","metrics":[["MediSlot","BookingConflictRetries","Environment","${EnvironmentName}",{"stat":"Sum","period":300}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":8,"y":14,"width":8,"height":6,"properties":{"title":"Cancellations by refund tier","region":"${AWS::Region}","metrics":[["MediSlot","CancellationsByTier","Environment","${EnvironmentName}","Tier","FULL",{"stat":"Sum","period":300,"label":"FULL"}],["MediSlot","CancellationsByTier","Environment","${EnvironmentName}","Tier","TIER_75",{"stat":"Sum","period":300,"label":"TIER_75"}],["MediSlot","CancellationsByTier","Environment","${EnvironmentName}","Tier","TIER_50",{"stat":"Sum","period":300,"label":"TIER_50"}],["MediSlot","CancellationsByTier","Environment","${EnvironmentName}","Tier","NONE",{"stat":"Sum","period":300,"label":"NONE"}],["MediSlot","CancellationsByTier","Environment","${EnvironmentName}","Tier","DOCTOR_CANCELLED",{"stat":"Sum","period":300,"label":"DOCTOR_CANCELLED"}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":16,"y":14,"width":8,"height":6,"properties":{"title":"Reschedule saga: succeeded / compensated","region":"${AWS::Region}","metrics":[["MediSlot","ReschedulesSucceeded","Environment","${EnvironmentName}",{"stat":"Sum","period":300}],["MediSlot","ReschedulesCompensated","Environment","${EnvironmentName}",{"stat":"Sum","period":300}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":0,"y":20,"width":8,"height":6,"properties":{"title":"Waitlist: offers issued / expired, promotions","region":"${AWS::Region}","metrics":[["MediSlot","OffersIssued","Environment","${EnvironmentName}",{"stat":"Sum","period":300}],["MediSlot","OffersExpired","Environment","${EnvironmentName}",{"stat":"Sum","period":300}],["MediSlot","WaitlistPromotions","Environment","${EnvironmentName}",{"stat":"Sum","period":300}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":8,"y":20,"width":8,"height":6,"properties":{"title":"Notifications dispatched","region":"${AWS::Region}","metrics":[["MediSlot","NotificationsDispatched","Environment","${EnvironmentName}","Event","AppointmentBooked","Recipient","PATIENT",{"stat":"Sum","period":300,"label":"AppointmentBooked PATIENT"}],["MediSlot","NotificationsDispatched","Environment","${EnvironmentName}","Event","AppointmentBooked","Recipient","DOCTOR",{"stat":"Sum","period":300,"label":"AppointmentBooked DOCTOR"}],["MediSlot","NotificationsDispatched","Environment","${EnvironmentName}","Event","AppointmentRescheduled","Recipient","PATIENT",{"stat":"Sum","period":300,"label":"AppointmentRescheduled PATIENT"}],["MediSlot","NotificationsDispatched","Environment","${EnvironmentName}","Event","AppointmentCancelled","Recipient","PATIENT",{"stat":"Sum","period":300,"label":"AppointmentCancelled PATIENT"}],["MediSlot","NotificationsDispatched","Environment","${EnvironmentName}","Event","WaitlistOfferIssued","Recipient","PATIENT",{"stat":"Sum","period":300,"label":"WaitlistOfferIssued PATIENT"}],["MediSlot","NotificationsDispatched","Environment","${EnvironmentName}","Event","ReminderDue","Recipient","PATIENT",{"stat":"Sum","period":300,"label":"ReminderDue PATIENT"}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":16,"y":20,"width":8,"height":6,"properties":{"title":"No-shows and utilisation","region":"${AWS::Region}","metrics":[["MediSlot","NoShows","Environment","${EnvironmentName}",{"stat":"Sum","period":300}],["MediSlot","NoShowRate","Environment","${EnvironmentName}",{"stat":"Average","period":900}],["MediSlot","SlotUtilisationPercent","Environment","${EnvironmentName}",{"stat":"Average","period":900}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":0,"y":26,"width":8,"height":6,"properties":{"title":"Queues: visible messages (DLQs must stay at 0)","region":"${AWS::Region}","metrics":[["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","${NotificationQueueName}",{"stat":"Maximum","period":300,"label":"notifications"}],["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","${NotificationDlqName}",{"stat":"Maximum","period":300,"label":"notifications DLQ"}],["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","${WaitlistQueueName}",{"stat":"Maximum","period":300,"label":"waitlist"}],["AWS/SQS","ApproximateNumberOfMessagesVisible","QueueName","${WaitlistDlqName}",{"stat":"Maximum","period":300,"label":"waitlist DLQ"}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":8,"y":26,"width":8,"height":6,"properties":{"title":"Step Functions: reschedule executions","region":"${AWS::Region}","metrics":[["AWS/States","ExecutionsStarted","StateMachineArn","${StateMachineArn}",{"stat":"Sum","period":300}],["AWS/States","ExecutionsSucceeded","StateMachineArn","${StateMachineArn}",{"stat":"Sum","period":300}],["AWS/States","ExecutionsFailed","StateMachineArn","${StateMachineArn}",{"stat":"Sum","period":300}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":16,"y":26,"width":8,"height":6,"properties":{"title":"RDS: CPU % and connections","region":"${AWS::Region}","metrics":[["AWS/RDS","CPUUtilization","DBInstanceIdentifier","${DBInstanceIdentifier}",{"stat":"Average","period":300}],["AWS/RDS","DatabaseConnections","DBInstanceIdentifier","${DBInstanceIdentifier}",{"stat":"Average","period":300}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":0,"y":32,"width":8,"height":6,"properties":{"title":"RDS: free storage (bytes) and read/write latency","region":"${AWS::Region}","metrics":[["AWS/RDS","FreeStorageSpace","DBInstanceIdentifier","${DBInstanceIdentifier}",{"stat":"Minimum","period":300}],["AWS/RDS","WriteLatency","DBInstanceIdentifier","${DBInstanceIdentifier}",{"stat":"Average","period":300}],["AWS/RDS","ReadLatency","DBInstanceIdentifier","${DBInstanceIdentifier}",{"stat":"Average","period":300}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":8,"y":32,"width":8,"height":6,"properties":{"title":"DynamoDB: throttled requests (seat counter, waitlist, offers)","region":"${AWS::Region}","metrics":[["AWS/DynamoDB","ThrottledRequests","TableName","${SlotCapacityTableName}","Operation","UpdateItem",{"stat":"Sum","period":300,"label":"${SlotCapacityTableName}"}],["AWS/DynamoDB","ThrottledRequests","TableName","${WaitlistTableName}","Operation","UpdateItem",{"stat":"Sum","period":300,"label":"${WaitlistTableName}"}],["AWS/DynamoDB","ThrottledRequests","TableName","${HoldOffersTableName}","Operation","UpdateItem",{"stat":"Sum","period":300,"label":"${HoldOffersTableName}"}]],"view":"timeSeries","stacked":false,"period":300}},{"type":"metric","x":16,"y":32,"width":8,"height":6,"properties":{"title":"DynamoDB: consumed write capacity (seat counter)","region":"${AWS::Region}","metrics":[["AWS/DynamoDB","ConsumedWriteCapacityUnits","TableName","${SlotCapacityTableName}",{"stat":"Sum","period":300}]],"view":"timeSeries","stacked":false,"period":300}}]}
+
+  # ------------------------------------------------------------------ alarms (six categories)
+  # 1 API
+  Api5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-api-5xx'
+      AlarmDescription: 'The API returned five or more server errors in 5 minutes.'
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub '${ProjectName}-${EnvironmentName}-rest-api'
+        - Name: Stage
+          Value: !Ref EnvironmentName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  ApiLatencyP99Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-api-latency-p99'
+      AlarmDescription: 'API p99 latency above 5 seconds for 3 periods.'
+      Namespace: AWS/ApiGateway
+      MetricName: Latency
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub '${ProjectName}-${EnvironmentName}-rest-api'
+        - Name: Stage
+          Value: !Ref EnvironmentName
+      Statistic: p99
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 5000
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  # 2 Lambda
+  LambdaErrorsPatientApiAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-lambda-errors-patient-api'
+      AlarmDescription: 'The patient-api Lambda failed three or more times in 5 minutes.'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub '${ProjectName}-${EnvironmentName}-patient-api'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  LambdaErrorsDoctorApiAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-lambda-errors-doctor-api'
+      AlarmDescription: 'The doctor-api Lambda failed three or more times in 5 minutes.'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub '${ProjectName}-${EnvironmentName}-doctor-api'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  LambdaErrorsRescheduleStepAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-lambda-errors-reschedule-step'
+      AlarmDescription: 'The reschedule-step Lambda failed three or more times in 5 minutes.'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub '${ProjectName}-${EnvironmentName}-reschedule-step'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  LambdaErrorsJobsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-lambda-errors-jobs'
+      AlarmDescription: 'The jobs Lambda failed three or more times in 5 minutes.'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub '${ProjectName}-${EnvironmentName}-jobs'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  LambdaErrorsNotificationConsumerAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-lambda-errors-notification-consumer'
+      AlarmDescription: 'The notification-consumer Lambda failed three or more times in 5 minutes.'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub '${ProjectName}-${EnvironmentName}-notification-consumer'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  # 3 Queues: anything in a dead-letter queue is a failed message that needs a human
+  DlqNotificationsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-dlq-notifications'
+      AlarmDescription: 'A notification message ended in the dead-letter queue.'
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref NotificationDlqName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  DlqWaitlistAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-dlq-waitlist'
+      AlarmDescription: 'A seat-freed message ended in the dead-letter queue.'
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref WaitlistDlqName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  # 4 Database
+  RdsCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-rds-cpu'
+      AlarmDescription: 'RDS CPU above 80 percent for 15 minutes.'
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DBInstanceIdentifier
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 80
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  RdsFreeStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-rds-free-storage'
+      AlarmDescription: 'RDS free storage below 2 GiB.'
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DBInstanceIdentifier
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 2147483648
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  RdsConnectionsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-rds-connections'
+      AlarmDescription: 'More than 60 database connections (Lambda concurrency leak).'
+      Namespace: AWS/RDS
+      MetricName: DatabaseConnections
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DBInstanceIdentifier
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 60
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  # 5 Business metrics (published by the application, namespace MediSlot)
+  BusinessRescheduleCompensatedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-business-reschedule-compensated'
+      AlarmDescription: 'A reschedule had to be compensated: look at the saga execution.'
+      Namespace: MediSlot
+      MetricName: ReschedulesCompensated
+      Dimensions:
+        - Name: Environment
+          Value: !Ref EnvironmentName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  BusinessConflictRetriesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-business-conflict-retries'
+      AlarmDescription: 'Many booking version conflicts: a hot slot or a retry storm.'
+      Namespace: MediSlot
+      MetricName: BookingConflictRetries
+      Dimensions:
+        - Name: Environment
+          Value: !Ref EnvironmentName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 100
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  BusinessNoShowRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-business-no-show-rate'
+      AlarmDescription: 'More than 30 percent of recent appointments were no-shows.'
+      Namespace: MediSlot
+      MetricName: NoShowRate
+      Dimensions:
+        - Name: Environment
+          Value: !Ref EnvironmentName
+      Statistic: Average
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 30
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  # 6 Workflow and DynamoDB
+  WorkflowFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-workflow-failed'
+      AlarmDescription: 'A reschedule state-machine execution failed.'
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref StateMachineArn
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  DynamodbSeatThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${EnvironmentName}-dynamodb-seat-throttles'
+      AlarmDescription: 'The seat counter table is throttling requests.'
+      Namespace: AWS/DynamoDB
+      MetricName: ThrottledRequests
+      Dimensions:
+        - Name: TableName
+          Value: !Ref SlotCapacityTableName
+        - Name: Operation
+          Value: UpdateItem
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  # ------------------------------------------------------------------ cost
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub '${ProjectName}-${EnvironmentName}-monthly'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+        CostFilters:
+          TagKeyValue:
+            - !Sub 'user:Project$${ProjectName}'
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: SNS
+              Address: !Ref AlarmTopic
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: SNS
+              Address: !Ref AlarmTopic
+
+Outputs:
+  DashboardName:
+    Value: !Ref OperationsDashboard
+  AlarmTopicArn:
+    Value: !Ref AlarmTopic

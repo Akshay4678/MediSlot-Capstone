@@ -1,22 +1,53 @@
-from application.common.api import ApiError
-from application.common.auth_context import claims
-from application.common.http import request_body, response
+"""Lambda behind every Task state of the reschedule state machine: event = {"step": <name>, ...saga state}.
+
+One function, one step per invocation. The state machine decides the order and the compensation; this
+handler only runs the named step against RDS and DynamoDB. A business rejection is raised as SagaRejected
+so Step Functions can catch it by name.
+"""
+
+import logging
+
+from application.booking.deps import default_deps
 from application.database.connection import get_connection
-from application.reschedule.service import start
+from application.reschedule import saga
+
+log = logging.getLogger()
+log.setLevel(logging.INFO)
+
+STEPS = {
+    "validate": saga.validate,
+    "claim_target": saga.claim_target,
+    "move_appointment": saga.move_appointment,
+    "release_original": saga.release_original,
+    "publish": saga.publish,
+    "compensate": saga.compensate,
+    "final": None,
+}
+
 
 def lambda_handler(event, context):
+    step = event.get("step")
+    state = {k: v for k, v in event.items() if k not in ("step", "error")}
+    if step == "final":  # shape the successful output: the HTTP layer reads it back with a fresh query
+        return {"result": saga_result(state)}
+    fn = STEPS.get(step)
+    if fn is None:
+        raise ValueError(f"unknown saga step {step!r}")
+    conn = get_connection()
     try:
-        c = claims(event); patient_id = str(c["user_id"])
-        appointment_id = ((event.get("pathParameters") or {}).get("appointment_id") or "").strip()
-        body = request_body(event)
-        conn = get_connection()
-        try:
-            status, result = start(conn, patient_id, appointment_id, body.get("target_slot_id"))
-            return response(status, result)
-        finally:
-            conn.close()
-    except ApiError as exc:
-        return response(exc.status, {"error": exc.code, "message": exc.message})
-    except Exception:
-        import logging; logging.getLogger().exception("reschedule start failed")
-        return response(500, {"error": "INTERNAL_SERVER_ERROR", "message": "The request could not be completed."})
+        return fn(conn, default_deps(), state)
+    finally:
+        conn.close()
+
+
+def saga_result(state):
+    conn = get_connection()
+    try:
+        from application.booking.service import _fetch_view
+        deps = default_deps()
+        with conn.cursor() as cur:
+            view = _fetch_view(cur, state["appointment_id"], deps.now())
+        conn.rollback()
+        return view
+    finally:
+        conn.close()

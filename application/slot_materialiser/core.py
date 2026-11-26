@@ -120,6 +120,78 @@ def materialise_doctor(conn, doctor_id, tz_name, now_utc=None, window_days=None)
             "inserted": inserted, "already_existing": len(slots) - inserted}
 
 
+def _naive_utc(value):
+    """DATETIME (naive datetime, aware datetime or ISO text) -> naive UTC datetime."""
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value.replace("Z", "").replace(" ", "T"))
+    return value.replace(tzinfo=None)
+
+
+def expected_slots(conn, doctor_id, tz_name, now_utc=None, days=None):
+    """What the CURRENT weekly patterns would generate for the rolling window: {slot_id: slot dict}.
+
+    Blackout dates are deliberately ignored here: a blackout blocks a day, it does not change which
+    slots the weekly pattern describes. Also returns the first and last local date of the window.
+    """
+    now_utc = now_utc or datetime.now(UTC)
+    window = window_dates(now_utc, tz_name, days or rules.booking_window_days())
+    with conn.cursor() as cur:
+        patterns = _fetch_patterns(cur, doctor_id)
+    wanted = {}
+    for local_date in window:
+        for pattern in patterns:
+            if int(pattern["day_of_week"]) == local_date.isoweekday():
+                for slot in build_slots(doctor_id, pattern, local_date, tz_name, now_utc):
+                    wanted[slot["slot_id"]] = slot
+    return wanted, window[0], window[-1]
+
+
+def stale_booked_slots(conn, doctor_id, tz_name, now_utc=None):
+    """Future slots that hold bookings (or a waitlist hold) but no longer match the weekly patterns.
+
+    A booked slot is STALE when the new patterns do not produce the very same slot any more: its id is
+    gone (different start time, pattern removed or switched off), or the consultation type or end time
+    differs (a 15 minute Quick Consult turned into a 60 minute Detailed Consult), or the new capacity is
+    smaller than the number of seats already taken. Such a slot must be cancelled (patients refunded in
+    full): leaving it would show the old booking next to the new slots, overlapping them.
+    """
+    now_utc = now_utc or datetime.now(UTC)
+    wanted, first, last = expected_slots(conn, doctor_id, tz_name, now_utc)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT slot_id, consultation_type_id, end_utc, capacity, booked_count FROM materialised_slots "
+            "WHERE doctor_id = %s AND start_utc > %s AND booked_count > 0 AND status IN ('OPEN', 'FULL', 'BLOCKED') "
+            "AND `date` BETWEEN %s AND %s ORDER BY start_utc",
+            (doctor_id, now_utc.replace(tzinfo=None), first, last))
+        rows = cur.fetchall()
+    stale = []
+    for row in rows:
+        new = wanted.get(row["slot_id"])
+        if (new is None or new["consultation_type_id"] != row["consultation_type_id"]
+                or new["end_utc"] != _naive_utc(row["end_utc"]) or int(new["capacity"]) < int(row["booked_count"])):
+            stale.append(row["slot_id"])
+    return stale
+
+
+def sync_kept_slots(conn, doctor_id, tz_name, now_utc=None):
+    """Booked slots that still match keep their seats, but a changed capacity must reach them (OPEN <-> FULL)."""
+    now_utc = now_utc or datetime.now(UTC)
+    wanted, first, last = expected_slots(conn, doctor_id, tz_name, now_utc)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT slot_id, capacity FROM materialised_slots WHERE doctor_id = %s AND start_utc > %s "
+            "AND booked_count > 0 AND status IN ('OPEN', 'FULL') AND `date` BETWEEN %s AND %s",
+            (doctor_id, now_utc.replace(tzinfo=None), first, last))
+        for row in cur.fetchall():
+            new = wanted.get(row["slot_id"])
+            if new is not None and int(new["capacity"]) != int(row["capacity"]):
+                cur.execute(
+                    "UPDATE materialised_slots SET capacity = %s, "
+                    "status = CASE WHEN booked_count >= %s THEN 'FULL' ELSE 'OPEN' END "
+                    "WHERE slot_id = %s AND booked_count <= %s AND status IN ('OPEN', 'FULL')",
+                    (int(new["capacity"]), int(new["capacity"]), row["slot_id"], int(new["capacity"])))
+
+
 def rebuild_future_slots(conn, doctor_id, tz_name, now_utc=None):
     """After a pattern/timezone change: drop future slots nobody has booked, then re-materialise.
 

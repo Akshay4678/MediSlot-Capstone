@@ -1,0 +1,44 @@
+# Architecture
+
+```
+Browser -> EC2 (Flask web: patient + doctor portals)
+              |  HTTPS/JSON + JWT
+              v
+        API Gateway (REST, X-Ray)  -- Lambda authorizer (role + route rules)
+              |
+   +----------+-----------+------------------+
+   v                      v                  v
+ auth Lambda        doctor-api Lambda   patient-api Lambda ----(sync EXPRESS)----> Step Functions: reschedule saga
+   |                      |                  |                                      validate -> claim_target -> move_appointment
+   |                      |                  |                                      -> release_original -> publish (compensate on failure)
+   v                      v                  v                                      each step = reschedule-step Lambda
+ RDS MySQL  <------ appointments, refunds, doctors, patients, slots (source of truth for money and state)
+ DynamoDB   <------ SlotCapacity (seat counter, optimistic version), Idempotency, Waitlist, HoldOffers, DispatchLog
+              |
+              v   events (AppointmentBooked/Rescheduled/Cancelled, SlotSeatFreed, WaitlistOfferIssued/Expired, ReminderDue)
+        EventBridge bus --rule--> SQS notifications (+DLQ) --> notification-consumer Lambda --> SNS patient/doctor topics
+                        --rule--> SQS waitlist (+DLQ)      --> jobs Lambda (offer the freed seat to the next patient)
+        EventBridge Scheduler --> jobs Lambda: expire_offers (1 min), reminders (5 min), no_shows (15 min)
+        CloudWatch: dashboard medislot-operations, 17 alarms -> SNS alarm topic, AWS Budget, X-Ray traces
+```
+
+## Why two data stores
+* **RDS (MySQL)** holds everything that needs transactions and reports: appointments, refunds, doctors, patients, slots.
+* **DynamoDB** holds the hot, contended counter (`SlotCapacity`): one conditional update per booking decides who gets a
+  seat (`booked_count < capacity AND version = :seen`). RDS and DynamoDB are kept consistent by ordering (claim the seat
+  first, commit RDS second, release the seat if RDS fails) and by idempotency keys.
+
+## Flows
+* **Book**: validate -> idempotency claim -> reserve seat (DynamoDB) -> insert appointment (RDS tx) -> publish AppointmentBooked.
+* **Cancel**: refund tier from the notice period (100/75/50/0%) -> RDS tx -> release seat -> SlotSeatFreed (waitlist).
+* **Reschedule**: Step Functions saga with compensation (`docs/milestone-6.md`). At most 2 attempts, not within 6 hours of the start.
+* **Waitlist**: max 5 per slot; a freed seat is *held* for the first patient (real seat, invisible to others) for a limited
+  time; accept converts the hold, expiry offers the next patient.
+* **Availability change**: the doctor's new patterns are reconciled with existing slots; booked slots that the new pattern
+  no longer produces are cancelled with a 100% refund and notifications; CLOSED slots are never regenerated.
+* **No-show**: the doctor marks NO_SHOW (fee kept) or COMPLETED; a sweeper marks overdue CONFIRMED appointments.
+
+## Security
+JWT access tokens (short lived) + refresh tokens (DynamoDB, rotated). The authorizer lets doctors use `/doctors/me/*`
+and patients `/patient/me/*`, `/appointments*`, `/slots/*/waitlist`; the web app guards routes in both directions.
+IAM roles are resource-scoped with no wildcard actions (audited by `tests/unit/test_infrastructure_audit.py`).

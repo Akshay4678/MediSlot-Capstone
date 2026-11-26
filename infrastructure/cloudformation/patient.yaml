@@ -30,15 +30,18 @@ Parameters:
   IdempotencyTableName:
     Type: String
     Description: DynamoDB table holding Idempotency-Key records.
+  WaitlistTableName:
+    Type: String
+    Description: DynamoDB waitlist queue table.
+  HoldOffersTableName:
+    Type: String
+    Description: DynamoDB hold-offer table.
   EventBusName:
     Type: String
     Description: EventBridge bus that receives the appointment events.
-  WaitlistTableName:
-    Type: String
-  HoldOffersTableName:
-    Type: String
   RescheduleStateMachineArn:
     Type: String
+    Description: Step Functions EXPRESS state machine of the reschedule saga (workflow.yaml).
 
 Resources:
   PatientApiRole:
@@ -55,6 +58,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
       Policies:
         - PolicyName: PatientApiAccess
           PolicyDocument:
@@ -75,26 +79,17 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:UpdateItem
                   - dynamodb:DeleteItem
+                  - dynamodb:Query
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${SlotCapacityTableName}'
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${IdempotencyTableName}'
-              - Sid: WaitlistAndHoldAccess
-                Effect: Allow
-                Action:
-                  - dynamodb:GetItem
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                  - dynamodb:DeleteItem
-                  - dynamodb:Query
-                  - dynamodb:TransactWriteItems
-                Resource:
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${WaitlistTableName}'
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${WaitlistTableName}/index/*'
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${HoldOffersTableName}'
                   - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${HoldOffersTableName}/index/*'
-              - Sid: StartRescheduleWorkflow
+              - Sid: StartRescheduleSaga
                 Effect: Allow
-                Action: states:StartExecution
+                Action: states:StartSyncExecution
                 Resource: !Ref RescheduleStateMachineArn
               - Sid: PublishAppointmentEvents
                 Effect: Allow
@@ -122,6 +117,8 @@ Resources:
       Role: !GetAtt PatientApiRole.Arn
       Timeout: 29
       MemorySize: 512
+      TracingConfig:
+        Mode: Active
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
@@ -134,11 +131,9 @@ Resources:
           SSM_PREFIX: !Sub '/${ProjectName}/${EnvironmentName}'
           SLOT_CAPACITY_TABLE_NAME: !Ref SlotCapacityTableName
           IDEMPOTENCY_TABLE_NAME: !Ref IdempotencyTableName
-          EVENT_BUS_NAME: !Ref EventBusName
           WAITLIST_TABLE_NAME: !Ref WaitlistTableName
           HOLD_OFFERS_TABLE_NAME: !Ref HoldOffersTableName
-          WAITLIST_MAX_SIZE: '5'
-          HOLD_OFFER_MINUTES: '15'
+          EVENT_BUS_NAME: !Ref EventBusName
           RESCHEDULE_STATE_MACHINE_ARN: !Ref RescheduleStateMachineArn
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds

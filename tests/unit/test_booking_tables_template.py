@@ -15,21 +15,29 @@ def test_booking_stack_defines_both_tables_and_outputs_ending_in_tablename():
     assert "AttributeName: expires_at" in text  # idempotency TTL
 
 
-def test_data_stack_holds_only_what_this_milestone_uses():
-    # Waitlist, hold-offer and notification-dispatch tables belong to later milestones. They were deleted by hand,
-    # and a retained-but-missing table made the data stack update fail ("Unable to retrieve Arn ... does not exist").
+def test_data_stack_holds_no_dynamodb_tables():
+    # The DynamoDB tables live in the booking-tables stack, never in the data stack: a retained-but-missing table made the data stack update fail
+    # ("Unable to retrieve Arn ... does not exist").
     text = (CFN / "rds.yaml").read_text()
     for gone in ("IdempotencyTable", "SlotCapacityTable", "WaitlistTable", "HoldOffersTable", "NotificationDispatchTable"):
         assert f"{gone}:" not in text and f"!GetAtt {gone}" not in text, gone
     assert "MediSlotDatabase:" in text and "ArtifactsBucket:" in text
 
 
-def test_pipeline_requires_milestone6_tables_and_workflow_stack():
-    text = WORKFLOW.read_text()
-    for required in ("WAITLIST_TABLE_NAME", "NOTIFICATION_DISPATCH_TABLE_NAME", "HOLD_OFFERS_TABLE_NAME", "infrastructure/cloudformation/workflow.yaml"):
-        assert required in text, required
-    assert "RescheduleStateMachineArn" in text
+def test_booking_stack_also_holds_the_milestone_6_tables():
+    text = (CFN / "booking-tables.yaml").read_text()
+    for table in ("WaitlistTable:", "HoldOffersTable:", "DispatchLogTable:"):
+        assert re.search(rf"^  {table}", text, re.M), table
+    for output in ("WaitlistTableName", "HoldOffersTableName", "DispatchLogTableName"):
+        assert re.search(rf"^  {output}:", text, re.M), output
+    assert text.count("PointInTimeRecoveryEnabled: true") >= 5  # every table has point-in-time recovery
 
+
+def test_pipeline_reads_the_new_tables_and_removes_superseded_stacks_before_the_data_stack():
+    text = WORKFLOW.read_text()
+    for needed in ("WAITLIST_TABLE_NAME", "HOLD_OFFERS_TABLE_NAME", "DISPATCH_LOG_TABLE_NAME"):
+        assert needed in text, needed
+    assert text.index("Remove superseded notification stacks") < text.index("- name: Deploy RDS and Data Stack")
 
 
 def test_pipeline_heals_then_deploys_the_booking_stack_before_reading_its_outputs():

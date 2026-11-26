@@ -172,6 +172,15 @@ Schedule - MediSlot
           <span>{{ a.patient_name }}</span>
           {% if a.patient_phone %}<span class="muted small">{{ a.patient_phone }}</span>{% endif %}
           <span class="tag">{{ a.status }}</span>
+          {% if a.can_mark_attendance %}
+          <form class="attendance" method="post" action="{{ url_for('doctor.attendance', appointment_id=a.appointment_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="date" value="{{ day.date }}">
+            <button name="outcome" value="complete" class="secondary" type="submit">Attended</button>
+            <button name="outcome" value="no-show" class="danger" type="submit"
+                    onclick="return confirm('Mark this patient as a no-show? The fee is kept and the slot is closed.');">No-show</button>
+          </form>
+          {% endif %}
         </div>
         {% endfor %}
       </div>
@@ -179,7 +188,7 @@ Schedule - MediSlot
       <span class="muted small">No booked patients</span>
       {% endif %}
 
-      {% if s.status in ('OPEN', 'FULL', 'BLOCKED') and s.slot_id %}
+      {% if s.status in ('OPEN', 'FULL', 'BLOCKED') and s.slot_id and not s.started %}
       <form class="cancel-slot" method="post" action="{{ url_for('doctor.cancel_slot') }}"
             onsubmit="return confirm('Cancel this slot? Every booked patient is refunded in full.');">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

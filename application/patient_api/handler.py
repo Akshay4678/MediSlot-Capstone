@@ -3,13 +3,16 @@
 Milestone 5 adds booking: POST/GET /appointments, GET /appointments/{appointment_id}, POST
 /appointments/{appointment_id}/cancel and GET /refunds (logic in application/booking/service.py).
 
+Milestone 6 adds PATCH /appointments/{appointment_id} (reschedule saga), POST/DELETE /slots/{slot_id}/waitlist,
+GET /patient/me/waitlists and POST /waitlist-offers/{offer_id}/accept.
+
 Routes are kept in one Lambda so API Gateway has a single patient-domain integration. Identity is
-taken only from the authorizer context, never from the URL, query string or body. Milestone 6 adds
-reschedule saga start, waitlist join/leave/offer acceptance and the asynchronous workflow hooks.
+taken only from the authorizer context, never from the URL, query string or body.
 """
 
 import logging
 import os
+from urllib.parse import unquote
 
 from application.common.api import ApiError
 from application.common.auth_context import claims
@@ -19,8 +22,8 @@ from application.booking.deps import default_deps
 from application.booking.errors import is_missing_table
 from application.database.connection import get_connection
 from application.patient_api import discovery, profile as patient_profile
-from application.reschedule.service import start as start_reschedule
-from application.waitlist import service as waitlist_service
+from application.reschedule import service as reschedule
+from application.waitlist import service as waitlist
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -94,27 +97,31 @@ def _booking_route(method, resource, user_id, event):
     return _with_connection(work)
 
 
+def _path(event, name):
+    # slot ids contain "#", which travels percent-encoded (%23) in a URL path
+    return unquote(((event.get("pathParameters") or {}).get(name) or "").strip())
 
-def _milestone6_route(method, resource, user_id, event):
-    deps = default_deps()
-    body = request_body(event)
+
+def _reschedule_waitlist_route(method, resource, user_id, event):
     def work(conn):
-        if resource == "/appointments/{appointment_id}/reschedule" and method == "POST":
-            appointment_id = ((event.get("pathParameters") or {}).get("appointment_id") or "").strip()
-            return start_reschedule(conn, user_id, appointment_id, body.get("target_slot_id"))
-        if resource == "/waitlist" and method == "POST":
-            return waitlist_service.join(conn, deps.waitlist, user_id, body.get("slot_id"), deps.events)
-        if resource == "/waitlist" and method == "GET":
-            return waitlist_service.list_for_patient(conn, deps.waitlist, user_id)
-        if resource == "/waitlist/{slot_id}" and method == "DELETE":
-            from urllib.parse import unquote
-            slot_id = unquote(((event.get("pathParameters") or {}).get("slot_id") or "").strip())
-            return waitlist_service.leave(deps.waitlist, user_id, slot_id, deps.events)
-        if resource == "/waitlist/offers/{offer_id}/accept" and method == "POST":
-            offer_id = ((event.get("pathParameters") or {}).get("offer_id") or "").strip()
-            return waitlist_service.accept_offer(conn, deps, user_id, offer_id)
-        return 404, {"error": "ROUTE_NOT_FOUND", "message": "Unsupported patient route."}
+        deps = default_deps()
+        if resource == "/appointments/{appointment_id}":
+            return reschedule.reschedule(conn, deps, user_id, _path(event, "appointment_id"), request_body(event))
+        if resource == "/slots/{slot_id}/waitlist" and method == "POST":
+            return waitlist.join(conn, deps, user_id, _path(event, "slot_id"))
+        if resource == "/slots/{slot_id}/waitlist":
+            return waitlist.leave(conn, deps, user_id, _path(event, "slot_id"))
+        if resource == "/patient/me/waitlists":
+            return waitlist.list_mine(conn, deps, user_id)
+        return waitlist.accept(conn, deps, user_id, _path(event, "offer_id"))
     return _with_connection(work)
+
+
+_RESCHEDULE_WAITLIST_ROUTES = {
+    ("PATCH", "/appointments/{appointment_id}"), ("POST", "/slots/{slot_id}/waitlist"),
+    ("DELETE", "/slots/{slot_id}/waitlist"), ("GET", "/patient/me/waitlists"),
+    ("POST", "/waitlist-offers/{offer_id}/accept"),
+}
 
 _BOOKING_ROUTES = {
     ("POST", "/appointments"), ("GET", "/appointments"), ("GET", "/appointments/{appointment_id}"),
@@ -132,10 +139,10 @@ def _route(event, user_id):
         return _availability(event)
     if method == "GET" and resource == "/doctors/{doctor_id}":
         return _doctor_profile(event)
-    if resource in {"/appointments/{appointment_id}/reschedule", "/waitlist", "/waitlist/{slot_id}", "/waitlist/offers/{offer_id}/accept"}:
-        return _milestone6_route(method, resource, user_id, event)
     if (method, resource) in _BOOKING_ROUTES:
         return _booking_route(method, resource, user_id, event)
+    if (method, resource) in _RESCHEDULE_WAITLIST_ROUTES:
+        return _reschedule_waitlist_route(method, resource, user_id, event)
     if resource == "/patient/me" and method in ("GET", "POST", "PUT", "DELETE"):
         return _profile_route(method, user_id, event)
     return _error(404, "ROUTE_NOT_FOUND", "Unsupported patient route.")
@@ -160,8 +167,10 @@ def lambda_handler(event, context):
     except Exception as exc:
         log.exception("Patient API failed")
         if is_missing_table(exc):
-            log.error("A DynamoDB table named in the Lambda settings does not exist: idempotency=%s slot_capacity=%s",
-                      os.environ.get("IDEMPOTENCY_TABLE_NAME"), os.environ.get("SLOT_CAPACITY_TABLE_NAME"))
+            log.error("A DynamoDB table named in the Lambda settings does not exist: idempotency=%s slot_capacity=%s "
+                      "waitlist=%s hold_offers=%s", os.environ.get("IDEMPOTENCY_TABLE_NAME"),
+                      os.environ.get("SLOT_CAPACITY_TABLE_NAME"), os.environ.get("WAITLIST_TABLE_NAME"),
+                      os.environ.get("HOLD_OFFERS_TABLE_NAME"))
             return _error(503, "BOOKING_STORE_UNAVAILABLE", "Booking is temporarily unavailable. Please try again later.")
         # In dev only, include the real cause so it shows on the web page without opening CloudWatch.
         detail = f" [{type(exc).__name__}: {exc}]" if os.environ.get("ENVIRONMENT_NAME") == "dev" else ""

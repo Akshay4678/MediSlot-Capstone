@@ -1,271 +1,191 @@
-"""DynamoDB waitlist and exclusive hold-offer storage."""
-import os, time, uuid
-from datetime import datetime, timezone
-from botocore.config import Config
-import boto3
-from botocore.exceptions import ClientError
+"""DynamoDB storage for the waitlist (Milestone 6).
+
+Two tables (created in infrastructure/cloudformation/booking-tables.yaml)
+
+WaitlistTable   one item per waiting patient per slot
+    partition key  slot_id
+    sort key       patient_id            -> a patient can be in a slot's queue ONCE: the conditional
+                                            put_item (attribute_not_exists) is the atomic duplicate check
+    joined_at      ISO time with microseconds
+    status         WAITING | OFFERED     (a patient who left, accepted or lost an offer has no item)
+    GSI order-index    slot_id + joined_at   -> the queue, ordered by join time (first in, first offered)
+    GSI patient-index  patient_id + slot_id  -> "my waitlists" and the at-most-5 rule
+
+HoldOffersTable one item per hold offer
+    partition key  offer_id
+    slot_id, patient_id, created_at, expires_at (epoch seconds), expires_at_utc (ISO text)
+    status         LIVE | ACCEPTED | EXPIRED | CANCELLED
+    purge_at       DynamoDB TTL attribute: the item is deleted days after it ended (TTL only cleans up;
+                   the LIVE -> EXPIRED transition is done by the sweeper, because TTL cannot drive state)
+    GSI slot-index     slot_id + created_at
+    GSI patient-index  patient_id + created_at
+    GSI status-index   status + expires_at  -> "LIVE offers that are due", for the expiry sweeper
+
+Every state change is a CONDITIONAL write (status must still be what the caller saw), so two workers can
+never both win the same transition: that is what makes exclusivity checkable.
+"""
+
+import calendar
+
+from application.booking.errors import is_conditional_failure
+
+PURGE_AFTER_SECONDS = 7 * 24 * 3600
+
+WAITING, OFFERED = "WAITING", "OFFERED"
+LIVE, ACCEPTED, EXPIRED, CANCELLED = "LIVE", "ACCEPTED", "EXPIRED", "CANCELLED"
 
 
-def _now_epoch():
-    return int(time.time())
+def epoch(naive_utc):
+    return calendar.timegm(naive_utc.timetuple())
 
 
-def _iso_now():
-    return datetime.now(timezone.utc).isoformat()
+def iso(naive_utc):
+    return naive_utc.isoformat(timespec="microseconds")
+
+
+def _clean(item):
+    """Numbers come back from boto3 as Decimal; offers and entries are used as plain ints and strings."""
+    out = dict(item)
+    if "expires_at" in out:
+        out["expires_at"] = int(out["expires_at"])
+    return out
+
+
+def query_all(table, **kwargs):
+    """Every item of a query: a result page is not necessarily the whole answer, so follow LastEvaluatedKey."""
+    items, start = [], None
+    while True:
+        if start:
+            kwargs["ExclusiveStartKey"] = start
+        page = table.query(**kwargs)
+        items += [_clean(i) for i in page.get("Items", [])]
+        start = page.get("LastEvaluatedKey")
+        if not start:
+            return items
 
 
 class WaitlistStore:
-    def __init__(self, table, hold_table, max_size=5, hold_minutes=15, ddb_client=None):
-        self.table = table
-        self.hold_table = hold_table
-        self.max_size = int(max_size)
-        self.hold_minutes = int(hold_minutes)
-        self.client = ddb_client or boto3.client("dynamodb", config=Config(connect_timeout=2, read_timeout=4, retries={"total_max_attempts": 2, "mode": "standard"}))
+    def __init__(self, queue_table, offers_table):
+        self.queue, self.offers = queue_table, offers_table
 
-    @staticmethod
-    def _key(slot_id, patient_id):
-        return f"{slot_id}#{patient_id}"
-
-    @staticmethod
-    def _meta_key(slot_id):
-        return f"{slot_id}#META"
-
-    def join(self, slot_id, patient_id, doctor_id, consultation_type_id):
-        """Join a slot exactly once, while atomically enforcing the per-slot cap.
-
-        The waitlist row is updated rather than blindly inserted so a previously
-        removed entry can re-join. An active WAITING/HELD entry fails the
-        conditional update and is returned to the caller as an idempotent replay.
-        """
-        key = self._key(slot_id, patient_id)
-        now = _iso_now()
-        waitlist_id = str(uuid.uuid4())
-        meta_key = self._meta_key(slot_id)
-        meta_values = {
-            ":zero": {"N": "0"},
-            ":one": {"N": "1"},
-            ":max": {"N": str(self.max_size)},
-            ":slot": {"S": str(slot_id)},
-            ":meta_type": {"S": "META"},
-        }
-        item_values = {
-            ":waitlist_id": {"S": waitlist_id},
-            ":slot": {"S": str(slot_id)},
-            ":patient": {"S": str(patient_id)},
-            ":doctor": {"S": str(doctor_id)},
-            ":type": {"S": str(consultation_type_id)},
-            ":joined": {"S": now},
-            ":waiting": {"S": "WAITING"},
-            ":removed": {"S": "REMOVED"},
-        }
+    # ------------------------------------------------------------------ the queue
+    def join(self, slot_id, patient_id, entry_id, now):
+        """Add the patient to the end of the queue. Returns False if they are already in it."""
         try:
-            self.client.transact_write_items(TransactItems=[
-                {"Update": {
-                    "TableName": self.table.name,
-                    "Key": {"waitlist_key": {"S": meta_key}},
-                    "UpdateExpression": "SET #c = if_not_exists(#c, :zero) + :one, #slot = :slot, #type = :meta_type",
-                    "ConditionExpression": "attribute_not_exists(#c) OR #c < :max",
-                    "ExpressionAttributeNames": {"#c": "count", "#slot": "slot_id", "#type": "item_type"},
-                    "ExpressionAttributeValues": meta_values,
-                }},
-                {"Update": {
-                    "TableName": self.table.name,
-                    "Key": {"waitlist_key": {"S": key}},
-                    "UpdateExpression": "SET waitlist_id = :waitlist_id, slot_id = :slot, patient_id = :patient, doctor_id = :doctor, consultation_type_id = :type, joined_at = :joined, #s = :waiting REMOVE offer_id, offer_expires_at, removed_at",
-                    "ConditionExpression": "attribute_not_exists(waitlist_key) OR #s = :removed",
-                    "ExpressionAttributeNames": {"#s": "status"},
-                    "ExpressionAttributeValues": item_values,
-                }},
-            ])
-        except ClientError as exc:
-            code = exc.response.get("Error", {}).get("Code")
-            if code == "TransactionCanceledException":
-                existing = self.get(slot_id, patient_id)
-                if existing and existing.get("status") in ("WAITING", "HELD"):
-                    return existing, False
-                # A failed transaction with no active entry means the slot's
-                # META row reached its configured maximum.
-                raise RuntimeError("WAITLIST_FULL") from None
+            self.queue.put_item(
+                Item={"slot_id": slot_id, "patient_id": patient_id, "entry_id": entry_id,
+                      "joined_at": iso(now), "status": WAITING},
+                ConditionExpression="attribute_not_exists(#sid)",
+                ExpressionAttributeNames={"#sid": "slot_id"})
+            return True
+        except Exception as exc:  # noqa: BLE001
+            if is_conditional_failure(exc):
+                return False
             raise
 
-        item = {
-            "waitlist_key": {"S": key},
-            "waitlist_id": {"S": waitlist_id},
-            "slot_id": {"S": str(slot_id)},
-            "patient_id": {"S": str(patient_id)},
-            "doctor_id": {"S": str(doctor_id)},
-            "consultation_type_id": {"S": str(consultation_type_id)},
-            "joined_at": {"S": now},
-            "status": {"S": "WAITING"},
-        }
-        return {k: self._decode(v) for k, v in item.items()}, True
+    def get_entry(self, slot_id, patient_id):
+        item = self.queue.get_item(Key={"slot_id": slot_id, "patient_id": patient_id}, ConsistentRead=True).get("Item")
+        return dict(item) if item else None
 
-    def get(self, slot_id, patient_id):
-        r = self.table.get_item(Key={"waitlist_key": self._key(slot_id, patient_id)}, ConsistentRead=True)
-        return self._decode_item(r.get("Item"))
+    def entries_for_patient(self, patient_id):
+        return query_all(
+            self.queue, IndexName="patient-index", KeyConditionExpression="#p = :p",
+            ExpressionAttributeNames={"#p": "patient_id"}, ExpressionAttributeValues={":p": patient_id})
 
-    def _reconcile_active_count(self, slot_id):
-        rows = self.table.query(
-            IndexName="slot_id-joined_at-index",
-            KeyConditionExpression="#slot = :slot",
-            ExpressionAttributeNames={"#slot": "slot_id"},
-            ExpressionAttributeValues={":slot": {"S": str(slot_id)}},
-            ScanIndexForward=True,
-            Limit=max(self.max_size + 1, 1),
-        )
-        count = sum(
-            1 for item in rows.get("Items", [])
-            if self._decode(item.get("status")) in ("WAITING", "HELD")
-        )
-        self.table.update_item(
-            Key={"waitlist_key": self._meta_key(slot_id)},
-            UpdateExpression="SET #c = :count",
-            ExpressionAttributeNames={"#c": "count"},
-            ExpressionAttributeValues={":count": {"N": str(count)}},
-        )
+    def entries_for_slot(self, slot_id):
+        """The whole queue of a slot in join order (waiting and offered)."""
+        return query_all(
+            self.queue, IndexName="order-index", KeyConditionExpression="#s = :s",
+            ExpressionAttributeNames={"#s": "slot_id"}, ExpressionAttributeValues={":s": slot_id})
 
-    def _remove_active_entry(self, slot_id, patient_id):
-        key = self._key(slot_id, patient_id)
-        item = self.table.get_item(Key={"waitlist_key": key}, ConsistentRead=True).get("Item")
-        if not item or self._decode(item.get("status")) not in ("WAITING", "HELD"):
-            return False
+    def waiting(self, slot_id):
+        return [e for e in self.entries_for_slot(slot_id) if e.get("status") == WAITING]
+
+    def _set_entry_status(self, slot_id, patient_id, expected, new):
         try:
-            self.client.transact_write_items(TransactItems=[
-                {"Update": {"TableName": self.table.name, "Key": {"waitlist_key": {"S": self._meta_key(slot_id)}},
-                             "UpdateExpression": "SET #c = if_not_exists(#c, :zero) - :one",
-                             "ConditionExpression": "#c >= :one",
-                             "ExpressionAttributeNames": {"#c": "count"}, "ExpressionAttributeValues": {":zero": {"N": "0"}, ":one": {"N": "1"}}}},
-                {"Update": {"TableName": self.table.name, "Key": {"waitlist_key": {"S": key}},
-                             "UpdateExpression": "SET #s = :s, removed_at = :now",
-                             "ConditionExpression": "#s IN (:waiting, :held)",
-                             "ExpressionAttributeNames": {"#s": "status"}, "ExpressionAttributeValues": {":s": {"S": "REMOVED"}, ":now": {"S": _iso_now()}, ":waiting": {"S": "WAITING"}, ":held": {"S": "HELD"}}}},
-            ])
+            self.queue.update_item(
+                Key={"slot_id": slot_id, "patient_id": patient_id},
+                UpdateExpression="SET #st = :new", ConditionExpression="#st = :old",
+                ExpressionAttributeNames={"#st": "status"}, ExpressionAttributeValues={":new": new, ":old": expected})
             return True
-        except ClientError as exc:
-            if exc.response.get("Error", {}).get("Code") != "TransactionCanceledException":
-                raise
-            # If the META count is stale/missing, still remove the active row and
-            # rebuild the count from the remaining active entries. This keeps the
-            # patient-facing Leave action reliable without changing join semantics.
-            try:
-                self.table.update_item(
-                    Key={"waitlist_key": key},
-                    UpdateExpression="SET #s = :s, removed_at = :now",
-                    ConditionExpression="#s IN (:waiting, :held)",
-                    ExpressionAttributeNames={"#s": "status"},
-                    ExpressionAttributeValues={
-                        ":s": "REMOVED", ":now": _iso_now(),
-                        ":waiting": "WAITING", ":held": "HELD",
-                    },
-                )
-            except ClientError as update_exc:
-                if update_exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-                    return False
-                raise
-            self._reconcile_active_count(slot_id)
-            return True
-
-    def leave(self, slot_id, patient_id):
-        return self._remove_active_entry(slot_id, patient_id)
-
-    def remove_expired(self, slot_id, patient_id):
-        key = self._key(slot_id, patient_id)
-        item = self.table.get_item(Key={"waitlist_key": key}, ConsistentRead=True).get("Item")
-        if not item or self._decode(item.get("status")) not in ("WAITING", "HELD"):
-            return False
-        if self._decode(item.get("status")) == "HELD":
-            offer_id = self._decode(item.get("offer_id"))
-            if offer_id:
-                self.expire_hold(slot_id, offer_id)
-        return self._remove_active_entry(slot_id, patient_id)
-
-    def list_for_slot(self, slot_id, limit=50):
-        r = self.table.query(IndexName="slot_id-joined_at-index", KeyConditionExpression="#slot = :slot",
-                             ExpressionAttributeNames={"#slot": "slot_id"}, ExpressionAttributeValues={":slot": {"S": str(slot_id)}},
-                             ScanIndexForward=True, Limit=int(limit))
-        return [
-            self._decode_item(i)
-            for i in r.get("Items", [])
-            if self._decode(i.get("status")) in ("WAITING", "HELD")
-        ]
-
-    def first_waiting(self, slot_id):
-        rows = self.list_for_slot(slot_id, 50)
-        return next((r for r in rows if r.get("status") == "WAITING"), None)
-
-    def mark_held(self, slot_id, patient_id, offer_id, expires_at):
-        return self.table.update_item(Key={"waitlist_key": self._key(slot_id, patient_id)},
-            UpdateExpression="SET #s = :s, offer_id = :o, offer_expires_at = :e",
-            ConditionExpression="#s = :waiting", ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={":s": "HELD", ":o": str(offer_id), ":e": int(expires_at), ":waiting": "WAITING"}, ReturnValues="ALL_NEW")["Attributes"]
-
-    def mark_waiting(self, slot_id, patient_id):
-        self.table.update_item(Key={"waitlist_key": self._key(slot_id, patient_id)},
-            UpdateExpression="SET #s = :s REMOVE offer_id, offer_expires_at",
-            ExpressionAttributeNames={"#s": "status"}, ExpressionAttributeValues={":s": "WAITING"})
-
-    def mark_promoted(self, slot_id, patient_id):
-        self.table.update_item(Key={"waitlist_key": self._key(slot_id, patient_id)},
-            UpdateExpression="SET #s = :s, promoted_at = :now",
-            ExpressionAttributeNames={"#s": "status"}, ExpressionAttributeValues={":s": "PROMOTED", ":now": _iso_now()})
-
-    def decrement_active_count(self, slot_id):
-        self.table.update_item(Key={"waitlist_key": self._meta_key(slot_id)},
-            UpdateExpression="SET #c = if_not_exists(#c, :zero) - :one",
-            ConditionExpression="#c >= :one", ExpressionAttributeNames={"#c":"count"},
-            ExpressionAttributeValues={":zero":{"N":"0"}, ":one":{"N":"1"}})
-
-    def create_hold(self, slot_id, patient_id, waitlist_id):
-        now = _now_epoch(); expires = now + self.hold_minutes * 60
-        offer_id = str(uuid.uuid4())
-        item = {"slot_id": str(slot_id), "offer_id": offer_id, "patient_id": str(patient_id), "waitlist_id": str(waitlist_id), "status": "LIVE", "created_at": now, "expires_at": expires, "ttl_at": expires + 86400}
-        try:
-            self.hold_table.put_item(Item=item, ConditionExpression="attribute_not_exists(slot_id) OR #s <> :live OR expires_at <= :now", ExpressionAttributeNames={"#s":"status"}, ExpressionAttributeValues={":live":"LIVE", ":now":now})
-        except ClientError as exc:
-            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-                return None
+        except Exception as exc:  # noqa: BLE001
+            if is_conditional_failure(exc):
+                return False
             raise
+
+    def claim(self, slot_id, patient_id):
+        """WAITING -> OFFERED. Only one caller can win; the loser gets False and tries the next patient."""
+        return self._set_entry_status(slot_id, patient_id, WAITING, OFFERED)
+
+    def unclaim(self, slot_id, patient_id):
+        return self._set_entry_status(slot_id, patient_id, OFFERED, WAITING)
+
+    def remove(self, slot_id, patient_id):
+        self.queue.delete_item(Key={"slot_id": slot_id, "patient_id": patient_id})
+
+    # ------------------------------------------------------------------ offers
+    def create_offer(self, offer_id, slot_id, patient_id, now, expires_at):
+        item = {"offer_id": offer_id, "slot_id": slot_id, "patient_id": patient_id, "status": LIVE,
+                "created_at": iso(now), "expires_at": epoch(expires_at), "expires_at_utc": iso(expires_at),
+                "purge_at": epoch(expires_at) + PURGE_AFTER_SECONDS}
+        self.offers.put_item(Item=item, ConditionExpression="attribute_not_exists(#o)",
+                             ExpressionAttributeNames={"#o": "offer_id"})
         return item
 
-    def get_hold(self, slot_id):
-        return self.hold_table.get_item(Key={"slot_id": str(slot_id)}, ConsistentRead=True).get("Item")
+    def get_offer(self, offer_id):
+        item = self.offers.get_item(Key={"offer_id": offer_id}, ConsistentRead=True).get("Item")
+        return _clean(item) if item else None
 
-    def get_hold_by_offer(self, offer_id):
-        r = self.hold_table.query(IndexName="offer_id-index", KeyConditionExpression="offer_id = :o", ExpressionAttributeValues={":o": str(offer_id)}, ConsistentRead=False)
-        return r.get("Items", [None])[0]
-
-    def accept_hold(self, offer_id, patient_id):
-        hold = self.get_hold_by_offer(offer_id)
-        if not hold or hold.get("status") != "LIVE" or str(hold.get("patient_id")) != str(patient_id) or int(hold.get("expires_at", 0)) <= _now_epoch():
-            return None
-        self.hold_table.update_item(Key={"slot_id": hold["slot_id"]}, UpdateExpression="SET #s = :s", ConditionExpression="#s = :live AND patient_id = :p",
-            ExpressionAttributeNames={"#s": "status"}, ExpressionAttributeValues={":s": "ACCEPTED", ":live": "LIVE", ":p": str(patient_id)})
-        return hold
-
-    def expire_hold(self, slot_id, offer_id):
+    def transition(self, offer_id, expected, new, not_after=None, not_before=None):
+        """Conditional status change. not_after: only while expires_at > that epoch (accept);
+        not_before: only once expires_at <= that epoch (the sweeper). Returns True when THIS caller won."""
+        condition, names, values = "#st = :old", {"#st": "status"}, {":old": expected, ":new": new}
+        if not_after is not None:
+            condition += " AND #e > :t"
+            names["#e"], values[":t"] = "expires_at", int(not_after)
+        if not_before is not None:
+            condition += " AND #e <= :t"
+            names["#e"], values[":t"] = "expires_at", int(not_before)
         try:
-            self.hold_table.update_item(Key={"slot_id": str(slot_id)}, UpdateExpression="SET #s = :s",
-                ConditionExpression="#s = :live AND offer_id = :o", ExpressionAttributeNames={"#s": "status"},
-                ExpressionAttributeValues={":s": "EXPIRED", ":live": "LIVE", ":o": str(offer_id)})
+            self.offers.update_item(Key={"offer_id": offer_id}, UpdateExpression="SET #st = :new",
+                                    ConditionExpression=condition, ExpressionAttributeNames=names,
+                                    ExpressionAttributeValues=values)
             return True
-        except ClientError as exc:
-            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException": return False
+        except Exception as exc:  # noqa: BLE001
+            if is_conditional_failure(exc):
+                return False
             raise
 
-    @staticmethod
-    def _decode(v):
-        if not isinstance(v, dict): return v
-        if "S" in v: return v["S"]
-        if "N" in v: return int(v["N"]) if v["N"].isdigit() else float(v["N"])
-        if "BOOL" in v: return v["BOOL"]
-        return v
+    def _query_offers(self, index, key_name, key_value, extra=None):
+        names, values = {"#k": key_name}, {":k": key_value}
+        kwargs = {"IndexName": index, "KeyConditionExpression": "#k = :k"}
+        if extra:
+            kwargs["KeyConditionExpression"] += " AND " + extra[0]
+            names.update(extra[1])
+            values.update(extra[2])
+        kwargs["ExpressionAttributeNames"], kwargs["ExpressionAttributeValues"] = names, values
+        return query_all(self.offers, **kwargs)
 
-    @classmethod
-    def _decode_item(cls, item):
-        return {k: cls._decode(v) for k, v in (item or {}).items()}
+    def live_offers_for_slot(self, slot_id):
+        return [o for o in self._query_offers("slot-index", "slot_id", slot_id) if o.get("status") == LIVE]
 
+    def live_offer_for(self, slot_id, patient_id):
+        for offer in self.live_offers_for_slot(slot_id):
+            if offer["patient_id"] == patient_id:
+                return offer
+        return None
 
-def default_store():
-    cfg = Config(connect_timeout=2, read_timeout=4, retries={"total_max_attempts": 2, "mode": "standard"})
-    ddb = boto3.resource("dynamodb", config=cfg)
-    return WaitlistStore(ddb.Table(os.environ["WAITLIST_TABLE_NAME"]), ddb.Table(os.environ["HOLD_OFFERS_TABLE_NAME"]), int(os.environ.get("WAITLIST_MAX_SIZE", "5")), int(os.environ.get("HOLD_OFFER_MINUTES", "15")))
+    def due_offers(self, now):
+        """LIVE offers whose hold has run out (expires_at <= now), oldest first."""
+        return self._query_offers("status-index", "status", LIVE, ("#e <= :now", {"#e": "expires_at"}, {":now": epoch(now)}))
+
+    # ------------------------------------------------------------------ closing a slot
+    def close_slot(self, slot_id, now=None):
+        """The doctor cancelled the slot: cancel every live offer, empty the queue. Returns how many seats were held."""
+        held = 0
+        for offer in self.live_offers_for_slot(slot_id):
+            if self.transition(offer["offer_id"], LIVE, CANCELLED):
+                held += 1
+        for entry in self.entries_for_slot(slot_id):
+            self.remove(slot_id, entry["patient_id"])
+        return held

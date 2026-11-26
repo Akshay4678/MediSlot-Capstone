@@ -101,7 +101,7 @@ def _fail_metric(deps, reason):
 _APPT_SELECT = (
     "SELECT a.appointment_id, a.patient_id, a.doctor_id, a.slot_id, a.consultation_type_id, a.status, a.notes, "
     "a.fee_amount, a.created_at, a.cancelled_at, a.cancellation_reason, a.starts_at_utc, a.ends_at_utc, "
-    "a.local_date, a.local_start, a.local_end, a.timezone, ct.type_name, d.first_name AS doctor_first, "
+    "a.local_date, a.local_start, a.local_end, a.timezone, a.reschedule_count, ct.type_name, d.first_name AS doctor_first, "
     "d.last_name AS doctor_last, h.hospital_name, h.city, sp.specialisation_name, "
     "p.first_name AS patient_first, p.last_name AS patient_last, p.phone AS patient_phone, "
     "r.refund_amount, r.refund_percentage, r.refund_tier, r.refund_status "
@@ -135,7 +135,9 @@ def _view(r, now, for_doctor=False):
         "doctor": {"doctor_id": r["doctor_id"], "name": f"Dr. {r['doctor_first']} {r['doctor_last']}",
                    "hospital_name": r["hospital_name"], "city": r["city"], "specialisation": r["specialisation_name"]},
         "refund": None,
+        "reschedule_count": int(r["reschedule_count"] or 0),
         "can_cancel": False,
+        "can_reschedule": False,
     }
     if for_doctor:
         view["patient"] = {"patient_id": r["patient_id"], "name": f"{r['patient_first']} {r['patient_last']}".strip(),
@@ -148,6 +150,12 @@ def _view(r, now, for_doctor=False):
         preview = refunds.calculate_refund(r["fee_amount"], _dt(r["starts_at_utc"]), now, rules.refund_bands())
         view["refund_preview"] = {"tier": preview["tier"], "percentage": preview["percentage"],
                                   "amount": money(preview["amount"])}
+        view["can_reschedule"] = (not for_doctor and view["reschedule_count"] < rules.max_reschedules()
+                                  and _dt(r["starts_at_utc"]) - now >= timedelta(hours=rules.min_reschedule_hours()))
+    if for_doctor:
+        # The doctor records what happened once the appointment time has come.
+        view["can_mark_attendance"] = bool(r["status"] == "CONFIRMED" and r["starts_at_utc"]
+                                           and _dt(r["starts_at_utc"]) <= now)
     return view
 
 
@@ -208,9 +216,6 @@ def _check_slot_and_patient(cur, deps, patient_id, slot, now):
                        f"Slots can be booked at most {rules.booking_window_days()} days ahead.")
     if slot["status"] in ("BLOCKED", "CLOSED"):
         raise ApiError(409, "SLOT_UNAVAILABLE", "This slot is no longer available.")
-    hold = deps.waitlist.get_hold(slot["slot_id"]) if getattr(deps, "waitlist", None) else None
-    if hold and hold.get("status") == "LIVE" and int(hold.get("expires_at", 0)) > int(now.timestamp()):
-        raise ApiError(409, "SLOT_HELD", "This slot is temporarily held for a waitlist patient.")
     if slot["status"] == "FULL" or int(slot["booked_count"]) >= int(slot["capacity"]):
         raise ApiError(409, "SLOT_FULL", "This slot is full.")
 
@@ -462,10 +467,79 @@ def cancel_by_patient(conn, deps, user_id, appointment_id, body=None):
     deps.events.publish(events.SLOT_SEAT_FREED, {
         "slot_id": appt["slot_id"], "doctor_id": appt["doctor_id"], "seats_freed": 1,
         "starts_at_utc": fmt_utc(start)})
+    offer_freed_seat(conn, deps, appt["slot_id"])
     with conn.cursor() as cur:
         view = _fetch_view(cur, appointment_id, now)
     conn.rollback()
     return 200, view
+
+
+def offer_freed_seat(conn, deps, slot_id):
+    """A seat of the slot was just freed: hold it for the first waiting patient (the waitlist "fast path").
+
+    Best effort. The SlotSeatFreed event reaches the same function through SQS (application/jobs/handler.py),
+    which is the safety net: offer_next() only ever acts on a REAL free seat that it can reserve, so calling it
+    twice, from here and from the queue, can never create two offers for one seat.
+    """
+    if getattr(deps, "waitlist", None) is None:
+        return None
+    try:
+        from application.waitlist import service as waitlist
+        return waitlist.offer_next(conn, deps, slot_id)
+    except Exception:  # noqa: BLE001 - the cancellation has already succeeded
+        log.exception("could not offer the freed seat of %s", slot_id)
+        _safe(conn.rollback)
+        return None
+
+
+def close_slot_if_resolved(cur, slot_id):
+    """Close a slot once every appointment in it is settled (nobody is still CONFIRMED). Returns True if closed."""
+    cur.execute("SELECT COUNT(*) AS n FROM appointments WHERE slot_id = %s AND status = 'CONFIRMED'", (slot_id,))
+    if _count(cur.fetchone()):
+        return False
+    cur.execute("UPDATE materialised_slots SET status = 'CLOSED' WHERE slot_id = %s AND status IN ('OPEN', 'FULL')",
+                (slot_id,))
+    return bool(cur.rowcount)
+
+
+def close_slot_rows(cur, slot_id, reason, now):
+    """Inside the caller's transaction: refund and cancel every CONFIRMED appointment of the slot, then CLOSE it.
+
+    Used when a doctor cancels a slot and when a change of availability makes a booked slot disappear.
+    Returns [(appointment row, refund)]; the caller commits and then calls slot_closed().
+    """
+    cancelled = []
+    cur.execute("SELECT appointment_id, patient_id, fee_amount FROM appointments "
+                "WHERE slot_id = %s AND status = 'CONFIRMED' ORDER BY created_at FOR UPDATE", (slot_id,))
+    for appt in cur.fetchall():
+        refund = refunds.doctor_cancellation_refund(appt["fee_amount"])
+        cur.execute("UPDATE appointments SET status = 'CANCELLED_BY_DOCTOR', cancelled_at = %s, "
+                    "cancellation_reason = %s WHERE appointment_id = %s AND status = 'CONFIRMED'",
+                    (now, reason, appt["appointment_id"]))
+        _insert_refund(cur, appt["appointment_id"], appt["fee_amount"], refund)
+        cancelled.append((appt, refund))
+    cur.execute("UPDATE materialised_slots SET status = 'CLOSED', booked_count = 0 WHERE slot_id = %s", (slot_id,))
+    return cancelled
+
+
+def slot_closed(deps, doctor_id, slot_id, cancelled):
+    """After the commit of close_slot_rows(): give the seats back, clear the waitlist, count and announce."""
+    held = 0
+    if getattr(deps, "waitlist", None) is not None:
+        try:
+            held = deps.waitlist.close_slot(slot_id)  # live hold offers are cancelled and the queue is emptied
+        except Exception:  # noqa: BLE001
+            log.exception("could not clear the waitlist of %s", slot_id)
+    seats = len(cancelled) + held
+    if seats:
+        _safe(deps.slots.release, slot_id, seats)
+    if cancelled:
+        deps.metrics.put("CancellationsByTier", len(cancelled), {"Tier": refunds.DOCTOR_CANCELLED})
+    for appt, refund in cancelled:
+        deps.events.publish(events.APPOINTMENT_CANCELLED, {
+            "appointment_id": appt["appointment_id"], "patient_id": appt["patient_id"], "doctor_id": doctor_id,
+            "slot_id": slot_id, "cancelled_by": "doctor",
+            "refund": {"tier": refund["tier"], "percentage": refund["percentage"], "amount": money(refund["amount"])}})
 
 
 def cancel_slot_by_doctor(conn, deps, user_id, body):
@@ -480,7 +554,6 @@ def cancel_slot_by_doctor(conn, deps, user_id, body):
     slot_id = slot_id.strip()
     reason = clean_text(body.get("reason"), "reason", 255) or "Cancelled by the doctor"
     now = deps.now()
-    cancelled = []
     try:
         with conn.cursor() as cur:
             doctor_id = _doctor_id(cur, user_id)
@@ -493,32 +566,64 @@ def cancel_slot_by_doctor(conn, deps, user_id, body):
                 raise ApiError(409, "SLOT_IN_PAST", "A slot that has already started cannot be cancelled.")
             if slot["status"] == "CLOSED":
                 raise ApiError(409, "SLOT_ALREADY_CANCELLED", "This slot is already cancelled.")
-            cur.execute("SELECT appointment_id, patient_id, fee_amount FROM appointments "
-                        "WHERE slot_id = %s AND status = 'CONFIRMED' ORDER BY created_at FOR UPDATE", (slot_id,))
-            for appt in cur.fetchall():
-                refund = refunds.doctor_cancellation_refund(appt["fee_amount"])
-                cur.execute("UPDATE appointments SET status = 'CANCELLED_BY_DOCTOR', cancelled_at = %s, "
-                            "cancellation_reason = %s WHERE appointment_id = %s AND status = 'CONFIRMED'",
-                            (now, reason, appt["appointment_id"]))
-                _insert_refund(cur, appt["appointment_id"], appt["fee_amount"], refund)
-                cancelled.append((appt, refund))
-            cur.execute("UPDATE materialised_slots SET status = 'CLOSED', booked_count = 0 WHERE slot_id = %s", (slot_id,))
+            cancelled = close_slot_rows(cur, slot_id, reason, now)
         conn.commit()
     except Exception:
         _safe(conn.rollback)
         raise
-
-    if cancelled:
-        _safe(deps.slots.release, slot_id, len(cancelled))
-        deps.metrics.put("CancellationsByTier", len(cancelled), {"Tier": refunds.DOCTOR_CANCELLED})
+    slot_closed(deps, doctor_id, slot_id, cancelled)
     total = sum(r["amount"] for _, r in cancelled)
-    for appt, refund in cancelled:
-        deps.events.publish(events.APPOINTMENT_CANCELLED, {
-            "appointment_id": appt["appointment_id"], "patient_id": appt["patient_id"], "doctor_id": doctor_id,
-            "slot_id": slot_id, "cancelled_by": "doctor",
-            "refund": {"tier": refund["tier"], "percentage": refund["percentage"], "amount": money(refund["amount"])}})
     return 200, {"slot_id": slot_id, "status": "CLOSED", "cancelled_appointments": len(cancelled),
                  "refunds_total": money(total) or 0.0}
+
+
+# ----------------------------------------------------------------------------- what happened at the appointment
+ATTENDANCE_STATUS = {"no_show": "NO_SHOW", "completed": "COMPLETED"}
+
+
+def record_attendance(conn, deps, user_id, appointment_id, outcome):
+    """POST /doctors/me/appointments/{id}/no-show or /complete : the doctor records what happened.
+
+    Allowed once the appointment time has come, and only for the doctor's own CONFIRMED appointment.
+    NO_SHOW keeps the fee (a 0 % refund row is written so the ledger shows the decision); COMPLETED
+    needs no refund. Either way, when nobody else in the slot is still CONFIRMED the slot is CLOSED.
+    The no-show sweeper (application/jobs/no_show.py) marks the ones the doctor forgot.
+    """
+    status = ATTENDANCE_STATUS[outcome]
+    now = deps.now()
+    try:
+        with conn.cursor() as cur:
+            doctor_id = _doctor_id(cur, user_id)
+            cur.execute("SELECT appointment_id, patient_id, slot_id, status, fee_amount, starts_at_utc FROM appointments "
+                        "WHERE appointment_id = %s AND doctor_id = %s FOR UPDATE", (appointment_id, doctor_id))
+            appt = cur.fetchone()
+            if not appt:
+                raise ApiError(404, "APPOINTMENT_NOT_FOUND", "Appointment was not found.")
+            if appt["status"] != "CONFIRMED":
+                raise ApiError(409, "NOT_CONFIRMED", "Only a confirmed appointment can be marked.")
+            if now < _dt(appt["starts_at_utc"]):
+                raise ApiError(409, "APPOINTMENT_NOT_STARTED",
+                               "The appointment time has not come yet. Use cancel if the slot cannot be kept.")
+            cur.execute("UPDATE appointments SET status = %s WHERE appointment_id = %s AND status = 'CONFIRMED'",
+                        (status, appointment_id))
+            if cur.rowcount != 1:
+                raise ApiError(409, "NOT_CONFIRMED", "Only a confirmed appointment can be marked.")
+            if status == "NO_SHOW":
+                _insert_refund(cur, appointment_id, appt["fee_amount"], refunds.no_show_refund(appt["fee_amount"]))
+            slot_closed_now = close_slot_if_resolved(cur, appt["slot_id"])
+        conn.commit()
+    except Exception:
+        _safe(conn.rollback)
+        raise
+    deps.metrics.put("NoShows" if status == "NO_SHOW" else "AppointmentsCompleted", 1)
+    deps.events.publish(events.APPOINTMENT_NO_SHOW if status == "NO_SHOW" else "AppointmentCompleted", {
+        "appointment_id": appointment_id, "patient_id": appt["patient_id"], "doctor_id": doctor_id,
+        "slot_id": appt["slot_id"], "marked_by": "doctor"})
+    with conn.cursor() as cur:
+        result = _fetch_view(cur, appointment_id, now, for_doctor=True)
+    conn.rollback()
+    result["slot_closed"] = slot_closed_now
+    return 200, result
 
 
 # ----------------------------------------------------------------------------- refund ledger

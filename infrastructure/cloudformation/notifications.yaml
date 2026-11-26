@@ -1,0 +1,552 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  MediSlot notifications and background jobs (Milestone 6).
+  EventBridge -> SQS -> Lambda -> SNS: every appointment event reaches the notification consumer through its own queue
+  (with its own dead-letter queue). Exactly-once delivery is enforced by the DynamoDB dispatch log.
+  A second consumer (own queue and DLQ) turns SlotSeatFreed into waitlist hold offers.
+  EventBridge Scheduler runs the expiry sweeper (1 min), the reminder dispatcher (5 min) and the no-show sweeper (15 min).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: medislot
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  LambdaCodeS3Bucket:
+    Type: String
+  LambdaCodeS3Key:
+    Type: String
+  LambdaSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  LambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  DatabaseSecretArn:
+    Type: String
+  DatabaseHost:
+    Type: String
+  DatabaseName:
+    Type: String
+    Default: medislot
+  SlotCapacityTableName:
+    Type: String
+  IdempotencyTableName:
+    Type: String
+  WaitlistTableName:
+    Type: String
+  HoldOffersTableName:
+    Type: String
+  DispatchLogTableName:
+    Type: String
+  EventBusName:
+    Type: String
+
+Resources:
+  # ------------------------------------------------------------------ SNS topics (delivery end points)
+  PatientTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-${EnvironmentName}-patient-notifications'
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DoctorTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${ProjectName}-${EnvironmentName}-doctor-notifications'
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Every message published to either topic is also kept here for 4 days, so deliveries can be inspected.
+  AuditQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${ProjectName}-${EnvironmentName}-notification-audit'
+      SqsManagedSseEnabled: true
+      MessageRetentionPeriod: 345600
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  AuditQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref AuditQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowTopics
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt AuditQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn:
+                  - !Ref PatientTopic
+                  - !Ref DoctorTopic
+
+  PatientAuditSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref PatientTopic
+      Protocol: sqs
+      Endpoint: !GetAtt AuditQueue.Arn
+      RawMessageDelivery: true
+
+  DoctorAuditSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref DoctorTopic
+      Protocol: sqs
+      Endpoint: !GetAtt AuditQueue.Arn
+      RawMessageDelivery: true
+
+  # ------------------------------------------------------------------ consumer 1: notifications
+
+  NotificationDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${ProjectName}-${EnvironmentName}-notifications-dlq'
+      SqsManagedSseEnabled: true
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${ProjectName}-${EnvironmentName}-notifications'
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 180
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt NotificationDeadLetterQueue.Arn
+        maxReceiveCount: 5
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  NotificationQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref NotificationQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowEventBridgeRule
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt NotificationQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt NotificationRule.Arn
+
+  NotificationRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-notification'
+      EventBusName: !Ref EventBusName
+      EventPattern:
+        source:
+          - medislot.appointments
+        detail-type:
+          - AppointmentBooked
+          - AppointmentRescheduled
+          - AppointmentCancelled
+          - WaitlistOfferIssued
+          - WaitlistOfferExpired
+          - ReminderDue
+      State: ENABLED
+      Targets:
+        - Id: NotificationQueue
+          Arn: !GetAtt NotificationQueue.Arn
+
+  NotificationConsumerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-notification-consumer-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+      Policies:
+        - PolicyName: NotificationConsumerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadQueue
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt NotificationQueue.Arn
+              - Sid: DispatchLog
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DispatchLogTableName}'
+              - Sid: Deliver
+                Effect: Allow
+                Action: sns:Publish
+                Resource:
+                  - !Ref PatientTopic
+                  - !Ref DoctorTopic
+              - Sid: PublishMetrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: MediSlot
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  NotificationConsumerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-notification-consumer'
+      Runtime: python3.12
+      Handler: application.notification.consumer.lambda_handler
+      Role: !GetAtt NotificationConsumerRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      TracingConfig:
+        Mode: Active
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          ENVIRONMENT_NAME: !Ref EnvironmentName
+          DISPATCH_LOG_TABLE_NAME: !Ref DispatchLogTableName
+          PATIENT_TOPIC_ARN: !Ref PatientTopic
+          DOCTOR_TOPIC_ARN: !Ref DoctorTopic
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  NotificationConsumerMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt NotificationQueue.Arn
+      FunctionName: !Ref NotificationConsumerFunction
+      BatchSize: 10
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
+
+  # ------------------------------------------------------------------ consumer 2: waitlist (SlotSeatFreed) and the sweepers
+
+  WaitlistDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${ProjectName}-${EnvironmentName}-waitlist-dlq'
+      SqsManagedSseEnabled: true
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  WaitlistQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${ProjectName}-${EnvironmentName}-waitlist'
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 180
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt WaitlistDeadLetterQueue.Arn
+        maxReceiveCount: 5
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  WaitlistQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref WaitlistQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowEventBridgeRule
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt WaitlistQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt WaitlistRule.Arn
+
+  WaitlistRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-waitlist'
+      EventBusName: !Ref EventBusName
+      EventPattern:
+        source:
+          - medislot.appointments
+        detail-type:
+          - SlotSeatFreed
+      State: ENABLED
+      Targets:
+        - Id: WaitlistQueue
+          Arn: !GetAtt WaitlistQueue.Arn
+
+  JobsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-jobs-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+      Policies:
+        - PolicyName: JobsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadQueue
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt WaitlistQueue.Arn
+              - Sid: ReadDatabaseCredentials
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DatabaseSecretArn
+              - Sid: ReadBusinessRules
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${EnvironmentName}/rules/*'
+              - Sid: Tables
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${SlotCapacityTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${IdempotencyTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${WaitlistTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${WaitlistTableName}/index/*'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${HoldOffersTableName}'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${HoldOffersTableName}/index/*'
+                  - !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DispatchLogTableName}'
+              - Sid: PublishEvents
+                Effect: Allow
+                Action: events:PutEvents
+                Resource: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}'
+              - Sid: PublishMetrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: MediSlot
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  JobsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${EnvironmentName}-jobs'
+      Runtime: python3.12
+      Handler: application.jobs.handler.lambda_handler
+      Role: !GetAtt JobsRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      TracingConfig:
+        Mode: Active
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          ENVIRONMENT_NAME: !Ref EnvironmentName
+          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+          DB_HOST: !Ref DatabaseHost
+          DB_NAME: !Ref DatabaseName
+          SSM_PREFIX: !Sub '/${ProjectName}/${EnvironmentName}'
+          SLOT_CAPACITY_TABLE_NAME: !Ref SlotCapacityTableName
+          IDEMPOTENCY_TABLE_NAME: !Ref IdempotencyTableName
+          WAITLIST_TABLE_NAME: !Ref WaitlistTableName
+          HOLD_OFFERS_TABLE_NAME: !Ref HoldOffersTableName
+          DISPATCH_LOG_TABLE_NAME: !Ref DispatchLogTableName
+          EVENT_BUS_NAME: !Ref EventBusName
+      VpcConfig:
+        SubnetIds: !Ref LambdaSubnetIds
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupId
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  JobsSeatFreedMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt WaitlistQueue.Arn
+      FunctionName: !Ref JobsFunction
+      BatchSize: 5
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
+
+  # ------------------------------------------------------------------ schedules
+  JobsScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-jobs'
+
+  JobsSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-jobs-scheduler-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: InvokeJobs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt JobsFunction.Arn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  ExpireOffersSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-expire-offers'
+      GroupName: !Ref JobsScheduleGroup
+      Description: Hold-offer expiry sweeper, every minute.
+      ScheduleExpression: rate(1 minute)
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      Target:
+        Arn: !GetAtt JobsFunction.Arn
+        RoleArn: !GetAtt JobsSchedulerRole.Arn
+        Input: '{"job": "expire_offers"}'
+        RetryPolicy:
+          MaximumRetryAttempts: 2
+          MaximumEventAgeInSeconds: 300
+
+  RemindersSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-reminders'
+      GroupName: !Ref JobsScheduleGroup
+      Description: Reminder dispatcher (24 hours and 2 hours before the appointment), every 5 minutes.
+      ScheduleExpression: rate(5 minutes)
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      Target:
+        Arn: !GetAtt JobsFunction.Arn
+        RoleArn: !GetAtt JobsSchedulerRole.Arn
+        Input: '{"job": "reminders"}'
+        RetryPolicy:
+          MaximumRetryAttempts: 2
+          MaximumEventAgeInSeconds: 600
+
+  NoShowSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-no-shows'
+      GroupName: !Ref JobsScheduleGroup
+      Description: No-show sweeper, every 15 minutes.
+      ScheduleExpression: rate(15 minutes)
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      Target:
+        Arn: !GetAtt JobsFunction.Arn
+        RoleArn: !GetAtt JobsSchedulerRole.Arn
+        Input: '{"job": "no_shows"}'
+        RetryPolicy:
+          MaximumRetryAttempts: 2
+          MaximumEventAgeInSeconds: 900
+
+Outputs:
+  PatientTopicArn:
+    Value: !Ref PatientTopic
+  DoctorTopicArn:
+    Value: !Ref DoctorTopic
+  NotificationQueueName:
+    Value: !GetAtt NotificationQueue.QueueName
+  NotificationDeadLetterQueueName:
+    Value: !GetAtt NotificationDeadLetterQueue.QueueName
+  WaitlistQueueName:
+    Value: !GetAtt WaitlistQueue.QueueName
+  WaitlistDeadLetterQueueName:
+    Value: !GetAtt WaitlistDeadLetterQueue.QueueName
+  AuditQueueUrl:
+    Value: !Ref AuditQueue
+  NotificationConsumerFunctionName:
+    Value: !Ref NotificationConsumerFunction
+  JobsFunctionName:
+    Value: !Ref JobsFunction

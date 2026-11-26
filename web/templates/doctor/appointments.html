@@ -24,7 +24,7 @@
 <div class="card">
   <div class="table-wrap">
   <table id="doctor-appointments">
-    <thead><tr><th>When</th><th>Patient</th><th>Consultation</th><th>Fee</th><th>Status</th></tr></thead>
+    <thead><tr><th>When</th><th>Patient</th><th>Consultation</th><th>Fee</th><th>Status</th><th>Visit</th></tr></thead>
     <tbody>
     {% for a in data['items'] %}
       <tr>
@@ -34,6 +34,12 @@
         <td>&#8377;{{ '%g' % a.fee }}</td>
         <td><span class="tag {{ 'blocked' if a.status != 'CONFIRMED' and a.status != 'COMPLETED' else '' }}">{{ a.status.replace('_', ' ').title() }}</span>
           {% if a.refund %}<br><span class="muted small">Refunded &#8377;{{ '%.2f' % a.refund.amount }}</span>{% endif %}</td>
+        <td>{% if a.can_mark_attendance %}
+          <form class="attendance" method="post" action="{{ url_for('doctor.attendance', appointment_id=a.appointment_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="next" value="appointments">
+            <button name="outcome" value="complete" class="secondary" type="submit">Attended</button>
+            <button name="outcome" value="no-show" class="danger" type="submit" onclick="return confirm('Mark as a no-show?');">No-show</button>
+          </form>{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>

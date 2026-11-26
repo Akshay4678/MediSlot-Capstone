@@ -190,7 +190,7 @@ def test_slots_for_a_single_date_show_free_seats(conn):
     add_slot(conn, "open", "2026-11-12", 12)
     status, body = discovery.slots(conn, "d1", {"date": "2026-11-12"}, NOW)
     assert status == 200 and body["date"] == "2026-11-12"
-    assert [(s["slot_id"], s["available_seats"]) for s in body["slots"]] == [("camp", 3), ("full", 0), ("open", 1)]
+    assert [(s["slot_id"], s["available_seats"]) for s in body["slots"]] == [("camp", 3), ("open", 1)]
 
 
 def test_slots_for_a_date_range_are_grouped_by_day(conn):

@@ -104,10 +104,30 @@ class WaitlistStore:
         r = self.table.get_item(Key={"waitlist_key": self._key(slot_id, patient_id)}, ConsistentRead=True)
         return self._decode_item(r.get("Item"))
 
-    def leave(self, slot_id, patient_id):
+    def _reconcile_active_count(self, slot_id):
+        rows = self.table.query(
+            IndexName="slot_id-joined_at-index",
+            KeyConditionExpression="#slot = :slot",
+            ExpressionAttributeNames={"#slot": "slot_id"},
+            ExpressionAttributeValues={":slot": {"S": str(slot_id)}},
+            ScanIndexForward=True,
+            Limit=max(self.max_size + 1, 1),
+        )
+        count = sum(
+            1 for item in rows.get("Items", [])
+            if self._decode(item.get("status")) in ("WAITING", "HELD")
+        )
+        self.table.update_item(
+            Key={"waitlist_key": self._meta_key(slot_id)},
+            UpdateExpression="SET #c = :count",
+            ExpressionAttributeNames={"#c": "count"},
+            ExpressionAttributeValues={":count": {"N": str(count)}},
+        )
+
+    def _remove_active_entry(self, slot_id, patient_id):
         key = self._key(slot_id, patient_id)
         item = self.table.get_item(Key={"waitlist_key": key}, ConsistentRead=True).get("Item")
-        if not item or self._decode(item.get("status")) != "WAITING":
+        if not item or self._decode(item.get("status")) not in ("WAITING", "HELD"):
             return False
         try:
             self.client.transact_write_items(TransactItems=[
@@ -122,9 +142,42 @@ class WaitlistStore:
             ])
             return True
         except ClientError as exc:
-            if exc.response.get("Error", {}).get("Code") == "TransactionCanceledException":
-                return False
-            raise
+            if exc.response.get("Error", {}).get("Code") != "TransactionCanceledException":
+                raise
+            # If the META count is stale/missing, still remove the active row and
+            # rebuild the count from the remaining active entries. This keeps the
+            # patient-facing Leave action reliable without changing join semantics.
+            try:
+                self.table.update_item(
+                    Key={"waitlist_key": key},
+                    UpdateExpression="SET #s = :s, removed_at = :now",
+                    ConditionExpression="#s IN (:waiting, :held)",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={
+                        ":s": "REMOVED", ":now": _iso_now(),
+                        ":waiting": "WAITING", ":held": "HELD",
+                    },
+                )
+            except ClientError as update_exc:
+                if update_exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                    return False
+                raise
+            self._reconcile_active_count(slot_id)
+            return True
+
+    def leave(self, slot_id, patient_id):
+        return self._remove_active_entry(slot_id, patient_id)
+
+    def remove_expired(self, slot_id, patient_id):
+        key = self._key(slot_id, patient_id)
+        item = self.table.get_item(Key={"waitlist_key": key}, ConsistentRead=True).get("Item")
+        if not item or self._decode(item.get("status")) not in ("WAITING", "HELD"):
+            return False
+        if self._decode(item.get("status")) == "HELD":
+            offer_id = self._decode(item.get("offer_id"))
+            if offer_id:
+                self.expire_hold(slot_id, offer_id)
+        return self._remove_active_entry(slot_id, patient_id)
 
     def list_for_slot(self, slot_id, limit=50):
         r = self.table.query(IndexName="slot_id-joined_at-index", KeyConditionExpression="#slot = :slot",

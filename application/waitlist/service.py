@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from application.common.api import ApiError, as_date, fmt_time
 from application.booking import events as booking_events
 
@@ -60,7 +62,7 @@ def list_for_patient(conn, store, patient_id):
     with conn.cursor() as cur:
         cur.execute(
             "SELECT s.slot_id, s.doctor_id, s.consultation_type_id, s.`date`, s.start_time, s.end_time, "
-            "s.timezone, s.status, s.capacity, s.booked_count, ct.type_name "
+            "s.start_utc, s.timezone, s.status, s.capacity, s.booked_count, ct.type_name "
             "FROM materialised_slots s "
             "JOIN consultation_types ct ON ct.consultation_type_id = s.consultation_type_id "
             f"WHERE s.slot_id IN ({placeholders})",
@@ -69,8 +71,13 @@ def list_for_patient(conn, store, patient_id):
         slot_rows = {row["slot_id"]: row for row in cur.fetchall()}
     conn.rollback()
 
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    active_items = []
     for item in items:
         row = slot_rows.get(item["slot_id"])
+        if row and row["start_utc"] <= now_utc:
+            store.remove_expired(item["slot_id"], patient_id)
+            continue
         if row:
             item["slot"] = {
                 "slot_id": row["slot_id"],
@@ -85,7 +92,8 @@ def list_for_patient(conn, store, patient_id):
                 "booked_count": int(row["booked_count"]),
                 "type_name": row["type_name"],
             }
-    return 200, {"items": items, "count": len(items)}
+        active_items.append(item)
+    return 200, {"items": active_items, "count": len(active_items)}
 
 
 def promote_first(conn, deps, slot_id):

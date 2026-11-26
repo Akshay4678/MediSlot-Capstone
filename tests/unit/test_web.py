@@ -48,6 +48,7 @@ class FakeApi:
         self.has_bookings_on_blackout = False  # POST /doctors/me/blackouts needs a keep/cancel choice
         self.headers_seen = []  # (method, path, headers) of every call
         self.book_error = None  # (status, body) to make POST /appointments fail
+        self.appointments_items = None  # override upcoming appointments returned by the fake API
 
         self.profile = {
             "doctor_id": "d1",
@@ -279,7 +280,8 @@ class FakeApi:
             return FakeResponse(201, {"appointment": appt})
 
         if path == "/appointments" and method == "GET":
-            return FakeResponse(200, {"items": [appt], "count": 1, "total": 1, "limit": 10, "offset": 0, "has_more": False})
+            items = self.appointments_items if self.appointments_items is not None else [appt]
+            return FakeResponse(200, {"items": items, "count": len(items), "total": len(items), "limit": 10, "offset": 0, "has_more": False})
 
         if path == "/appointments/a1" and method == "GET":
             return FakeResponse(200, {"appointment": appt})
@@ -1207,11 +1209,20 @@ def test_the_pager_keeps_the_consultation_type_filter(client):
     assert "consultation_type=Quick+Consult" in html and "offset=20" in html and "offset=0" in html
 
 
-def test_the_slots_page_has_a_book_button_with_a_csrf_token_and_an_idempotency_key(client):
+def test_the_slots_page_has_a_book_button_with_a_csrf_token_and_an_idempotency_key(client, api):
+    api.appointments_items = []
     login(client, "patient")
     html = client.get("/patient/slots/d9?date=2026-11-13").get_data(as_text=True)
     assert 'action="/patient/book"' in html and 'name="slot_id" value="slot#1"' in html
     assert 'name="idempotency_key"' in html and 'name="csrf_token"' in html and "1 of 3 seats free" in html
+
+
+def test_a_booked_slot_does_not_offer_booking_or_waitlist(client, api):
+    login(client, "patient")
+    html = client.get("/patient/slots/d9?date=2026-11-13").get_data(as_text=True)
+    assert "Already booked" in html
+    assert 'action="/patient/book"' not in html
+    assert "Join waitlist" not in html
 
 
 def test_booking_sends_the_slot_and_an_idempotency_key_then_shows_the_appointment(client, api):
@@ -1335,6 +1346,7 @@ def test_the_slots_page_asks_for_the_whole_30_day_window_by_default(client, api)
 
 
 def test_a_date_beyond_the_booking_window_shows_the_message_and_the_default_window(client, api):
+    api.appointments_items = []
     login(client, "patient")
     html = client.get("/patient/slots/d9?date=2026-11-23&to=2028-01-01").get_data(as_text=True)
     assert "Slots can only be viewed up to 2026-12-23 (30 days ahead)." in html

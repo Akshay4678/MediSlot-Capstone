@@ -44,7 +44,11 @@ def list_for_patient(conn, store, patient_id):
         KeyConditionExpression="patient_id = :p",
         ExpressionAttributeValues={":p": str(patient_id)},
     )
-    items = [store._decode_item(i) for i in rows.get("Items", []) if i.get("status", {}).get("S") in ("WAITING", "HELD")]
+    items = [
+        store._decode_item(i)
+        for i in rows.get("Items", [])
+        if store._decode(i.get("status")) in ("WAITING", "HELD")
+    ]
     if not items:
         return 200, {"items": [], "count": 0}
 

@@ -107,7 +107,7 @@ class WaitlistStore:
     def leave(self, slot_id, patient_id):
         key = self._key(slot_id, patient_id)
         item = self.table.get_item(Key={"waitlist_key": key}, ConsistentRead=True).get("Item")
-        if not item or item.get("status", {}).get("S") != "WAITING":
+        if not item or self._decode(item.get("status")) != "WAITING":
             return False
         try:
             self.client.transact_write_items(TransactItems=[
@@ -130,7 +130,11 @@ class WaitlistStore:
         r = self.table.query(IndexName="slot_id-joined_at-index", KeyConditionExpression="#slot = :slot",
                              ExpressionAttributeNames={"#slot": "slot_id"}, ExpressionAttributeValues={":slot": {"S": str(slot_id)}},
                              ScanIndexForward=True, Limit=int(limit))
-        return [self._decode_item(i) for i in r.get("Items", []) if i.get("status", {}).get("S") in ("WAITING", "HELD")]
+        return [
+            self._decode_item(i)
+            for i in r.get("Items", [])
+            if self._decode(i.get("status")) in ("WAITING", "HELD")
+        ]
 
     def first_waiting(self, slot_id):
         rows = self.list_for_slot(slot_id, 50)

@@ -99,7 +99,11 @@ def slots(doctor_id):
     # cannot keep clicking "Join waitlist" for an already-active entry.
     try:
         waitlist = api_client.call("GET", "/waitlist")
-        waitlist_slot_ids = {item.get("slot_id") for item in waitlist.get("items", [])}
+        waitlist_slot_ids = {
+            str(item.get("slot_id"))
+            for item in (waitlist.get("items") or [])
+            if isinstance(item, dict) and item.get("slot_id")
+        }
     except ApiError:
         waitlist_slot_ids = set()
 

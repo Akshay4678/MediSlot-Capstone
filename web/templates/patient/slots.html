@@ -43,7 +43,7 @@
           <a class="small" href="{{ url_for('patient.waitlist') }}">View waitlist</a>
         </div>
         {% else %}
-        <form method="post" action="{{ url_for('patient.waitlist_join') }}" class="slot-book">
+        <form method="post" action="{{ url_for('patient.waitlist_join') }}" class="slot-book" onsubmit="this.querySelector('button[type=submit]').disabled=true;">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
           <input type="hidden" name="doctor_id" value="{{ doctor_id }}">

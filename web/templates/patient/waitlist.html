@@ -2,9 +2,9 @@
 {% block title %}My waitlist - MediSlot{% endblock %}
 {% block content %}
 <section class="page-head"><h1>My waitlist</h1><p class="muted">A waitlist entry is not an appointment. When a seat opens, MediSlot creates a temporary offer for you; accept it before it expires.</p></section>
-{% if data.items %}
+{% if data['items'] %}
 <div class="doctor-list">
-{% for w in data.items %}
+{% for w in data['items'] %}
 <article class="doctor-card">
   <div class="doctor-main">
     {% if w.slot %}

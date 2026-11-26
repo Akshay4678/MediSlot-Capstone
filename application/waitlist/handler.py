@@ -1,4 +1,5 @@
 import json, os, boto3
+from urllib.parse import unquote
 from application.common.api import ApiError
 from application.common.http import response
 from application.waitlist.store import default_store
@@ -26,7 +27,7 @@ def lambda_handler(event, context):
             if method == "POST" and path.endswith("/waitlist"):
                 return response(*service.join(conn, _get_store(), patient_id, body.get("slot_id"), default_deps().events))
             if method == "DELETE" and "/waitlist/" in path:
-                slot_id = path.rstrip("/").split("/")[-1]
+                slot_id = unquote(path.rstrip("/").split("/")[-1]).strip()
                 return response(*service.leave(_get_store(), patient_id, slot_id, default_deps().events))
             if method == "GET" and path.endswith("/waitlist"):
                 return response(*service.list_for_patient(conn, _get_store(), patient_id))

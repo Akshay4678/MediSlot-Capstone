@@ -62,7 +62,7 @@ def list_for_patient(conn, store, patient_id):
     with conn.cursor() as cur:
         cur.execute(
             "SELECT s.slot_id, s.doctor_id, s.consultation_type_id, s.`date`, s.start_time, s.end_time, "
-            "s.start_utc, s.timezone, s.status, s.capacity, s.booked_count, ct.type_name "
+            "s.start_utc, s.end_utc, s.timezone, s.status, s.capacity, s.booked_count, ct.type_name "
             "FROM materialised_slots s "
             "JOIN consultation_types ct ON ct.consultation_type_id = s.consultation_type_id "
             f"WHERE s.slot_id IN ({placeholders})",
@@ -75,7 +75,7 @@ def list_for_patient(conn, store, patient_id):
     active_items = []
     for item in items:
         row = slot_rows.get(item["slot_id"])
-        if row and row["start_utc"] <= now_utc:
+        if row and row["end_utc"] <= now_utc:
             store.remove_expired(item["slot_id"], patient_id)
             continue
         if row:

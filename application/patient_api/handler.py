@@ -107,7 +107,8 @@ def _milestone6_route(method, resource, user_id, event):
         if resource == "/waitlist" and method == "GET":
             return waitlist_service.list_for_patient(conn, deps.waitlist, user_id)
         if resource == "/waitlist/{slot_id}" and method == "DELETE":
-            slot_id = ((event.get("pathParameters") or {}).get("slot_id") or "").strip()
+            from urllib.parse import unquote
+            slot_id = unquote(((event.get("pathParameters") or {}).get("slot_id") or "").strip())
             return waitlist_service.leave(deps.waitlist, user_id, slot_id, deps.events)
         if resource == "/waitlist/offers/{offer_id}/accept" and method == "POST":
             offer_id = ((event.get("pathParameters") or {}).get("offer_id") or "").strip()

@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import date, timedelta
+from urllib.parse import quote
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
@@ -190,7 +191,8 @@ def waitlist():
 @role_required("patient")
 def waitlist_leave(slot_id):
     try:
-        api_client.call("DELETE", f"/waitlist/{slot_id}")
+        encoded_slot_id = quote(str(slot_id), safe="")
+        api_client.call("DELETE", f"/waitlist/{encoded_slot_id}")
         flash("You left the waitlist.", "success")
     except ApiError as exc:
         flash(exc.message, "error")

@@ -37,7 +37,7 @@
         <button type="submit">Book</button>
       </form>
       {% else %}
-        {% if s.slot_id in waitlist_slot_ids %}
+        {% if s.slot_id in waitlist_slot_ids or s.slot_id == joined_slot_id %}
         <div class="slot-book">
           <button type="button" disabled>Already on waitlist</button>
           <a class="small" href="{{ url_for('patient.waitlist') }}">View waitlist</a>

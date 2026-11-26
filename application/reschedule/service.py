@@ -44,7 +44,7 @@ def start(conn, patient_id, appointment_id, target_slot_id):
         cutoff = appt["starts_at_utc"] - timedelta(hours=rules.min_reschedule_hours())
         if datetime.utcnow() >= cutoff:
             raise ApiError(409, "RESCHEDULE_CUTOFF", f"Rescheduling is allowed only until {rules.min_reschedule_hours()} hours before the appointment.")
-        cur.execute("SELECT a.doctor_id FROM appointments a WHERE a.appointment_id=%s AND a.patient_id=%s", (appointment_id, patient_id))
+        cur.execute("SELECT a.doctor_id FROM appointments a WHERE a.appointment_id=%s AND a.patient_id=%s", (appointment_id, db_patient_id))
         doctor_id = cur.fetchone()["doctor_id"]
         cur.execute("SELECT slot_id, doctor_id, start_utc, end_utc, status, booked_count, capacity FROM materialised_slots WHERE slot_id=%s FOR UPDATE", (target_slot_id,))
         target = cur.fetchone()

@@ -110,6 +110,7 @@ def slots(doctor_id):
         date=chosen,
         until=until,
         waitlist_slot_ids=waitlist_slot_ids,
+        joined_slot_id=request.args.get("joined_slot_id", "").strip(),
         booking_key=uuid.uuid4().hex,  # one key per page view: a double click or a resubmit books only once
     )
 
@@ -143,11 +144,20 @@ def waitlist_join():
     slot_id = request.form.get("slot_id", "").strip()
     doctor_id = request.form.get("doctor_id", "").strip()
     try:
-        api_client.call("POST", "/waitlist", {"slot_id": slot_id})
-        flash("You are now on the waitlist for this slot.", "success")
+        result = api_client.call("POST", "/waitlist", {"slot_id": slot_id})
+        if result.get("already_joined"):
+            flash("You are already on the waitlist for this slot.", "success")
+        else:
+            flash("You are now on the waitlist for this slot.", "success")
     except ApiError as exc:
         flash(exc.message, "error")
-    return redirect(url_for("patient.slots", doctor_id=doctor_id, date=request.form.get("date", ""), to=request.form.get("to", "")))
+    return redirect(url_for(
+        "patient.slots",
+        doctor_id=doctor_id,
+        date=request.form.get("date", ""),
+        to=request.form.get("to", ""),
+        joined_slot_id=slot_id,
+    ))
 
 @bp.route("/waitlist", endpoint="waitlist")
 @role_required("patient")

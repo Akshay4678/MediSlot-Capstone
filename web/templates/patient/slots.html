@@ -37,14 +37,21 @@
         <button type="submit">Book</button>
       </form>
       {% else %}
-      <form method="post" action="{{ url_for('patient.waitlist_join') }}" class="slot-book">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
-        <input type="hidden" name="doctor_id" value="{{ doctor_id }}">
-        <input type="hidden" name="date" value="{{ date }}">
-        <input type="hidden" name="to" value="{{ until }}">
-        <button type="submit">Join waitlist</button>
-      </form>
+        {% if s.slot_id in waitlist_slot_ids %}
+        <div class="slot-book">
+          <button type="button" disabled>Already on waitlist</button>
+          <a class="small" href="{{ url_for('patient.waitlist') }}">View waitlist</a>
+        </div>
+        {% else %}
+        <form method="post" action="{{ url_for('patient.waitlist_join') }}" class="slot-book">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
+          <input type="hidden" name="doctor_id" value="{{ doctor_id }}">
+          <input type="hidden" name="date" value="{{ date }}">
+          <input type="hidden" name="to" value="{{ until }}">
+          <button type="submit">Join waitlist</button>
+        </form>
+        {% endif %}
       {% endif %}
       {% endcall %}
     {% endfor %}

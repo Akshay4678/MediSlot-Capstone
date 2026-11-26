@@ -93,12 +93,23 @@ def slots(doctor_id):
         chosen = date.today().isoformat()
         until = (date.today() + timedelta(days=SLOT_WINDOW_DAYS - 1)).isoformat()
         data = api_client.call("GET", f"/doctors/{doctor_id}/slots", params={"from": chosen, "to": until})
+
+    # The waitlist is a separate domain from appointments. Keep the slot page
+    # aware of the patient's active WAITING/HELD entries so the same patient
+    # cannot keep clicking "Join waitlist" for an already-active entry.
+    try:
+        waitlist = api_client.call("GET", "/waitlist")
+        waitlist_slot_ids = {item.get("slot_id") for item in waitlist.get("items", [])}
+    except ApiError:
+        waitlist_slot_ids = set()
+
     return render_template(
         "patient/slots.html",
         doctor_id=doctor_id,
         data=data,
         date=chosen,
         until=until,
+        waitlist_slot_ids=waitlist_slot_ids,
         booking_key=uuid.uuid4().hex,  # one key per page view: a double click or a resubmit books only once
     )
 

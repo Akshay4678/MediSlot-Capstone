@@ -1,6 +1,6 @@
 import os, uuid, json
 from urllib.parse import unquote
-from datetime import timedelta
+from datetime import datetime, timedelta
 import boto3
 from botocore.config import Config
 from application.common.api import ApiError
@@ -28,13 +28,19 @@ def start(conn, patient_id, appointment_id, target_slot_id):
         if int(appt["reschedule_count"]) >= rules.max_reschedules():
             raise ApiError(409, "RESCHEDULE_LIMIT_REACHED", "The reschedule limit has been reached.")
         cutoff = appt["starts_at_utc"] - timedelta(hours=rules.min_reschedule_hours())
-        if __import__('datetime').datetime.utcnow() >= cutoff:
+        if datetime.utcnow() >= cutoff:
             raise ApiError(409, "RESCHEDULE_CUTOFF", f"Rescheduling is allowed only until {rules.min_reschedule_hours()} hours before the appointment.")
-        cur.execute("SELECT slot_id, start_utc, end_utc, status, booked_count, capacity FROM materialised_slots WHERE slot_id=%s", (target_slot_id,))
+        cur.execute("SELECT a.doctor_id FROM appointments a WHERE a.appointment_id=%s AND a.patient_id=%s", (appointment_id, patient_id))
+        doctor_id = cur.fetchone()["doctor_id"]
+        cur.execute("SELECT slot_id, doctor_id, start_utc, end_utc, status, booked_count, capacity FROM materialised_slots WHERE slot_id=%s FOR UPDATE", (target_slot_id,))
         target = cur.fetchone()
         if not target: raise ApiError(404, "TARGET_SLOT_NOT_FOUND", "Target slot was not found.")
+        if target["doctor_id"] != doctor_id:
+            raise ApiError(409, "INVALID_TARGET_SLOT", "Choose a slot offered by the same doctor.")
         if target["status"] in ("BLOCKED", "CLOSED") or int(target["booked_count"]) >= int(target["capacity"]):
             raise ApiError(409, "TARGET_SLOT_UNAVAILABLE", "Target slot is not available.")
+        if target["start_utc"] <= datetime.utcnow():
+            raise ApiError(409, "TARGET_SLOT_IN_PAST", "Choose a future slot.")
         if target_slot_id == appt["slot_id"]:
             raise ApiError(409, "SAME_SLOT", "Choose a different slot.")
     arn = os.environ.get("RESCHEDULE_STATE_MACHINE_ARN")

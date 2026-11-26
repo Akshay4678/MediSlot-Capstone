@@ -29,7 +29,7 @@ def lambda_handler(event, context):
                 slot_id = path.rstrip("/").split("/")[-1]
                 return response(*service.leave(_get_store(), patient_id, slot_id, default_deps().events))
             if method == "GET" and path.endswith("/waitlist"):
-                return response(*service.list_for_patient(_get_store(), patient_id))
+                return response(*service.list_for_patient(conn, _get_store(), patient_id))
             return response(404, {"error": "NOT_FOUND"})
         finally:
             conn.close()

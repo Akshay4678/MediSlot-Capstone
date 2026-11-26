@@ -1,4 +1,4 @@
-from application.common.api import ApiError
+from application.common.api import ApiError, as_date, fmt_time
 from application.booking import events as booking_events
 
 
@@ -38,9 +38,46 @@ def leave(store, patient_id, slot_id, events=None):
     return 200, {"slot_id": slot_id, "status": "REMOVED"}
 
 
-def list_for_patient(store, patient_id):
-    rows = store.table.query(IndexName="patient_id-index", KeyConditionExpression="patient_id = :p", ExpressionAttributeValues={":p": str(patient_id)})
+def list_for_patient(conn, store, patient_id):
+    rows = store.table.query(
+        IndexName="patient_id-index",
+        KeyConditionExpression="patient_id = :p",
+        ExpressionAttributeValues={":p": str(patient_id)},
+    )
     items = [store._decode_item(i) for i in rows.get("Items", []) if i.get("status", {}).get("S") in ("WAITING", "HELD")]
+    if not items:
+        return 200, {"items": [], "count": 0}
+
+    slot_ids = [item["slot_id"] for item in items]
+    placeholders = ", ".join(["%s"] * len(slot_ids))
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT s.slot_id, s.doctor_id, s.consultation_type_id, s.`date`, s.start_time, s.end_time, "
+            "s.timezone, s.status, s.capacity, s.booked_count, ct.type_name "
+            "FROM materialised_slots s "
+            "JOIN consultation_types ct ON ct.consultation_type_id = s.consultation_type_id "
+            f"WHERE s.slot_id IN ({placeholders})",
+            tuple(slot_ids),
+        )
+        slot_rows = {row["slot_id"]: row for row in cur.fetchall()}
+    conn.rollback()
+
+    for item in items:
+        row = slot_rows.get(item["slot_id"])
+        if row:
+            item["slot"] = {
+                "slot_id": row["slot_id"],
+                "doctor_id": row["doctor_id"],
+                "consultation_type_id": row["consultation_type_id"],
+                "date": as_date(row["date"]).isoformat(),
+                "start_time": fmt_time(row["start_time"]),
+                "end_time": fmt_time(row["end_time"]),
+                "timezone": row["timezone"],
+                "status": row["status"],
+                "capacity": int(row["capacity"]),
+                "booked_count": int(row["booked_count"]),
+                "type_name": row["type_name"],
+            }
     return 200, {"items": items, "count": len(items)}
 
 

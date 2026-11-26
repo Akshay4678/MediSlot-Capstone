@@ -31,11 +31,62 @@ class WaitlistStore:
         return f"{slot_id}#META"
 
     def join(self, slot_id, patient_id, doctor_id, consultation_type_id):
+        """Join a slot exactly once, while atomically enforcing the per-slot cap.
+
+        The waitlist row is updated rather than blindly inserted so a previously
+        removed entry can re-join. An active WAITING/HELD entry fails the
+        conditional update and is returned to the caller as an idempotent replay.
+        """
         key = self._key(slot_id, patient_id)
         now = _iso_now()
+        waitlist_id = str(uuid.uuid4())
+        meta_key = self._meta_key(slot_id)
+        item_values = {
+            ":waitlist_id": {"S": waitlist_id},
+            ":slot": {"S": str(slot_id)},
+            ":patient": {"S": str(patient_id)},
+            ":doctor": {"S": str(doctor_id)},
+            ":type": {"S": str(consultation_type_id)},
+            ":joined": {"S": now},
+            ":waiting": {"S": "WAITING"},
+            ":removed": {"S": "REMOVED"},
+            ":zero": {"N": "0"},
+            ":one": {"N": "1"},
+            ":max": {"N": str(self.max_size)},
+        }
+        try:
+            self.client.transact_write_items(TransactItems=[
+                {"Update": {
+                    "TableName": self.table.name,
+                    "Key": {"waitlist_key": {"S": meta_key}},
+                    "UpdateExpression": "SET #c = if_not_exists(#c, :zero) + :one, #slot = :slot, #type = :meta_type",
+                    "ConditionExpression": "attribute_not_exists(#c) OR #c < :max",
+                    "ExpressionAttributeNames": {"#c": "count", "#slot": "slot_id", "#type": "item_type"},
+                    "ExpressionAttributeValues": {":zero": {"N": "0"}, ":one": {"N": "1"}, ":max": {"N": str(self.max_size)}, ":slot": {"S": str(slot_id)}, ":meta_type": {"S": "META"}},
+                }},
+                {"Update": {
+                    "TableName": self.table.name,
+                    "Key": {"waitlist_key": {"S": key}},
+                    "UpdateExpression": "SET waitlist_id = :waitlist_id, slot_id = :slot, patient_id = :patient, doctor_id = :doctor, consultation_type_id = :type, joined_at = :joined, #s = :waiting REMOVE offer_id, offer_expires_at, removed_at",
+                    "ConditionExpression": "attribute_not_exists(waitlist_key) OR #s = :removed",
+                    "ExpressionAttributeNames": {"#s": "status"},
+                    "ExpressionAttributeValues": item_values,
+                }},
+            ])
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code")
+            if code == "TransactionCanceledException":
+                existing = self.get(slot_id, patient_id)
+                if existing and existing.get("status") in ("WAITING", "HELD"):
+                    return existing, False
+                # A failed transaction with no active entry means the slot's
+                # META row reached its configured maximum.
+                raise RuntimeError("WAITLIST_FULL") from None
+            raise
+
         item = {
             "waitlist_key": {"S": key},
-            "waitlist_id": {"S": str(uuid.uuid4())},
+            "waitlist_id": {"S": waitlist_id},
             "slot_id": {"S": str(slot_id)},
             "patient_id": {"S": str(patient_id)},
             "doctor_id": {"S": str(doctor_id)},
@@ -43,24 +94,6 @@ class WaitlistStore:
             "joined_at": {"S": now},
             "status": {"S": "WAITING"},
         }
-        meta = {"waitlist_key": {"S": self._meta_key(slot_id)}, "slot_id": {"S": str(slot_id)}, "item_type": {"S": "META"}, "count": {"N": "0"}}
-        try:
-            self.client.transact_write_items(TransactItems=[
-                {"Update": {"TableName": self.table.name, "Key": {"waitlist_key": meta["waitlist_key"]},
-                             "UpdateExpression": "SET #c = if_not_exists(#c, :zero) + :one, #slot = :slot, #type = :type",
-                             "ConditionExpression": "attribute_not_exists(#c) OR #c < :max",
-                             "ExpressionAttributeNames": {"#c": "count", "#slot": "slot_id", "#type": "item_type"},
-                             "ExpressionAttributeValues": {":zero": {"N": "0"}, ":one": {"N": "1"}, ":max": {"N": str(self.max_size)}, ":slot": {"S": str(slot_id)}, ":type": {"S": "META"}}}},
-                {"Put": {"TableName": self.table.name, "Item": item, "ConditionExpression": "attribute_not_exists(waitlist_key)"}},
-            ])
-        except ClientError as exc:
-            code = exc.response.get("Error", {}).get("Code")
-            if code == "TransactionCanceledException":
-                existing = self.get(slot_id, patient_id)
-                if existing:
-                    return existing, False
-                raise RuntimeError("WAITLIST_FULL") from None
-            raise
         return {k: self._decode(v) for k, v in item.items()}, True
 
     def get(self, slot_id, patient_id):

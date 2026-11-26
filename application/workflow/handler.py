@@ -1,5 +1,6 @@
 """Milestone 6 worker Lambda: Step Functions tasks, waitlist sweeper/promoter, reminders, no-show and notification consumer."""
 import json, os, time, uuid, logging
+from urllib.parse import unquote
 import boto3
 from botocore.config import Config
 from application.database.connection import get_connection
@@ -44,7 +45,10 @@ def _db_slot(cur, slot_id):
 
 
 def claim_target(conn, data):
-    patient_id, appointment_id, target_slot_id = data["patient_id"], data["appointment_id"], data["target_slot_id"]
+    patient_id, appointment_id = data["patient_id"], data["appointment_id"]
+    target_slot_id = unquote(str(data.get("target_slot_id") or "").strip())
+    if not target_slot_id:
+        raise ValueError("INVALID_TARGET_SLOT")
     with conn.cursor() as cur:
         cur.execute("SELECT appointment_id, patient_id, doctor_id, slot_id, status, starts_at_utc, ends_at_utc, fee_amount FROM appointments WHERE appointment_id = %s AND patient_id = %s FOR UPDATE", (appointment_id, patient_id))
         appt = cur.fetchone()
@@ -60,7 +64,10 @@ def claim_target(conn, data):
 
 def commit_reschedule(conn, data):
     appointment_id, patient_id = data["appointment_id"], data["patient_id"]
-    original_slot_id, target_slot_id = data["original_slot_id"], data["target_slot_id"]
+    original_slot_id = unquote(str(data.get("original_slot_id") or "").strip())
+    target_slot_id = unquote(str(data.get("target_slot_id") or "").strip())
+    if not original_slot_id or not target_slot_id:
+        raise ValueError("INVALID_RESCHEDULE_SLOTS")
     with conn.cursor() as cur:
         cur.execute("SELECT doctor_id, consultation_type_id, fee_amount FROM materialised_slots WHERE slot_id = %s", (target_slot_id,))
         target = cur.fetchone()
@@ -87,7 +94,8 @@ def commit_reschedule(conn, data):
 
 def compensate(conn, data):
     appointment_id, patient_id = data["appointment_id"], data["patient_id"]
-    original_slot_id, target_slot_id = data["original_slot_id"], data["target_slot_id"]
+    original_slot_id = unquote(str(data.get("original_slot_id") or "").strip())
+    target_slot_id = unquote(str(data.get("target_slot_id") or "").strip())
     with conn.cursor() as cur:
         cur.execute("SELECT start_utc, end_utc, date, start_time, end_time, timezone, doctor_id, consultation_type_id, fee FROM materialised_slots WHERE slot_id = %s", (original_slot_id,))
         original = cur.fetchone()

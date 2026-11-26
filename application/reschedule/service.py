@@ -19,7 +19,21 @@ def start(conn, patient_id, appointment_id, target_slot_id):
     if not target_slot_id:
         raise ApiError(400, "INVALID_TARGET_SLOT", "target_slot_id is required.")
     with conn.cursor() as cur:
-        cur.execute("SELECT appointment_id, slot_id, status, starts_at_utc, reschedule_count FROM appointments WHERE appointment_id=%s AND patient_id=%s FOR UPDATE", (appointment_id, patient_id))
+        # The JWT identifies the application user, while appointments store the
+        # patient-domain identifier. Resolve that relationship before querying
+        # the appointment; comparing appointments.patient_id directly with
+        # the JWT user_id makes valid appointments look missing.
+        cur.execute(
+            "SELECT p.patient_id FROM patients p JOIN users u ON u.user_id = p.user_id "
+            "WHERE p.user_id = %s AND p.is_active = TRUE AND u.is_active = TRUE",
+            (patient_id,),
+        )
+        patient = cur.fetchone()
+        if not patient:
+            raise ApiError(409, "PROFILE_REQUIRED", "Create your patient profile first.")
+        db_patient_id = patient["patient_id"]
+
+        cur.execute("SELECT appointment_id, slot_id, status, starts_at_utc, reschedule_count FROM appointments WHERE appointment_id=%s AND patient_id=%s FOR UPDATE", (appointment_id, db_patient_id))
         appt = cur.fetchone()
         if not appt:
             raise ApiError(404, "APPOINTMENT_NOT_FOUND", "Appointment was not found.")
@@ -46,9 +60,9 @@ def start(conn, patient_id, appointment_id, target_slot_id):
     arn = os.environ.get("RESCHEDULE_STATE_MACHINE_ARN")
     if not arn: raise ApiError(503, "RESCHEDULE_UNAVAILABLE", "Reschedule workflow is not configured.")
     execution_name = f"reschedule-{appointment_id}-{uuid.uuid4().hex[:12]}"
-    payload = {"patient_id": patient_id, "appointment_id": appointment_id, "target_slot_id": target_slot_id, "attempt": int(appt["reschedule_count"]) + 1}
+    payload = {"patient_id": db_patient_id, "appointment_id": appointment_id, "target_slot_id": target_slot_id, "attempt": int(appt["reschedule_count"]) + 1}
     result = _client().start_execution(stateMachineArn=arn, name=execution_name, input=json.dumps(payload))
     with conn.cursor() as cur:
-        cur.execute("UPDATE appointments SET reschedule_count = reschedule_count + 1 WHERE appointment_id=%s AND patient_id=%s AND status='CONFIRMED'", (appointment_id, patient_id))
+        cur.execute("UPDATE appointments SET reschedule_count = reschedule_count + 1 WHERE appointment_id=%s AND patient_id=%s AND status='CONFIRMED'", (appointment_id, db_patient_id))
     conn.commit()
     return 202, {"status": "RESCHEDULE_REQUESTED", "execution_arn": result["executionArn"], "attempt": int(appt["reschedule_count"]) + 1}

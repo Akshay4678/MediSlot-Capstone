@@ -41,6 +41,13 @@ class WaitlistStore:
         now = _iso_now()
         waitlist_id = str(uuid.uuid4())
         meta_key = self._meta_key(slot_id)
+        meta_values = {
+            ":zero": {"N": "0"},
+            ":one": {"N": "1"},
+            ":max": {"N": str(self.max_size)},
+            ":slot": {"S": str(slot_id)},
+            ":meta_type": {"S": "META"},
+        }
         item_values = {
             ":waitlist_id": {"S": waitlist_id},
             ":slot": {"S": str(slot_id)},
@@ -50,9 +57,6 @@ class WaitlistStore:
             ":joined": {"S": now},
             ":waiting": {"S": "WAITING"},
             ":removed": {"S": "REMOVED"},
-            ":zero": {"N": "0"},
-            ":one": {"N": "1"},
-            ":max": {"N": str(self.max_size)},
         }
         try:
             self.client.transact_write_items(TransactItems=[
@@ -62,7 +66,7 @@ class WaitlistStore:
                     "UpdateExpression": "SET #c = if_not_exists(#c, :zero) + :one, #slot = :slot, #type = :meta_type",
                     "ConditionExpression": "attribute_not_exists(#c) OR #c < :max",
                     "ExpressionAttributeNames": {"#c": "count", "#slot": "slot_id", "#type": "item_type"},
-                    "ExpressionAttributeValues": {":zero": {"N": "0"}, ":one": {"N": "1"}, ":max": {"N": str(self.max_size)}, ":slot": {"S": str(slot_id)}, ":meta_type": {"S": "META"}},
+                    "ExpressionAttributeValues": meta_values,
                 }},
                 {"Update": {
                     "TableName": self.table.name,

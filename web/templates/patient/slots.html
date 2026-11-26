@@ -26,7 +26,11 @@
     <div class="slot-grid">
     {% for s in day.slots %}
       {% call slot_card(s) %}
-      {% if s.available_seats > 0 and s.status == 'OPEN' %}
+      {% if s.slot_id in booked_slot_ids %}
+      <div class="slot-book">
+        <button type="button" disabled>Already booked</button>
+      </div>
+      {% elif s.available_seats > 0 and s.status == 'OPEN' %}
       <form method="post" action="{{ url_for('patient.book') }}" class="slot-book">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="slot_id" value="{{ s.slot_id }}">

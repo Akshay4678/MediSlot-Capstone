@@ -107,6 +107,22 @@ def slots(doctor_id):
     except ApiError:
         waitlist_slot_ids = set()
 
+    # A patient who already has a confirmed appointment for a slot must not
+    # be offered the waitlist for that same slot. Keep this separate from the
+    # waitlist lookup because a booked slot is an appointment, not a waitlist
+    # entry.
+    try:
+        appointments = api_client.call("GET", "/appointments", params={"scope": "upcoming", "limit": 100, "offset": 0})
+        booked_slot_ids = {
+            str(item.get("slot_id"))
+            for item in (appointments.get("items") or [])
+            if isinstance(item, dict)
+            and item.get("slot_id")
+            and item.get("status") == "CONFIRMED"
+        }
+    except ApiError:
+        booked_slot_ids = set()
+
     return render_template(
         "patient/slots.html",
         doctor_id=doctor_id,
@@ -114,6 +130,7 @@ def slots(doctor_id):
         date=chosen,
         until=until,
         waitlist_slot_ids=waitlist_slot_ids,
+        booked_slot_ids=booked_slot_ids,
         joined_slot_id=request.args.get("joined_slot_id", "").strip(),
         booking_key=uuid.uuid4().hex,  # one key per page view: a double click or a resubmit books only once
     )

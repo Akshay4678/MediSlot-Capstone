@@ -306,7 +306,8 @@ class FakeApi:
                     "capacity": 3, "booked_count": 2, "available_seats": 1, "status": "OPEN", "type_name": "Standard Consult",
                     "duration_minutes": 30, "fee": 500.0, "consultation_type_id": "t1"}
             return FakeResponse(200, {"doctor_id": "d9", "timezone": "Asia/Kolkata", "slots": [slot],
-                                      "days": [{"date": "2026-11-13", "slots": [slot]}]})
+                                      "days": [{"date": "2026-11-13", "slots": [slot]}],
+                                      "consultation_types": ["Quick Consult", "Standard Consult"]})
 
         if path == "/doctors/me/appointments" and method == "GET":
             return FakeResponse(200, {"items": [dict(appt, patient={"patient_id": "p1", "name": "Pat One", "phone": "1"})],
@@ -1192,19 +1193,19 @@ def test_blackout_confirmation_passes_the_choice_to_the_api(client, api):
 # Milestone 5: search filter, booking, appointments, refunds, doctor slot cancellation
 # -------------------------------------------------------
 
-def test_search_offers_a_consultation_type_filter_and_passes_it_to_the_api(client, api):
+def test_the_landing_search_has_no_consultation_type_filter(client):
     login(client, "patient")
-    html = client.get("/patient/?consultation_type=Health+Camp+Session").get_data(as_text=True)
-    assert 'name="consultation_type"' in html and "Quick Consult" in html and "Health Camp Session" in html
-    assert 'value="Health Camp Session" selected' in html
-    params = [c[4] for c in api.calls if c[1] == "/doctors/search"][-1]
-    assert params["consultation_type"] == "Health Camp Session"
+    html = client.get("/patient/").get_data(as_text=True)
+    assert 'name="consultation_type"' not in html and "Specialisation" in html
 
 
-def test_the_pager_keeps_the_consultation_type_filter(client):
+def test_the_slots_page_has_a_consultation_type_filter_that_is_sent_to_the_api(client, api):
     login(client, "patient")
-    html = client.get("/patient/?consultation_type=Quick+Consult&offset=10").get_data(as_text=True)
-    assert "consultation_type=Quick+Consult" in html and "offset=20" in html and "offset=0" in html
+    html = client.get("/patient/slots/d9?date=2026-11-13&consultation_type=Quick+Consult").get_data(as_text=True)
+    assert 'name="consultation_type"' in html and "Standard Consult" in html
+    assert 'value="Quick Consult" selected' in html
+    params = [c[4] for c in api.calls if c[1] == "/doctors/d9/slots"][-1]
+    assert params["consultation_type"] == "Quick Consult"
 
 
 def test_the_slots_page_has_a_book_button_with_a_csrf_token_and_an_idempotency_key(client):

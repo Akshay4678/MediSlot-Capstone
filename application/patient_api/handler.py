@@ -52,10 +52,39 @@ def _doctor_profile(event):
     return _with_connection(lambda conn: discovery.doctor_profile(conn, doctor_id))
 
 
-def _availability(event):
+def _mark_booked_by_me(conn, user_id, body):
+    """Flag the slots this patient already holds a CONFIRMED appointment in (the page then offers no Book and no
+    "join waitlist" button for them)."""
+    slot_ids = {s["slot_id"] for s in body.get("slots", []) + body.get("full_slots", [])}
+    mine = set()
+    if slot_ids:
+        with conn.cursor() as cur:
+            marks = ", ".join(["%s"] * len(slot_ids))
+            cur.execute("SELECT a.slot_id FROM appointments a JOIN patients p ON p.patient_id = a.patient_id "
+                        f"WHERE p.user_id = %s AND a.status = 'CONFIRMED' AND a.slot_id IN ({marks})",
+                        (user_id, *sorted(slot_ids)))
+            mine = {r["slot_id"] for r in cur.fetchall()} & slot_ids
+        conn.rollback()
+    for key in ("slots", "full_slots"):
+        for s in body.get(key, []):
+            s["booked_by_me"] = s["slot_id"] in mine
+    for key in ("days", "full_days"):
+        for day in body.get(key, []):
+            for s in day.get("slots", []):
+                s["booked_by_me"] = s["slot_id"] in mine
+    body["my_booked_slot_ids"] = sorted(mine)
+
+
+def _availability(event, user_id):
     q = event.get("queryStringParameters") or {}
     doctor_id = (((event.get("pathParameters") or {}).get("doctor_id")) or q.get("doctor_id") or "").strip()
-    return _with_connection(lambda conn: discovery.slots(conn, doctor_id, q))
+
+    def work(conn):
+        status, body = discovery.slots(conn, doctor_id, q)
+        if status == 200:
+            _mark_booked_by_me(conn, user_id, body)
+        return status, body
+    return _with_connection(work)
 
 
 def _profile_route(method, user_id, event):
@@ -136,7 +165,7 @@ def _route(event, user_id):
     if method == "GET" and resource == "/doctors/search":
         return _doctor_search(event)
     if method == "GET" and resource == "/doctors/{doctor_id}/slots":
-        return _availability(event)
+        return _availability(event, user_id)
     if method == "GET" and resource == "/doctors/{doctor_id}":
         return _doctor_profile(event)
     if (method, resource) in _BOOKING_ROUTES:

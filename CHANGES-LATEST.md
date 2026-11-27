@@ -28,3 +28,4 @@
 * Milestone 7: `observability.yaml` (dashboard, 17 alarms, budget), X-Ray, cost-allocation tags on every stack, 7-day RDS backups, DynamoDB PITR, `scripts/detect_drift.sh`, `scripts/dr_drill.sh`, docs (architecture, API, runbook, test report, DR drill, cost review), infrastructure audit tests.
 * `remove-leftovers.sh` updated: keeps application/reschedule and application/waitlist, removes old dirs and stub templates.
 * Run `./remove-leftovers.sh` after unzipping, commit, push.
+* Waitlist rows carry a TTL (expire_time = slot end); patients are not offered Book/waitlist for slots they booked; consultation type filter moved from the landing page to the slots page.

@@ -71,12 +71,12 @@ def join(conn, deps, user_id, slot_id):
                 raise ApiError(409, "ALREADY_BOOKED", "You already have an appointment in this slot.")
         conn.rollback()  # the patient lock is only needed while we check and add
         limit = rules.waitlist_max_size()
-        mine = store.entries_for_patient(patient_id)
+        mine = store.entries_for_patient(patient_id, now)
         if any(e["slot_id"] == slot_id for e in mine):
             raise ApiError(409, "ALREADY_WAITLISTED", "You are already on the waitlist of this slot.")
         if len(mine) >= limit:
             raise ApiError(409, "WAITLIST_LIMIT_REACHED", f"You can be on at most {limit} waitlists at once.")
-        if not store.join(slot_id, patient_id, new_id(), now):
+        if not store.join(slot_id, patient_id, new_id(), now, _dt(slot["end_utc"])):
             raise ApiError(409, "ALREADY_WAITLISTED", "You are already on the waitlist of this slot.")
     except Exception:
         _safe(conn.rollback)
@@ -138,7 +138,7 @@ def list_mine(conn, deps, user_id):
     with conn.cursor() as cur:
         patient_id = _patient_id(cur, user_id)
     conn.rollback()
-    items = [_entry_view(conn, deps, patient_id, e, now) for e in store.entries_for_patient(patient_id)]
+    items = [_entry_view(conn, deps, patient_id, e, now) for e in store.entries_for_patient(patient_id, now)]
     items = [i for i in items if i and i.get("start_utc")]
     items.sort(key=lambda i: i["start_utc"])
     return 200, {"items": items, "count": len(items), "limit": rules.waitlist_max_size()}

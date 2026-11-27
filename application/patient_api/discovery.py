@@ -187,15 +187,21 @@ def slots(conn, doctor_id, q, now_utc=None):
                        "Please choose an earlier date.")
 
     first = max(start, today)  # days that already passed have nothing left to book
-    items, full = [], []
+    items, full, type_names = [], [], []
     if first <= end:
         rows = slot_query.fetch_slots(conn, doctor_id, first, end, after_utc=now_utc)
         items = [s for s in rows if slot_query.is_bookable(s)]
         full = [s for s in rows if s["status"] == "FULL" and s["available_seats"] == 0]  # waitlist can be joined
+        type_names = sorted({s["type_name"] for s in items + full if s.get("type_name")})
+        wanted = (q.get("consultation_type") or "").strip().lower()
+        if wanted:  # optional filter: only this kind of consultation
+            items = [s for s in items if str(s.get("type_name", "")).lower() == wanted]
+            full = [s for s in full if str(s.get("type_name", "")).lower() == wanted]
     body = {"doctor_id": doctor_id, "timezone": doctor["timezone"], "from": start.isoformat(), "to": end.isoformat(),
             "booking_window_ends": last_day.isoformat(),
             "slots": items, "days": slot_query.group_by_day(items, first, end) if first <= end else [],
-            "full_slots": full, "full_days": slot_query.group_by_day(full, first, end) if first <= end else []}
+            "full_slots": full, "full_days": slot_query.group_by_day(full, first, end) if first <= end else [],
+            "consultation_types": type_names}
     if single:
         body["date"] = start.isoformat()
     return 200, body

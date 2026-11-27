@@ -11,7 +11,6 @@ from web import api_client
 from web.api_client import ApiError
 from web.portals.common import add_auth_routes, role_required
 
-CONSULTATION_TYPES = ("Quick Consult", "Standard Consult", "Detailed Consult", "Health Camp Session")
 SLOT_WINDOW_DAYS = 30  # the booking window: patients can book this many days ahead
 
 bp = Blueprint("patient", __name__, url_prefix="/patient")
@@ -44,7 +43,6 @@ def home():
         "hospital": request.args.get("hospital", "").strip(),
         "city": request.args.get("city", "").strip(),
         "specialisation": request.args.get("specialisation", "").strip(),
-        "consultation_type": request.args.get("consultation_type", "").strip(),
     }
     try:
         offset = max(0, int(request.args.get("offset", "0")))
@@ -69,7 +67,6 @@ def home():
         page_size=page_size,
         filters=filters,
         today=date.today().isoformat(),
-        consultation_types=CONSULTATION_TYPES,
     )
 
 
@@ -85,6 +82,9 @@ def slots(doctor_id):
         except ValueError:
             until = ""
     params = {"from": chosen, "to": until} if until else {"date": chosen}
+    kind = request.args.get("consultation_type", "").strip()
+    if kind:
+        params["consultation_type"] = kind
     try:
         data = api_client.call("GET", f"/doctors/{doctor_id}/slots", params=params)
     except ApiError as exc:
@@ -95,6 +95,7 @@ def slots(doctor_id):
         chosen = date.today().isoformat()
         until = (date.today() + timedelta(days=SLOT_WINDOW_DAYS - 1)).isoformat()
         data = api_client.call("GET", f"/doctors/{doctor_id}/slots", params={"from": chosen, "to": until})
+        kind = ""
     waiting = _my_waitlist_slots() if data.get("full_slots") else {}
     return render_template(
         "patient/slots.html",
@@ -103,6 +104,7 @@ def slots(doctor_id):
         waiting=waiting,
         date=chosen,
         until=until,
+        kind=kind,
         booking_key=uuid.uuid4().hex,  # one key per page view: a double click or a resubmit books only once
     )
 
@@ -131,7 +133,8 @@ def book():
         flash(exc.message, "error")
         if doctor_id:
             return redirect(url_for("patient.slots", doctor_id=doctor_id, date=request.form.get("date", ""),
-                                    to=request.form.get("to", "")))
+                                    to=request.form.get("to", ""),
+                                    consultation_type=request.form.get("consultation_type", "")))
         return redirect(url_for("patient.home"))
     # Back to the list: cancelling is done from "My appointments", not straight after booking.
     flash("Your appointment is confirmed.", "success")
@@ -221,7 +224,8 @@ def waitlist_join():
     slot_id = request.form.get("slot_id", "").strip()
     doctor_id = request.form.get("doctor_id", "").strip()
     back = (url_for("patient.slots", doctor_id=doctor_id, date=request.form.get("date", ""),
-                    to=request.form.get("to", "")) if doctor_id else url_for("patient.waitlist"))
+                    to=request.form.get("to", ""),
+                    consultation_type=request.form.get("consultation_type", "")) if doctor_id else url_for("patient.waitlist"))
     try:
         entry = api_client.call("POST", f"/slots/{quote(slot_id, safe='')}/waitlist")["waitlist"]
     except ApiError as exc:

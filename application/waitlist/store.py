@@ -7,6 +7,9 @@ WaitlistTable   one item per waiting patient per slot
     sort key       patient_id            -> a patient can be in a slot's queue ONCE: the conditional
                                             put_item (attribute_not_exists) is the atomic duplicate check
     joined_at      ISO time with microseconds
+    expire_time    DynamoDB TTL attribute: epoch seconds of the slot's END. When the slot is over nobody needs the
+                   patient's waitlist row any more, so DynamoDB deletes it (TTL deletion can lag by up to a couple of
+                   days, so reads also ignore rows whose expire_time has passed)
     status         WAITING | OFFERED     (a patient who left, accepted or lost an offer has no item)
     GSI order-index    slot_id + joined_at   -> the queue, ordered by join time (first in, first offered)
     GSI patient-index  patient_id + slot_id  -> "my waitlists" and the at-most-5 rule
@@ -46,9 +49,19 @@ def iso(naive_utc):
 def _clean(item):
     """Numbers come back from boto3 as Decimal; offers and entries are used as plain ints and strings."""
     out = dict(item)
+    if "expire_time" in out:
+        out["expire_time"] = int(out["expire_time"])
     if "expires_at" in out:
         out["expires_at"] = int(out["expires_at"])
     return out
+
+
+def _alive(items, now):
+    """Drop rows whose TTL has passed but that DynamoDB has not physically deleted yet."""
+    if now is None:
+        return items
+    cutoff = epoch(now)
+    return [i for i in items if int(i.get("expire_time", cutoff + 1)) > cutoff]
 
 
 def query_all(table, **kwargs):
@@ -69,12 +82,16 @@ class WaitlistStore:
         self.queue, self.offers = queue_table, offers_table
 
     # ------------------------------------------------------------------ the queue
-    def join(self, slot_id, patient_id, entry_id, now):
-        """Add the patient to the end of the queue. Returns False if they are already in it."""
+    def join(self, slot_id, patient_id, entry_id, now, expire_time=None):
+        """Add the patient to the end of the queue. Returns False if they are already in it.
+        expire_time: naive UTC end of the slot; it becomes the row's TTL attribute."""
+        item = {"slot_id": slot_id, "patient_id": patient_id, "entry_id": entry_id,
+                "joined_at": iso(now), "status": WAITING}
+        if expire_time is not None:
+            item["expire_time"] = epoch(expire_time)
         try:
             self.queue.put_item(
-                Item={"slot_id": slot_id, "patient_id": patient_id, "entry_id": entry_id,
-                      "joined_at": iso(now), "status": WAITING},
+                Item=item,
                 ConditionExpression="attribute_not_exists(#sid)",
                 ExpressionAttributeNames={"#sid": "slot_id"})
             return True
@@ -87,16 +104,18 @@ class WaitlistStore:
         item = self.queue.get_item(Key={"slot_id": slot_id, "patient_id": patient_id}, ConsistentRead=True).get("Item")
         return dict(item) if item else None
 
-    def entries_for_patient(self, patient_id):
-        return query_all(
+    def entries_for_patient(self, patient_id, now=None):
+        items = query_all(
             self.queue, IndexName="patient-index", KeyConditionExpression="#p = :p",
             ExpressionAttributeNames={"#p": "patient_id"}, ExpressionAttributeValues={":p": patient_id})
+        return _alive(items, now)
 
-    def entries_for_slot(self, slot_id):
+    def entries_for_slot(self, slot_id, now=None):
         """The whole queue of a slot in join order (waiting and offered)."""
-        return query_all(
+        items = query_all(
             self.queue, IndexName="order-index", KeyConditionExpression="#s = :s",
             ExpressionAttributeNames={"#s": "slot_id"}, ExpressionAttributeValues={":s": slot_id})
+        return _alive(items, now)
 
     def waiting(self, slot_id):
         return [e for e in self.entries_for_slot(slot_id) if e.get("status") == WAITING]

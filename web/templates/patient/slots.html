@@ -15,6 +15,14 @@
     <label>To (any date within the next 30 day)
       <input type="date" name="to" value="{{ until }}">
     </label>
+    <label>Consultation type
+      <select name="consultation_type">
+        <option value="">Any type</option>
+        {% for t in data.consultation_types or [] %}
+        <option value="{{ t }}" {{ 'selected' if kind == t else '' }}>{{ t }}</option>
+        {% endfor %}
+      </select>
+    </label>
     <div class="actions"><button type="submit">Show slots</button></div>
   </form>
 </div>
@@ -28,6 +36,9 @@
     <div class="slot-grid">
     {% for s in day.slots %}
       {% call slot_card(s) %}
+      {% if s.booked_by_me %}
+        <span class="tag">You have booked this slot</span>
+      {% else %}
       <form method="post" action="{{ url_for('patient.book') }}" class="slot-book">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="slot_id" value="{{ s.slot_id }}">
@@ -35,13 +46,17 @@
         <input type="hidden" name="date" value="{{ date }}">
         <input type="hidden" name="to" value="{{ until }}">
         <input type="hidden" name="idempotency_key" value="{{ booking_key }}-{{ loop.index }}-{{ day.date }}">
+        <input type="hidden" name="consultation_type" value="{{ kind }}">
         <button type="submit">Book</button>
       </form>
+      {% endif %}
       {% endcall %}
     {% endfor %}
     {% for s in full_by_day.get(day.date, []) %}
       {% call slot_card(s) %}
-      {% if waiting.get(s.slot_id) %}
+      {% if s.booked_by_me %}
+        <span class="tag">You have booked this slot</span>
+      {% elif waiting.get(s.slot_id) %}
         <span class="tag">On the waitlist{% if waiting[s.slot_id].position %} &middot; position {{ waiting[s.slot_id].position }}{% endif %}</span>
         {% if waiting[s.slot_id].offer %}<a class="btn" href="{{ url_for('patient.waitlist') }}">A seat is held for you</a>{% endif %}
       {% else %}
@@ -51,7 +66,8 @@
         <input type="hidden" name="doctor_id" value="{{ doctor_id }}">
         <input type="hidden" name="date" value="{{ date }}">
         <input type="hidden" name="to" value="{{ until }}">
-        <button class="secondary" type="submit">join waitlist</button>
+        <input type="hidden" name="consultation_type" value="{{ kind }}">
+        <button class="secondary" type="submit">Full &ndash; join waitlist</button>
       </form>
       {% endif %}
       {% endcall %}

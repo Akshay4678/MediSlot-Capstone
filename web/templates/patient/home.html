@@ -3,7 +3,7 @@
 {% block content %}
 <section class="page-head">
   <h1>Find a doctor</h1>
-  <p class="muted">Search by name, hospital, city, specialisation or the kind of consultation you need.</p>
+  <p class="muted">Search by name, hospital, city or specialisation. Pick the kind of consultation when you view a doctor's slots.</p>
 </section>
 
 <div class="card search-card">
@@ -19,14 +19,6 @@
     </label>
     <label>Specialisation
       <input name="specialisation" value="{{ filters.specialisation }}" placeholder="Cardiology">
-    </label>
-    <label>Consultation type
-      <select name="consultation_type">
-        <option value="">Any type</option>
-        {% for t in consultation_types %}
-        <option value="{{ t }}" {{ 'selected' if filters.consultation_type == t else '' }}>{{ t }}</option>
-        {% endfor %}
-      </select>
     </label>
     <div class="actions search-actions">
       <button type="submit">Search</button>
@@ -64,11 +56,11 @@
 
   <p class="actions pager" id="pager">
     {% if offset > 0 %}
-      <a class="btn secondary" href="{{ url_for('patient.home', name=filters.name, hospital=filters.hospital, city=filters.city, specialisation=filters.specialisation, consultation_type=filters.consultation_type, offset=[offset - page_size, 0]|max) }}">&larr; Previous</a>
+      <a class="btn secondary" href="{{ url_for('patient.home', name=filters.name, hospital=filters.hospital, city=filters.city, specialisation=filters.specialisation, offset=[offset - page_size, 0]|max) }}">&larr; Previous</a>
     {% endif %}
     <span class="muted">Showing {{ offset + 1 }}&ndash;{{ offset + doctors|length }} of {{ total }}</span>
     {% if has_more %}
-      <a class="btn secondary" href="{{ url_for('patient.home', name=filters.name, hospital=filters.hospital, city=filters.city, specialisation=filters.specialisation, consultation_type=filters.consultation_type, offset=offset + page_size) }}">Next &rarr;</a>
+      <a class="btn secondary" href="{{ url_for('patient.home', name=filters.name, hospital=filters.hospital, city=filters.city, specialisation=filters.specialisation, offset=offset + page_size) }}">Next &rarr;</a>
     {% endif %}
   </p>
 {% else %}

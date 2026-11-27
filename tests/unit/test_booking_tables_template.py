@@ -51,3 +51,9 @@ def test_smoke_test_is_the_last_job():
     text = WORKFLOW.read_text()
     assert text.rindex("\n  smoke-test:") > text.index("\n  deploy-web:")
     assert "needs: [deploy-infrastructure, deploy-web]" in text
+
+
+def test_waitlist_rows_expire_with_the_slot():
+    text = (CFN / "booking-tables.yaml").read_text()
+    waitlist = text[text.index("  WaitlistTable:"):text.index("  HoldOffersTable:")]
+    assert "AttributeName: expire_time" in waitlist and "Enabled: true" in waitlist

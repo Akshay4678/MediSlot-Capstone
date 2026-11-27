@@ -387,6 +387,12 @@ Resources:
                 Effect: Allow
                 Action: events:PutEvents
                 Resource: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}'
+              - Sid: SubscribeEmails
+                Effect: Allow
+                Action: sns:Subscribe
+                Resource:
+                  - !Ref PatientTopic
+                  - !Ref DoctorTopic
               - Sid: PublishMetrics
                 Effect: Allow
                 Action: cloudwatch:PutMetricData
@@ -427,6 +433,8 @@ Resources:
           HOLD_OFFERS_TABLE_NAME: !Ref HoldOffersTableName
           DISPATCH_LOG_TABLE_NAME: !Ref DispatchLogTableName
           EVENT_BUS_NAME: !Ref EventBusName
+          PATIENT_TOPIC_ARN: !Ref PatientTopic
+          DOCTOR_TOPIC_ARN: !Ref DoctorTopic
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds
         SecurityGroupIds:

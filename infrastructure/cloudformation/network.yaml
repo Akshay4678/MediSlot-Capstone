@@ -518,6 +518,27 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
+  # SNS: the notification consumer publishes the e-mails and the APIs subscribe each user's address.
+  SnsInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref MediSlotVPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.sns'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateAppSubnet1
+        - !Ref PrivateAppSubnet2
+      SecurityGroupIds:
+        - !Ref AwsServiceEndpointSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${EnvironmentName}-sns-endpoint'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
   # CloudWatch metrics (BookingConflictRetries, CancellationsByTier) are sent through PutMetricData.
   MonitoringInterfaceEndpoint:
     Type: AWS::EC2::VPCEndpoint

@@ -38,6 +38,12 @@ Parameters:
   HoldOffersTableName:
     Type: String
     Description: DynamoDB hold-offer table.
+  PatientTopicArn:
+    Type: String
+    Description: SNS topic of the patient notifications (e-mail subscriptions are created for each new profile).
+  DoctorTopicArn:
+    Type: String
+    Description: SNS topic of the doctor notifications.
   EventBusName:
     Type: String
     Description: EventBridge bus that receives the appointment events.
@@ -101,6 +107,12 @@ Resources:
                 Effect: Allow
                 Action: events:PutEvents
                 Resource: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}'
+              - Sid: SubscribeEmails
+                Effect: Allow
+                Action: sns:Subscribe
+                Resource:
+                  - !Ref PatientTopicArn
+                  - !Ref DoctorTopicArn
               - Sid: PublishMetrics
                 Effect: Allow
                 Action: cloudwatch:PutMetricData
@@ -141,6 +153,8 @@ Resources:
           WAITLIST_TABLE_NAME: !Ref WaitlistTableName
           HOLD_OFFERS_TABLE_NAME: !Ref HoldOffersTableName
           EVENT_BUS_NAME: !Ref EventBusName
+          PATIENT_TOPIC_ARN: !Ref PatientTopicArn
+          DOCTOR_TOPIC_ARN: !Ref DoctorTopicArn
       VpcConfig:
         SubnetIds: !Ref LambdaSubnetIds
         SecurityGroupIds:

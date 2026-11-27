@@ -17,6 +17,7 @@ from application.booking.deps import default_deps
 from application.database.connection import get_connection
 from application.jobs import no_show, reminders
 from application.notification.dispatch_log import DispatchLog
+from application.notification import subscriptions
 from application.waitlist import service as waitlist
 
 log = logging.getLogger()
@@ -43,6 +44,8 @@ def lambda_handler(event, context, deps=None, conn_factory=get_connection, dispa
             return reminders.run(conn, deps, dispatch_log or _dispatch_log(deps))
         if job == "no_shows":
             return no_show.run(conn, deps)
+        if job == "subscribe_users":  # one-off / repair: e-mail subscriptions for every existing patient and doctor
+            return subscriptions.subscribe_all(conn)
         raise ValueError(f"unknown job {job!r}")
     finally:
         conn.close()

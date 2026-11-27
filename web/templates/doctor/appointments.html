@@ -38,8 +38,12 @@
           <form class="attendance" method="post" action="{{ url_for('doctor.attendance', appointment_id=a.appointment_id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="next" value="appointments">
             <button name="outcome" value="complete" class="secondary" type="submit">Attended</button>
-            <button name="outcome" value="no-show" class="danger" type="submit" onclick="return confirm('Mark as a no-show?');">No-show</button>
-          </form>{% endif %}</td>
+            <button name="outcome" value="no-show" class="danger" type="submit" onclick="return confirm('Mark this patient as a no-show? The fee is kept and the slot is closed.');">No-show &ndash; close slot</button>
+          </form>{% elif a.status == 'CONFIRMED' %}
+          <span class="attendance muted small" title="Attended / No-show unlock when the appointment starts">
+            <button class="secondary" type="button" disabled>Attended</button>
+            <button class="danger" type="button" disabled>No-show &ndash; close slot</button>
+            <br>Unlocks at the start time</span>{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>

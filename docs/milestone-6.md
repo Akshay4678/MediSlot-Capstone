@@ -22,3 +22,12 @@ DynamoDB DispatchLog (conditional put, 60 s lease) before publishing; a duplicat
 ## Mandatory tests
 Test 3 (reschedule compensation) and Test 4 (waitlist exclusivity) live in `tests/unit/test_reschedule.py` and
 `tests/unit/test_waitlist.py`.
+
+## E-mail delivery
+Notices are published to the patient or doctor SNS topic with the message attribute `recipient_id` (patient_id or
+doctor_id). When a patient or doctor profile is created the API subscribes the e-mail they registered with
+(`users.email`) to that topic with a filter policy `recipient_id = <their id>`, so each person receives only their own
+notices. AWS sends each person one "Confirm subscription" e-mail; nothing is delivered until they click it. Accounts that
+existed before this feature are subscribed by invoking the jobs Lambda once:
+`aws lambda invoke --function-name medislot-dev-jobs --payload '{"job":"subscribe_users"}' --cli-binary-format raw-in-base64-out out.json`.
+The Lambdas are in private subnets, so `network.yaml` has an SNS interface endpoint.

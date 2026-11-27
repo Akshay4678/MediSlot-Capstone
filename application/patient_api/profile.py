@@ -8,6 +8,7 @@ import re
 from datetime import date, datetime, timezone
 
 from application.common.api import ApiError, clean_text, new_id, parse_date
+from application.notification import subscriptions
 
 COLUMNS = ("patient_id", "first_name", "last_name", "date_of_birth", "gender", "phone", "address", "city",
            "emergency_contact")
@@ -77,12 +78,15 @@ def create(conn, user_id, body):
     values = validate(body, creating=True)
     if _fetch(conn, user_id, active_only=False):
         raise ApiError(409, "PROFILE_EXISTS", "Your patient profile already exists; use PUT to change it.")
+    patient_id = new_id()
     columns = ["patient_id", "user_id"] + list(values)
     with conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO patients ({', '.join(columns)}) VALUES ({', '.join(['%s'] * len(columns))})",
-            [new_id(), user_id] + list(values.values()))
+            [patient_id, user_id] + list(values.values()))
+        email = subscriptions.user_email(cur, user_id)
     conn.commit()
+    subscriptions.ensure_subscribed(subscriptions.PATIENT, patient_id, email)  # e-mail notifications to their address
     return 201, {"patient": _view(_fetch(conn, user_id))}
 
 

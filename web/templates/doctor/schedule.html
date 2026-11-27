@@ -178,8 +178,13 @@ Schedule - MediSlot
             <input type="hidden" name="date" value="{{ day.date }}">
             <button name="outcome" value="complete" class="secondary" type="submit">Attended</button>
             <button name="outcome" value="no-show" class="danger" type="submit"
-                    onclick="return confirm('Mark this patient as a no-show? The fee is kept and the slot is closed.');">No-show</button>
+                    onclick="return confirm('Mark this patient as a no-show? The fee is kept and the slot is closed.');">No-show &ndash; close slot</button>
           </form>
+          {% elif a.status == 'CONFIRMED' %}
+          <span class="attendance muted small" title="Attended / No-show unlock when the appointment starts">
+            <button class="secondary" type="button" disabled>Attended</button>
+            <button class="danger" type="button" disabled>No-show &ndash; close slot</button>
+            <br>Unlocks at the start time</span>
           {% endif %}
         </div>
         {% endfor %}

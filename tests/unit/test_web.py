@@ -27,6 +27,9 @@ def fake_jwt(role):
     )
 
 
+FAKE_CAN_MARK = {"value": True}
+
+
 class FakeResponse:
     def __init__(self, status, body):
         self.status_code = status
@@ -190,7 +193,7 @@ class FakeApi:
                         "appointments": [
                             {
                                 "appointment_id": "appt-1",
-                                "can_mark_attendance": True,
+                                "can_mark_attendance": FAKE_CAN_MARK["value"],
                                 "patient_name": "Pat One",
                                 "patient_phone": "1",
                                 "status": "CONFIRMED",
@@ -1360,3 +1363,13 @@ def test_marking_a_no_show_from_the_dashboard_returns_to_the_dashboard(client, a
                            data={"csrf_token": token, "outcome": "no-show", "next": "home"})
     assert response.status_code == 302 and response.headers["Location"].endswith("/doctor/")
     assert [c for c in api.calls if c[1] == "/doctors/me/appointments/appt-1/no-show"]
+
+
+def test_a_confirmed_appointment_that_has_not_started_shows_locked_attendance_buttons(client):
+    login(client, "doctor")
+    FAKE_CAN_MARK["value"] = False
+    try:
+        html = client.get("/doctor/").get_data(as_text=True)
+    finally:
+        FAKE_CAN_MARK["value"] = True
+    assert "Unlocks at the start time" in html and "disabled" in html

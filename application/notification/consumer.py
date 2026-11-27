@@ -84,12 +84,15 @@ class Dispatcher:
             return "duplicate"
         if state == dl.BUSY:
             raise RuntimeError(f"{notice.dispatch_id} is being sent by another worker")
-        self.sns.publish(
-            TopicArn=self.topics[notice.recipient], Subject=notice.subject[:100],
-            Message=json.dumps({"event": notice.event, "recipient": notice.recipient, "dispatch_id": notice.dispatch_id,
-                                "text": notice.text, "detail": detail}, default=str),
-            MessageAttributes={"event": {"DataType": "String", "StringValue": notice.event},
-                               "recipient": {"DataType": "String", "StringValue": notice.recipient}})
+        attributes = {"event": {"DataType": "String", "StringValue": notice.event},
+                      "recipient": {"DataType": "String", "StringValue": notice.recipient},
+                      "dispatch_id": {"DataType": "String", "StringValue": notice.dispatch_id}}
+        # The e-mail subscription of each person filters on recipient_id (see subscriptions.py): only that person gets it.
+        recipient_id = detail.get("patient_id" if notice.recipient == PATIENT else "doctor_id")
+        if recipient_id:
+            attributes["recipient_id"] = {"DataType": "String", "StringValue": str(recipient_id)}
+        self.sns.publish(TopicArn=self.topics[notice.recipient], Subject=notice.subject[:100],
+                         Message=notice.text, MessageAttributes=attributes)
         self.dispatch_log.mark_sent(notice.dispatch_id)
         self.metrics.put("NotificationsDispatched", 1, {"Event": notice.event, "Recipient": notice.recipient})
         return "sent"

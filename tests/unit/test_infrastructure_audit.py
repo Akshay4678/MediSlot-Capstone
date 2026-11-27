@@ -150,3 +150,13 @@ def test_schema_bootstrap_package_contains_everything_the_connection_module_impo
     for needed in ("application/common/__init__.py", "application/common/tracing.py", "application/database/connection.py",
                    "application/database/init_schema.py"):
         assert needed.rsplit("/", 1)[1] in step and needed.rsplit("/", 1)[0] in step, needed
+
+
+def test_email_subscription_plumbing_is_scoped_and_reachable_from_the_vpc():
+    for name in ("patient", "doctor", "notifications"):
+        subs = [st for st in statements(load(name)) if st.get("Action") == "sns:Subscribe"]
+        assert subs and all("*" not in str(st["Resource"]) for st in subs), name
+    network = (CFN / "network.yaml").read_text()
+    assert "com.amazonaws.${AWS::Region}.sns" in network  # private Lambdas have no internet: SNS needs its own endpoint
+    text = DEPLOY.read_text()
+    assert text.count('"PatientTopicArn=${PATIENT_TOPIC_ARN}"') == 2  # doctor and patient stacks only

@@ -784,6 +784,15 @@ jobs:
               "DispatchLogTableName=${DISPATCH_LOG_TABLE_NAME}" \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
+          for pair in PATIENT_TOPIC_ARN:PatientTopicArn DOCTOR_TOPIC_ARN:DoctorTopicArn; do
+            value="$(aws cloudformation describe-stacks --stack-name "${PROJECT_NAME}-${ENVIRONMENT_NAME}-notifications" \
+              --query "Stacks[0].Outputs[?OutputKey=='${pair#*:}'].OutputValue | [0]" --output text --region "${AWS_REGION}")"
+            if [[ -z "${value}" || "${value}" == "None" ]]; then
+              echo "::error::The notifications stack did not return ${pair#*:}."
+              exit 1
+            fi
+            echo "${pair%%:*}=${value}" >> "${GITHUB_ENV}"
+          done
 
       # ==========================================
       # STEP 12B: Doctor domain stack (doctor API Lambda, slot materialiser, daily schedule)
@@ -801,6 +810,8 @@ jobs:
               "SlotCapacityTableName=${SLOT_CAPACITY_TABLE_NAME}" \
               "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
               "EventBusName=${EVENT_BUS_NAME}" \
+              "PatientTopicArn=${PATIENT_TOPIC_ARN}" \
+              "DoctorTopicArn=${DOCTOR_TOPIC_ARN}" \
               "WaitlistTableName=${WAITLIST_TABLE_NAME}" \
               "HoldOffersTableName=${HOLD_OFFERS_TABLE_NAME}" \
               "ProjectName=${PROJECT_NAME}" \
@@ -832,6 +843,8 @@ jobs:
               "SlotCapacityTableName=${SLOT_CAPACITY_TABLE_NAME}" \
               "IdempotencyTableName=${IDEMPOTENCY_TABLE_NAME}" \
               "EventBusName=${EVENT_BUS_NAME}" \
+              "PatientTopicArn=${PATIENT_TOPIC_ARN}" \
+              "DoctorTopicArn=${DOCTOR_TOPIC_ARN}" \
               "WaitlistTableName=${WAITLIST_TABLE_NAME}" \
               "HoldOffersTableName=${HOLD_OFFERS_TABLE_NAME}" \
               "RescheduleStateMachineArn=${RESCHEDULE_STATE_MACHINE_ARN}" \

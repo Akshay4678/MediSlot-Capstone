@@ -7,6 +7,7 @@ import pymysql
 
 from application.common.api import ApiError, clean_text, new_id, require_uuid
 from application.doctor_api import photo, reconcile
+from application.notification import subscriptions
 
 
 # Licence number rules:
@@ -250,6 +251,7 @@ def put(ctx):
                 )
 
                 status = 201
+                email = subscriptions.user_email(cur, ctx.user_id)
 
             else:
                 doctor_id = existing["doctor_id"]
@@ -276,6 +278,9 @@ def put(ctx):
             ) from None
 
         raise
+
+    if status == 201:  # a new doctor: e-mail notifications go to the address they registered with
+        subscriptions.ensure_subscribed(subscriptions.DOCTOR, doctor_id, email)
 
     # A timezone change moves every UTC instant:
     # rebuild the not-yet-booked future slots.

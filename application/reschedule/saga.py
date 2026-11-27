@@ -35,7 +35,7 @@ from datetime import timedelta
 
 from application.booking import events
 from application.booking.errors import ContentionExceeded, SlotFull
-from application.booking.service import (_APPT_SELECT, _count, _dt, _fetch_view, _free_slot_row, _load_slot,
+from application.booking.service import (_count, _dt, _fetch_view, _free_slot_row, _load_slot,
                                          _patient_id, _safe)
 from application.common import rules, tracing
 from application.common.api import ApiError, fmt_utc

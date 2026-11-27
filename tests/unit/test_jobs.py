@@ -14,13 +14,13 @@ def run_job(conn, deps, job, log=None):
                                dispatch_log=log or DispatchLog(FakeTable("dispatch_id"), deps.now))
 
 
-def test_an_unmarked_appointment_is_recorded_as_attended_after_the_30_minute_window(world):  # noqa: F811
+def test_an_unmarked_appointment_is_recorded_as_attended_when_its_slot_ends(world):  # noqa: F811
     conn, deps = world
     book("u-1")
-    deps.clock.now = START + timedelta(minutes=29)               # still inside the doctor's window
+    deps.clock.now = START + timedelta(minutes=29)               # the slot (30 minutes) is still running
     assert run_job(conn, deps, "attendance")["auto_completed"] == 0
     assert conn.q("SELECT status FROM appointments") == [("CONFIRMED",)]
-    deps.clock.now = START + timedelta(minutes=30)               # the window is over
+    deps.clock.now = START + timedelta(minutes=30)               # the slot has ended
     assert run_job(conn, deps, "attendance")["auto_completed"] == 1
     assert run_job(conn, deps, "attendance")["auto_completed"] == 0        # idempotent
     assert conn.q("SELECT status FROM appointments") == [("COMPLETED",)]
@@ -33,7 +33,7 @@ def test_an_unmarked_appointment_is_recorded_as_attended_after_the_30_minute_win
 def test_the_old_job_name_still_works(world):  # noqa: F811
     conn, deps = world
     book("u-1")
-    deps.clock.now = START + timedelta(minutes=31)
+    deps.clock.now = START + timedelta(minutes=30)
     assert run_job(conn, deps, "no_shows")["auto_completed"] == 1
 
 

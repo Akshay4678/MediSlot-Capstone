@@ -1372,4 +1372,4 @@ def test_a_confirmed_appointment_that_has_not_started_shows_locked_attendance_bu
         html = client.get("/doctor/").get_data(as_text=True)
     finally:
         FAKE_CAN_MARK["value"] = True
-    assert "Opens at the start time and stays open for 30 minutes. If you do not choose, the patient is marked as attended." in html and "disabled" in html
+    assert "Active only while this slot is running. If you do not choose before it ends, the patient is marked as attended." in html and "disabled" in html

@@ -139,6 +139,10 @@ def _view(r, now, for_doctor=False):
         "can_cancel": False,
         "can_reschedule": False,
     }
+    if r["status"] == "CONFIRMED" and r["ends_at_utc"] and _dt(r["ends_at_utc"]) <= now:
+        # The slot is over and nobody marked it: that means attended. The sweeper (every minute) stores it; until
+        # then every reader already sees the final answer, so there is no visible gap.
+        view["status"] = "COMPLETED"
     if for_doctor:
         view["patient"] = {"patient_id": r["patient_id"], "name": f"{r['patient_first']} {r['patient_last']}".strip(),
                            "phone": r["patient_phone"] or ""}
@@ -153,12 +157,10 @@ def _view(r, now, for_doctor=False):
         view["can_reschedule"] = (not for_doctor and view["reschedule_count"] < rules.max_reschedules()
                                   and _dt(r["starts_at_utc"]) - now >= timedelta(hours=rules.min_reschedule_hours()))
     if for_doctor:
-        # The doctor can record what happened from the START of the appointment for a limited window (30 minutes);
-        # after that the appointment is marked attended automatically (application/jobs/attendance.py).
-        window = timedelta(minutes=rules.attendance_window_minutes())
+        # The doctor is in the slot between its start and its end: only then can he mark Attended or No-show.
         started = _dt(r["starts_at_utc"]) if r["starts_at_utc"] else None
-        view["can_mark_attendance"] = bool(r["status"] == "CONFIRMED" and started and started <= now < started + window)
-        view["attendance_window_minutes"] = rules.attendance_window_minutes()
+        ends = _dt(r["ends_at_utc"]) if r["ends_at_utc"] else None
+        view["can_mark_attendance"] = bool(r["status"] == "CONFIRMED" and started and ends and started <= now < ends)
     return view
 
 
@@ -587,18 +589,18 @@ ATTENDANCE_STATUS = {"no_show": "NO_SHOW", "completed": "COMPLETED"}
 def record_attendance(conn, deps, user_id, appointment_id, outcome):
     """POST /doctors/me/appointments/{id}/no-show or /complete : the doctor records what happened.
 
-    Allowed from the START of the appointment until the attendance window (30 minutes) ends, and only for the
-    doctor's own CONFIRMED appointment. Afterwards the sweeper marks it attended.
+    Allowed only while the slot is running (from its start to its end), and only for the doctor's own CONFIRMED
+    appointment. When the slot ends unmarked, the appointment counts as attended.
     NO_SHOW keeps the fee (a 0 % refund row is written so the ledger shows the decision); COMPLETED
     needs no refund. Either way, when nobody else in the slot is still CONFIRMED the slot is CLOSED.
-    The attendance sweeper (application/jobs/attendance.py) marks the ones the doctor did not choose as COMPLETED.
+    The attendance sweeper (application/jobs/attendance.py) stores COMPLETED for the ones nobody marked.
     """
     status = ATTENDANCE_STATUS[outcome]
     now = deps.now()
     try:
         with conn.cursor() as cur:
             doctor_id = _doctor_id(cur, user_id)
-            cur.execute("SELECT appointment_id, patient_id, slot_id, status, fee_amount, starts_at_utc FROM appointments "
+            cur.execute("SELECT appointment_id, patient_id, slot_id, status, fee_amount, starts_at_utc, ends_at_utc FROM appointments "
                         "WHERE appointment_id = %s AND doctor_id = %s FOR UPDATE", (appointment_id, doctor_id))
             appt = cur.fetchone()
             if not appt:
@@ -608,10 +610,9 @@ def record_attendance(conn, deps, user_id, appointment_id, outcome):
             if now < _dt(appt["starts_at_utc"]):
                 raise ApiError(409, "APPOINTMENT_NOT_STARTED",
                                "The appointment time has not come yet. Use cancel if the slot cannot be kept.")
-            if now >= _dt(appt["starts_at_utc"]) + timedelta(minutes=rules.attendance_window_minutes()):
+            if now >= _dt(appt["ends_at_utc"]):
                 raise ApiError(409, "ATTENDANCE_WINDOW_CLOSED",
-                               f"The {rules.attendance_window_minutes()} minutes to mark this appointment are over: "
-                               "it is recorded as attended automatically.")
+                               "The slot time is over: the appointment is recorded as attended automatically.")
             cur.execute("UPDATE appointments SET status = %s WHERE appointment_id = %s AND status = 'CONFIRMED'",
                         (status, appointment_id))
             if cur.rowcount != 1:

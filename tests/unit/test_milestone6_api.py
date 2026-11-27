@@ -187,21 +187,25 @@ def test_the_doctor_view_offers_the_buttons_only_for_started_confirmed_appointme
     assert body["appointment"]["can_mark_attendance"] is True
 
 
-def test_the_attendance_buttons_exist_only_between_the_start_and_thirty_minutes_after(world):
+def test_the_attendance_buttons_exist_only_while_the_slot_is_running(world):
     conn, deps = world
-    appt = book("u-1")
+    add_slot(conn.db, "long", START + timedelta(days=2), capacity=1, ctype="hc", minutes=60)
+    appt = book("u-1", "long")
+    begin = START + timedelta(days=2)
 
     def can():
         return call(doctor_handler, "GET", "/doctors/me/appointments/{appointment_id}", user="u-d1", role="doctor",
-                    path={"appointment_id": appt})[1]["appointment"]["can_mark_attendance"]
-    deps.clock.now = START - timedelta(minutes=1)
-    assert can() is False
-    deps.clock.now = START
-    assert can() is True
-    deps.clock.now = START + timedelta(minutes=29, seconds=59)
-    assert can() is True
-    deps.clock.now = START + timedelta(minutes=30)
-    assert can() is False
+                    path={"appointment_id": appt})[1]["appointment"]
+
+    deps.clock.now = begin - timedelta(minutes=1)
+    assert can()["can_mark_attendance"] is False
+    deps.clock.now = begin
+    assert can()["can_mark_attendance"] is True
+    deps.clock.now = begin + timedelta(minutes=59, seconds=59)       # a 60 minute slot stays open for all 60 minutes
+    assert can()["can_mark_attendance"] is True
+    deps.clock.now = begin + timedelta(minutes=60)
+    view = can()
+    assert view["can_mark_attendance"] is False and view["status"] == "COMPLETED"   # shown as attended at once
     status, body = attendance(deps, appt, "no-show")
     assert (status, body["error"]) == (409, "ATTENDANCE_WINDOW_CLOSED")
-    assert attendance(deps, appt, "complete")[0] == 409
+    assert conn.q("SELECT status FROM appointments") == [("CONFIRMED",)]            # the sweeper stores it next

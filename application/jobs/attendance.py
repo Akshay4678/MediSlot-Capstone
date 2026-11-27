@@ -1,8 +1,9 @@
-"""Attendance sweeper (every 5 minutes).
+"""Attendance sweeper (every minute).
 
-The doctor can mark an appointment Attended or No-show from its START until the attendance window ends
-(SSM rules/attendance-window-minutes, 30 minutes). An appointment that is still CONFIRMED when the window ends was not
-marked: it is recorded as COMPLETED (attended), and the slot is closed when nobody else in it is still CONFIRMED.
+The doctor can mark an appointment Attended or No-show only while its slot is running (start to end). An appointment
+that is still CONFIRMED when its slot has ended was not marked: it is recorded as COMPLETED (attended), and the slot
+is closed when nobody else in it is still CONFIRMED. The service already SHOWS such an appointment as attended the
+moment the slot ends (service._view), so this job only has to persist the answer; it is not time critical.
 The UPDATE only touches rows that are still CONFIRMED, so running the sweeper twice (or while the doctor marks the same
 appointment) changes each appointment once.
 
@@ -15,7 +16,6 @@ from datetime import timedelta
 
 from application.booking import events
 from application.booking.service import close_slot_if_resolved
-from application.common import rules
 
 log = logging.getLogger()
 BATCH = 500
@@ -23,10 +23,9 @@ BATCH = 500
 
 def run(conn, deps):
     now = deps.now()
-    cutoff = now - timedelta(minutes=rules.attendance_window_minutes())
     with conn.cursor() as cur:
         cur.execute("SELECT appointment_id, patient_id, doctor_id, slot_id FROM appointments WHERE status = 'CONFIRMED' "
-                    "AND starts_at_utc <= %s ORDER BY starts_at_utc LIMIT %s", (cutoff, BATCH))
+                    "AND ends_at_utc <= %s ORDER BY ends_at_utc LIMIT %s", (now, BATCH))
         due = cur.fetchall()
     conn.rollback()
     completed = 0

@@ -19,8 +19,8 @@ GET /hospitals, GET /specialisations, GET /doctors/search?..., GET /doctors/{doc
 | GET/POST/DELETE | /doctors/me/blackouts[/{id}] | blackout dates (cancel booked slots with refunds) |
 | GET | /doctors/me/schedule?from=&to= | day/week schedule with patients per slot |
 | GET | /doctors/me/appointments[/{appointment_id}] | list and detail |
-| POST | /doctors/me/appointments/{id}/no-show | patient did not come; allowed from the appointment's start until 30 minutes after it (`rules/attendance-window-minutes`); closes the slot when nothing else is confirmed. Afterwards 409 `ATTENDANCE_WINDOW_CLOSED` |
-| POST | /doctors/me/appointments/{id}/complete | outcome attended, same window. An appointment the doctor did not mark is recorded as COMPLETED automatically when the window ends |
+| POST | /doctors/me/appointments/{id}/no-show | patient did not come; allowed only while the slot is running (its start to its end); closes the slot when nothing else is confirmed. Afterwards 409 `ATTENDANCE_WINDOW_CLOSED` |
+| POST | /doctors/me/appointments/{id}/complete | outcome attended, same window. An appointment the doctor did not mark is attended: it shows as COMPLETED the moment the slot ends and the sweeper stores it within a minute |
 | POST | /doctors/me/slots/cancel | body `{slot_id}`; cancels bookings (100% refund), slot becomes CLOSED |
 
 ## Patient (role patient)

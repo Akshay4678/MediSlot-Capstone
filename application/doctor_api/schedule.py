@@ -42,6 +42,7 @@ def get(ctx):
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     started = {r["slot_id"] for r in slot_rows if _naive(r["start_utc"]) <= now}
+    ended = {r["slot_id"] for r in slot_rows if _naive(r["end_utc"]) <= now}
     with ctx.conn.cursor() as cur:
         bookings = defaultdict(list)
         if slot_rows:
@@ -72,9 +73,13 @@ def get(ctx):
     for slot in slot_rows:
         slot["appointments"] = [b for b in bookings[slot["slot_id"]] if b["status"] in ACTIVE_STATUSES]
         slot["started"] = slot["slot_id"] in started
+        slot["ended"] = slot["slot_id"] in ended
         for b in slot["appointments"]:
-            # the doctor records what happened once the time has come (no-show keeps the fee)
-            b["can_mark_attendance"] = b["status"] == "CONFIRMED" and slot["started"]
+            # The doctor marks Attended / No-show only while the slot is running. When the slot ends unmarked the
+            # patient counts as attended (the sweeper stores it within a minute).
+            b["can_mark_attendance"] = b["status"] == "CONFIRMED" and slot["started"] and not slot["ended"]
+            if b["status"] == "CONFIRMED" and slot["ended"]:
+                b["status"] = "COMPLETED"
         days[slot["date"]]["slots"].append(slot)
 
     # A blackout day overrides any weekly availability. Hide the BLOCKED slots the materialiser

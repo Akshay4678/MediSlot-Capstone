@@ -141,3 +141,12 @@ def test_every_stack_is_tagged_by_the_pipeline_for_cost_allocation_and_observabi
     deploys = text.count("aws cloudformation deploy")
     assert deploys == text.count('--tags "Project=${PROJECT_NAME}"') >= 10
     assert "Deploy Observability Stack" in text
+
+
+def test_schema_bootstrap_package_contains_everything_the_connection_module_imports():
+    text = DEPLOY.read_text()
+    step = text[text.index("application/database/schema.sql was not found"):]
+    step = step[:step.index("zip -qr")]
+    for needed in ("application/common/__init__.py", "application/common/tracing.py", "application/database/connection.py",
+                   "application/database/init_schema.py"):
+        assert needed.rsplit("/", 1)[1] in step and needed.rsplit("/", 1)[0] in step, needed

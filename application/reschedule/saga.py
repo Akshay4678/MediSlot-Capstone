@@ -26,7 +26,7 @@ Compensation (what "release failed after a successful claim" means)
   because of other patients. The patient ends with exactly the appointment they started with.
   Every compensation is counted in ReschedulesCompensated (alarm: any compensation entry).
 
-The saga takes no refund or fee decision: the fee on the appointment is kept as it was...
+The saga takes no refund or fee decision: the fee on the appointment is kept as it was.
 """
 
 import json

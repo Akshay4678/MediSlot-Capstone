@@ -11,7 +11,7 @@
 | Landing page + route guards | role selection on `/`; a doctor cannot open patient routes and vice versa (`tests/unit/test_web.py`), and the authorizer denies the other role's API routes |
 | IAM audit | no wildcard actions on Allow statements; `Resource: *` only for PutMetricData (namespace condition), kms:Decrypt via SSM, X-Ray and log-delivery actions (no resource-level support). Enforced by `tests/unit/test_infrastructure_audit.py` |
 | Drift detection | `scripts/detect_drift.sh [env]` |
-| Backups | RDS automated backups 7 days (`rds.yaml`) + manual `scripts/backup_db.sh`; DynamoDB point-in-time recovery on all five tables |
+| Backups | RDS automated backups (7 days in prod, 1 day elsewhere because free-tier accounts reject more) (`rds.yaml`) + manual `scripts/backup_db.sh`; DynamoDB point-in-time recovery on all five tables |
 | DR drill | `scripts/dr_drill.sh [env]`, record in `docs/dr-drill.md` |
 | Budget and cost tags | AWS Budget on `Project=medislot` (80% actual, 100% forecast -> SNS); every stack deployed with `--tags Project, Environment, ManagedBy`. **Activate the `Project` tag once in Billing -> Cost allocation tags** (AWS requires this manual step) |
 | Cost review | `docs/cost-review.md` |

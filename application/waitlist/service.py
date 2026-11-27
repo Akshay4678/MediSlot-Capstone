@@ -31,7 +31,7 @@ from application.booking.errors import ContentionExceeded, SlotFull
 from application.booking.service import (_APPT_SELECT, _check_slot_and_patient, _count, _dt, _fetch_view,
                                          _free_slot_row, _load_slot, _patient_id, _safe)
 from application.common import rules
-from application.common.api import ApiError, as_date, fmt_time, fmt_utc, new_id
+from application.common.api import ApiError, as_date, fmt_time, fmt_utc, money, new_id
 from application.waitlist import store as wl
 
 log = logging.getLogger()

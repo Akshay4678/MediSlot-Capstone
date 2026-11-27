@@ -89,6 +89,14 @@ def test_every_template_parses_and_logical_ids_are_alphanumeric():
             assert re.fullmatch(r"[A-Za-z0-9]+", logical), (path.name, logical)
 
 
+def test_percentile_alarm_statistics_use_extended_statistic():
+    for name in ("observability",):
+        for res in load(name)["Resources"].values():
+            if res["Type"] == "AWS::CloudWatch::Alarm":
+                stat = res["Properties"].get("Statistic")
+                assert stat in (None, "Average", "Maximum", "Minimum", "SampleCount", "Sum"), stat
+
+
 def test_workflow_template_embeds_valid_state_machine_json():
     text = (CFN / "workflow.yaml").read_text()
     assert "AWS::StepFunctions::StateMachine" in text and "StateMachineType: EXPRESS" in text
@@ -123,7 +131,7 @@ def test_observability_has_the_dashboard_the_six_alarm_categories_and_a_budget()
 
 def test_rds_has_backups_and_every_dynamodb_table_has_point_in_time_recovery():
     rds = (CFN / "rds.yaml").read_text()
-    assert re.search(r"BackupRetentionPeriod: 7\b", rds) and "DeletionPolicy: Snapshot" in rds
+    assert re.search(r"BackupRetentionPeriod: !If\s+- IsProd\s+- 7\s+- 1", rds) and "DeletionPolicy: Snapshot" in rds
     tables = (CFN / "booking-tables.yaml").read_text()
     assert tables.count("AWS::DynamoDB::Table") == tables.count("PointInTimeRecoveryEnabled: true")
 

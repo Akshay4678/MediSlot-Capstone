@@ -189,7 +189,12 @@ Resources:
         - true
         - false
 
-      BackupRetentionPeriod: 7
+      # 7 days in prod. Free-tier accounts reject more than 1 day, so other environments keep the daily backup only
+      # (use scripts/backup_db.sh for longer-lived manual snapshots).
+      BackupRetentionPeriod: !If
+        - IsProd
+        - 7
+        - 1
 
       DeletionProtection: !If
         - DeletionProtectionEnabled

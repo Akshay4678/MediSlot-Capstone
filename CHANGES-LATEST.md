@@ -30,3 +30,4 @@
 * Run `./remove-leftovers.sh` after unzipping, commit, push.
 * Waitlist rows carry a TTL (expire_time = slot end); patients are not offered Book/waitlist for slots they booked; consultation type filter moved from the landing page to the slots page.
 * Slots page consultation filter lists all four types, including Health Camp Session.
+* Doctor dashboard shows today's patients with Attended / No-show (closes the slot); edge-case tests (tests/unit/test_edge_cases.py).

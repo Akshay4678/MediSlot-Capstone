@@ -918,4 +918,6 @@ def attendance(appointment_id):
     back = request.form.get("date", "")
     if request.form.get("next") == "appointments":
         return redirect(url_for("doctor.appointments"))
+    if request.form.get("next") == "home":
+        return redirect(url_for("doctor.home"))
     return redirect(url_for("doctor.schedule", date=back) if back else url_for("doctor.schedule"))

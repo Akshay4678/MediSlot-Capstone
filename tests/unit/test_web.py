@@ -189,6 +189,8 @@ class FakeApi:
                         "status": "FULL",
                         "appointments": [
                             {
+                                "appointment_id": "appt-1",
+                                "can_mark_attendance": True,
                                 "patient_name": "Pat One",
                                 "patient_phone": "1",
                                 "status": "CONFIRMED",
@@ -1342,3 +1344,19 @@ def test_a_date_beyond_the_booking_window_shows_the_message_and_the_default_wind
     html = client.get("/patient/slots/d9?date=2026-11-23&to=2028-01-01").get_data(as_text=True)
     assert "Slots can only be viewed up to 2026-12-23 (30 days ahead)." in html
     assert "Book" in html  # the page still lists the default window's slots
+
+
+def test_the_doctor_dashboard_lists_todays_patients_with_a_no_show_button(client, api):
+    login(client, "doctor")
+    html = client.get("/doctor/").get_data(as_text=True)
+    assert "Today's patients" in html and "Pat One" in html
+    assert 'action="/doctor/appointments/appt-1/attendance"' in html and "No-show" in html and 'name="next" value="home"' in html
+
+
+def test_marking_a_no_show_from_the_dashboard_returns_to_the_dashboard(client, api):
+    login(client, "doctor")
+    token = extract_csrf_token(client.get("/doctor/").get_data(as_text=True), "attendance")
+    response = client.post("/doctor/appointments/appt-1/attendance",
+                           data={"csrf_token": token, "outcome": "no-show", "next": "home"})
+    assert response.status_code == 302 and response.headers["Location"].endswith("/doctor/")
+    assert [c for c in api.calls if c[1] == "/doctors/me/appointments/appt-1/no-show"]

@@ -17,4 +17,28 @@
     <a class="btn" href="{{ url_for('doctor.schedule') }}">Open schedule</a>
   </div>
 </div>
+
+<div class="card" id="todays-appointments">
+  <h2>Today's patients</h2>
+  {% set ns = namespace(rows=0) %}
+  {% for slot in today.slots %}{% for a in slot.appointments or [] %}
+    {% set ns.rows = ns.rows + 1 %}
+    <div class="patient-row">
+      <strong>{{ slot.start_time }}&ndash;{{ slot.end_time }}</strong>
+      <span>{{ a.patient_name }}</span>
+      {% if a.patient_phone %}<span class="muted small">{{ a.patient_phone }}</span>{% endif %}
+      <span class="tag">{{ a.status }}</span>
+      {% if a.can_mark_attendance %}
+      <form class="attendance" method="post" action="{{ url_for('doctor.attendance', appointment_id=a.appointment_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="home">
+        <button name="outcome" value="complete" class="secondary" type="submit">Attended</button>
+        <button name="outcome" value="no-show" class="danger" type="submit"
+                onclick="return confirm('Mark this patient as a no-show? The fee is kept and the slot is closed.');">No-show &ndash; close slot</button>
+      </form>
+      {% endif %}
+    </div>
+  {% endfor %}{% endfor %}
+  {% if not ns.rows %}<p class="muted">No booked patients today.</p>{% endif %}
+</div>
 {% endblock %}

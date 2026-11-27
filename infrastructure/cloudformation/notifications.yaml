@@ -4,7 +4,7 @@ Description: >
   EventBridge -> SQS -> Lambda -> SNS: every appointment event reaches the notification consumer through its own queue
   (with its own dead-letter queue). Exactly-once delivery is enforced by the DynamoDB dispatch log.
   A second consumer (own queue and DLQ) turns SlotSeatFreed into waitlist hold offers.
-  EventBridge Scheduler runs the expiry sweeper (1 min), the reminder dispatcher (5 min) and the no-show sweeper (15 min).
+  EventBridge Scheduler runs the expiry sweeper (1 min), the reminder dispatcher (5 min) and the attendance sweeper (5 min).
 
 Parameters:
   ProjectName:
@@ -525,16 +525,16 @@ Resources:
   NoShowSchedule:
     Type: AWS::Scheduler::Schedule
     Properties:
-      Name: !Sub '${ProjectName}-${EnvironmentName}-no-shows'
+      Name: !Sub '${ProjectName}-${EnvironmentName}-attendance'
       GroupName: !Ref JobsScheduleGroup
       Description: No-show sweeper, every 15 minutes.
-      ScheduleExpression: rate(15 minutes)
+      ScheduleExpression: rate(5 minutes)
       FlexibleTimeWindow:
         Mode: 'OFF'
       Target:
         Arn: !GetAtt JobsFunction.Arn
         RoleArn: !GetAtt JobsSchedulerRole.Arn
-        Input: '{"job": "no_shows"}'
+        Input: '{"job": "attendance"}'
         RetryPolicy:
           MaximumRetryAttempts: 2
           MaximumEventAgeInSeconds: 900

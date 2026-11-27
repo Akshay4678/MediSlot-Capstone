@@ -32,3 +32,4 @@
 * Slots page consultation filter lists all four types, including Health Camp Session.
 * Doctor dashboard shows today's patients with Attended / No-show (closes the slot); edge-case tests (tests/unit/test_edge_cases.py).
 * Attended / No-show buttons are always visible for CONFIRMED appointments (locked until the start time); every patient and doctor is subscribed (SNS e-mail + filter policy on recipient_id) with the e-mail they registered with; SNS VPC endpoint added.
+* Attendance window: Attended / No-show buttons work from the appointment start for 30 minutes; unmarked appointments become attended automatically (jobs/attendance.py, every 5 minutes; SSM rules/attendance-window-minutes).

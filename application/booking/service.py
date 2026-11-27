@@ -153,9 +153,12 @@ def _view(r, now, for_doctor=False):
         view["can_reschedule"] = (not for_doctor and view["reschedule_count"] < rules.max_reschedules()
                                   and _dt(r["starts_at_utc"]) - now >= timedelta(hours=rules.min_reschedule_hours()))
     if for_doctor:
-        # The doctor records what happened once the appointment time has come.
-        view["can_mark_attendance"] = bool(r["status"] == "CONFIRMED" and r["starts_at_utc"]
-                                           and _dt(r["starts_at_utc"]) <= now)
+        # The doctor can record what happened from the START of the appointment for a limited window (30 minutes);
+        # after that the appointment is marked attended automatically (application/jobs/attendance.py).
+        window = timedelta(minutes=rules.attendance_window_minutes())
+        started = _dt(r["starts_at_utc"]) if r["starts_at_utc"] else None
+        view["can_mark_attendance"] = bool(r["status"] == "CONFIRMED" and started and started <= now < started + window)
+        view["attendance_window_minutes"] = rules.attendance_window_minutes()
     return view
 
 
@@ -584,10 +587,11 @@ ATTENDANCE_STATUS = {"no_show": "NO_SHOW", "completed": "COMPLETED"}
 def record_attendance(conn, deps, user_id, appointment_id, outcome):
     """POST /doctors/me/appointments/{id}/no-show or /complete : the doctor records what happened.
 
-    Allowed once the appointment time has come, and only for the doctor's own CONFIRMED appointment.
+    Allowed from the START of the appointment until the attendance window (30 minutes) ends, and only for the
+    doctor's own CONFIRMED appointment. Afterwards the sweeper marks it attended.
     NO_SHOW keeps the fee (a 0 % refund row is written so the ledger shows the decision); COMPLETED
     needs no refund. Either way, when nobody else in the slot is still CONFIRMED the slot is CLOSED.
-    The no-show sweeper (application/jobs/no_show.py) marks the ones the doctor forgot.
+    The attendance sweeper (application/jobs/attendance.py) marks the ones the doctor did not choose as COMPLETED.
     """
     status = ATTENDANCE_STATUS[outcome]
     now = deps.now()
@@ -604,6 +608,10 @@ def record_attendance(conn, deps, user_id, appointment_id, outcome):
             if now < _dt(appt["starts_at_utc"]):
                 raise ApiError(409, "APPOINTMENT_NOT_STARTED",
                                "The appointment time has not come yet. Use cancel if the slot cannot be kept.")
+            if now >= _dt(appt["starts_at_utc"]) + timedelta(minutes=rules.attendance_window_minutes()):
+                raise ApiError(409, "ATTENDANCE_WINDOW_CLOSED",
+                               f"The {rules.attendance_window_minutes()} minutes to mark this appointment are over: "
+                               "it is recorded as attended automatically.")
             cur.execute("UPDATE appointments SET status = %s WHERE appointment_id = %s AND status = 'CONFIRMED'",
                         (status, appointment_id))
             if cur.rowcount != 1:

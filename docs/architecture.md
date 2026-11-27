@@ -18,7 +18,7 @@ Browser -> EC2 (Flask web: patient + doctor portals)
               v   events (AppointmentBooked/Rescheduled/Cancelled, SlotSeatFreed, WaitlistOfferIssued/Expired, ReminderDue)
         EventBridge bus --rule--> SQS notifications (+DLQ) --> notification-consumer Lambda --> SNS patient/doctor topics
                         --rule--> SQS waitlist (+DLQ)      --> jobs Lambda (offer the freed seat to the next patient)
-        EventBridge Scheduler --> jobs Lambda: expire_offers (1 min), reminders (5 min), no_shows (15 min)
+        EventBridge Scheduler --> jobs Lambda: expire_offers (1 min), reminders (5 min), attendance (5 min)
         CloudWatch: dashboard medislot-operations, 17 alarms -> SNS alarm topic, AWS Budget, X-Ray traces
 ```
 
@@ -36,7 +36,7 @@ Browser -> EC2 (Flask web: patient + doctor portals)
   time; accept converts the hold, expiry offers the next patient.
 * **Availability change**: booked slots are never touched. Unbooked slots are regenerated from the new patterns, and a new
   slot that would overlap a booked one is skipped and reported to the doctor. CLOSED slots are never regenerated.
-* **No-show**: the doctor marks NO_SHOW (fee kept) or COMPLETED; a sweeper marks overdue CONFIRMED appointments.
+* **Attendance**: from the appointment's start for 30 minutes the doctor can mark NO_SHOW (fee kept, slot closed) or COMPLETED (attended). If nothing is chosen, a 5-minute sweeper records the appointment as COMPLETED (attended) when the window ends.
 
 ## Security
 JWT access tokens (short lived) + refresh tokens (DynamoDB, rotated). The authorizer lets doctors use `/doctors/me/*`

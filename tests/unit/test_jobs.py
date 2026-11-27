@@ -14,17 +14,27 @@ def run_job(conn, deps, job, log=None):
                                dispatch_log=log or DispatchLog(FakeTable("dispatch_id"), deps.now))
 
 
-def test_no_show_sweeper_marks_overdue_appointments_once_and_closes_the_slot(world):  # noqa: F811
+def test_an_unmarked_appointment_is_recorded_as_attended_after_the_30_minute_window(world):  # noqa: F811
     conn, deps = world
     book("u-1")
-    deps.clock.now = START + timedelta(minutes=10)  # slot ends at +30, grace is 30 more minutes
-    assert run_job(conn, deps, "no_shows")["marked_no_show"] == 0
-    deps.clock.now = START + timedelta(minutes=70)
-    assert run_job(conn, deps, "no_shows")["marked_no_show"] == 1
-    assert run_job(conn, deps, "no_shows")["marked_no_show"] == 0  # idempotent
-    assert conn.q("SELECT status FROM appointments") == [("NO_SHOW",)]
+    deps.clock.now = START + timedelta(minutes=29)               # still inside the doctor's window
+    assert run_job(conn, deps, "attendance")["auto_completed"] == 0
+    assert conn.q("SELECT status FROM appointments") == [("CONFIRMED",)]
+    deps.clock.now = START + timedelta(minutes=30)               # the window is over
+    assert run_job(conn, deps, "attendance")["auto_completed"] == 1
+    assert run_job(conn, deps, "attendance")["auto_completed"] == 0        # idempotent
+    assert conn.q("SELECT status FROM appointments") == [("COMPLETED",)]
     assert conn.q("SELECT status FROM materialised_slots WHERE slot_id = ?", SLOT) == [("CLOSED",)]
-    assert conn.q("SELECT refund_tier FROM refund_ledger") == [("NONE",)]
+    assert conn.q("SELECT COUNT(*) FROM refund_ledger") == [(0,)]          # attended: no refund, no no-show row
+    assert [e["marked_by"] for e in deps.events.of("AppointmentCompleted")] == ["system"]
+    assert deps.metrics.total("NoShows") == 0
+
+
+def test_the_old_job_name_still_works(world):  # noqa: F811
+    conn, deps = world
+    book("u-1")
+    deps.clock.now = START + timedelta(minutes=31)
+    assert run_job(conn, deps, "no_shows")["auto_completed"] == 1
 
 
 def test_reminders_are_published_once_per_window(world):  # noqa: F811

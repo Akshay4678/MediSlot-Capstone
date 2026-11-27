@@ -21,6 +21,7 @@ WAITLIST_OFFER_ISSUED = "WaitlistOfferIssued"
 WAITLIST_OFFER_EXPIRED = "WaitlistOfferExpired"
 REMINDER_DUE = "ReminderDue"
 APPOINTMENT_NO_SHOW = "AppointmentNoShow"
+APPOINTMENT_COMPLETED = "AppointmentCompleted"
 
 
 class EventPublisher:

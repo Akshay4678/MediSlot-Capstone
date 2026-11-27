@@ -3,7 +3,7 @@
 Triggers
   EventBridge Scheduler  {"job": "expire_offers"}   every minute   -> waitlist.sweep_expired
                          {"job": "reminders"}       every 5 min    -> reminders.run
-                         {"job": "no_shows"}        every 15 min   -> no_show.run
+                         {"job": "attendance"}       every 5 min    -> attendance.run
   SQS (waitlist queue)   SlotSeatFreed events       -> waitlist.offer_next  (own queue and dead-letter queue)
 
 Every job is safe to run twice: the work is guarded by conditional writes (see each module).
@@ -15,7 +15,7 @@ import os
 
 from application.booking.deps import default_deps
 from application.database.connection import get_connection
-from application.jobs import no_show, reminders
+from application.jobs import attendance, reminders
 from application.notification.dispatch_log import DispatchLog
 from application.notification import subscriptions
 from application.waitlist import service as waitlist
@@ -42,8 +42,8 @@ def lambda_handler(event, context, deps=None, conn_factory=get_connection, dispa
             return waitlist.sweep_expired(conn, deps)
         if job == "reminders":
             return reminders.run(conn, deps, dispatch_log or _dispatch_log(deps))
-        if job == "no_shows":
-            return no_show.run(conn, deps)
+        if job in ("attendance", "no_shows"):  # "no_shows" is the old name of the same schedule
+            return attendance.run(conn, deps)
         if job == "subscribe_users":  # one-off / repair: e-mail subscriptions for every existing patient and doctor
             return subscriptions.subscribe_all(conn)
         raise ValueError(f"unknown job {job!r}")

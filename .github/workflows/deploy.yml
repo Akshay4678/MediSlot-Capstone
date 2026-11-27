@@ -599,7 +599,7 @@ jobs:
           put_if_missing "${P}/rules/hold-offer-minutes" 15
           put_if_missing "${P}/rules/max-reschedules" 2
           put_if_missing "${P}/rules/min-reschedule-hours" 6
-          put_if_missing "${P}/rules/no-show-minutes" 30
+          put_if_missing "${P}/rules/attendance-window-minutes" 30
           put_if_missing "${P}/rules/refund-full-hours" 48
           put_if_missing "${P}/rules/refund-75-hours" 24
           put_if_missing "${P}/rules/refund-50-hours" 6

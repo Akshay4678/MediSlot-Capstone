@@ -4,7 +4,7 @@ Parameter names (under $SSM_PREFIX): rules/quick-consult-minutes, rules/standard
 rules/detailed-consult-minutes, rules/health-camp-minutes, rules/health-camp-min-capacity,
 rules/health-camp-max-capacity, rules/booking-window-days, rules/photo-max-bytes,
 rules/idempotency-ttl-hours, rules/waitlist-max-size, rules/hold-offer-minutes,
-rules/max-reschedules, rules/min-reschedule-hours, rules/no-show-minutes, rules/refund-full-hours,
+rules/max-reschedules, rules/min-reschedule-hours, rules/attendance-window-minutes, rules/refund-full-hours,
 rules/refund-75-hours, rules/refund-50-hours, rules/max-upcoming-per-doctor.
 The numbers below are only fallbacks used when a parameter is missing (a warning is logged).
 """
@@ -93,6 +93,8 @@ def booking_backoff_ms():
     return max(1, config.get_int("rules/booking-backoff-ms", 25))
 
 
-def no_show_minutes():
-    """Minutes after a slot has ended before a still-CONFIRMED appointment is swept to NO_SHOW (SSM: rules/no-show-minutes)."""
-    return max(0, config.get_int("rules/no-show-minutes", 30))
+def attendance_window_minutes():
+    """Minutes, counted from the START of an appointment, during which the doctor can mark Attended or No-show.
+    When the window ends a still-CONFIRMED appointment is marked COMPLETED (attended) automatically
+    (SSM: rules/attendance-window-minutes, default 30)."""
+    return max(1, config.get_int("rules/attendance-window-minutes", 30))

@@ -185,3 +185,23 @@ def test_the_doctor_view_offers_the_buttons_only_for_started_confirmed_appointme
     status, body = call(doctor_handler, "GET", "/doctors/me/appointments/{appointment_id}", user="u-d1", role="doctor",
                         path={"appointment_id": appt})
     assert body["appointment"]["can_mark_attendance"] is True
+
+
+def test_the_attendance_buttons_exist_only_between_the_start_and_thirty_minutes_after(world):
+    conn, deps = world
+    appt = book("u-1")
+
+    def can():
+        return call(doctor_handler, "GET", "/doctors/me/appointments/{appointment_id}", user="u-d1", role="doctor",
+                    path={"appointment_id": appt})[1]["appointment"]["can_mark_attendance"]
+    deps.clock.now = START - timedelta(minutes=1)
+    assert can() is False
+    deps.clock.now = START
+    assert can() is True
+    deps.clock.now = START + timedelta(minutes=29, seconds=59)
+    assert can() is True
+    deps.clock.now = START + timedelta(minutes=30)
+    assert can() is False
+    status, body = attendance(deps, appt, "no-show")
+    assert (status, body["error"]) == (409, "ATTENDANCE_WINDOW_CLOSED")
+    assert attendance(deps, appt, "complete")[0] == 409

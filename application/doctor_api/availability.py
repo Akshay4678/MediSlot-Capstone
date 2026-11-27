@@ -3,8 +3,8 @@
 PUT replaces the whole weekly schedule. Items that carry an existing availability_id are
 updated in place (their slots keep the same ids); others are new; patterns that are not
 mentioned are removed. Slots in the rolling window are then rebuilt (application/doctor_api/reconcile.py): unbooked
-times are regenerated, and a booked slot that the new schedule no longer produces is cancelled with a 100 %
-refund for its patients.
+times are regenerated; booked slots are kept exactly as they are and a new slot that would overlap one is skipped
+and reported (`skipped_overlapping`). A change of availability never cancels an appointment.
 """
 
 from application.common import rules
@@ -356,7 +356,7 @@ def put(ctx):
                     ),
                 )
 
-    # Unbooked future slots are rebuilt; booked slots that no longer fit the new patterns are cancelled and refunded.
+    # Unbooked future slots are rebuilt around the booked ones, which are never touched.
     summary = reconcile.rebuild(ctx.conn, doctor_id, doctor["timezone"])
 
     with ctx.conn.cursor() as cur:
@@ -369,8 +369,7 @@ def put(ctx):
             "created": summary["inserted"],
             "removed_unbooked": summary["removed_unbooked"],
             "window_days": summary["window_days"],
-            "cancelled_slots": summary["slots_cancelled"],
-            "cancelled_appointments": summary["appointments_cancelled"],
-            "refunds_total": summary["refunds_total"],
+            "kept_booked": summary["kept_booked"],
+            "skipped_overlapping": summary["skipped_overlapping"],
         },
     }

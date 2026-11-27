@@ -87,6 +87,7 @@ class FakeCursor:
         return False
 
     def execute(self, sql, params=()):
+        self.rows = []  # a query this fake does not know returns nothing (for example the held-slots lookup)
         if "FROM availability_patterns" in sql:
             self.rows = self.db.patterns
         elif "FROM blackout_dates" in sql:

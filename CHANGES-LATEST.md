@@ -23,9 +23,10 @@
   generated names.
 
 ## Milestones 6 and 7 (latest)
-* Availability change now cancels booked slots the new pattern no longer produces (100% refund, event, seat released); doctor no-show / completed on the schedule.
+* Availability change never cancels bookings: booked slots are kept as they are, new slots that would overlap them are skipped and reported to the doctor; doctor no-show / completed on the schedule.
 * Milestone 6: reschedule saga (Step Functions), waitlist + hold offers, notifications pipeline, reminders, no-show sweeper, new API routes and portal pages.
 * Milestone 7: `observability.yaml` (dashboard, 17 alarms, budget), X-Ray, cost-allocation tags on every stack, 7-day RDS backups, DynamoDB PITR, `scripts/detect_drift.sh`, `scripts/dr_drill.sh`, docs (architecture, API, runbook, test report, DR drill, cost review), infrastructure audit tests.
 * `remove-leftovers.sh` updated: keeps application/reschedule and application/waitlist, removes old dirs and stub templates.
 * Run `./remove-leftovers.sh` after unzipping, commit, push.
 * Waitlist rows carry a TTL (expire_time = slot end); patients are not offered Book/waitlist for slots they booked; consultation type filter moved from the landing page to the slots page.
+* Slots page consultation filter lists all four types, including Health Camp Session.

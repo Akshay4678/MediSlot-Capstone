@@ -15,7 +15,7 @@ GET /hospitals, GET /specialisations, GET /doctors/search?..., GET /doctors/{doc
 | GET/PUT | /doctors/me | profile (a timezone change reconciles slots) |
 | POST | /doctors/me/photo | pre-signed upload |
 | GET/POST/PUT/DELETE | /doctors/me/consultation-types[/{id}] | Quick / Standard / Detailed durations and fees |
-| GET/PUT | /doctors/me/availability | weekly patterns; PUT reconciles slots and returns `slots_cancelled`, `appointments_cancelled`, `refunds_total` |
+| GET/PUT | /doctors/me/availability | weekly patterns; PUT never cancels a booking: booked slots stay as they are, new slots that would overlap them are skipped and listed in `slots.skipped_overlapping` (`kept_booked` counts the kept ones) |
 | GET/POST/DELETE | /doctors/me/blackouts[/{id}] | blackout dates (cancel booked slots with refunds) |
 | GET | /doctors/me/schedule?from=&to= | day/week schedule with patients per slot |
 | GET | /doctors/me/appointments[/{appointment_id}] | list and detail |

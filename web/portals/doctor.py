@@ -425,6 +425,17 @@ def types():
 
 
 # -------------------------------------------------------------- availability
+def _flash_skipped(skipped):
+    """Tell the doctor which new slots were NOT created because they would overlap a slot that is already booked."""
+    if not skipped:
+        return
+    shown = [f"{s['date']} {s['start_time']}-{s['end_time']} (overlaps the booked {s['overlaps_start']}-{s['overlaps_end']}"
+             f"{' ' + s['overlaps_type'] if s.get('overlaps_type') else ''})" for s in skipped[:8]]
+    more = f" and {len(skipped) - 8} more" if len(skipped) > 8 else ""
+    flash(f"{len(skipped)} new slot(s) were not created because they overlap a booked slot, which stays as it is: "
+          f"{'; '.join(shown)}{more}. Cancel the booked slot from the schedule if you want to free that time.", "info")
+
+
 
 def _rows_from_form(form):
 
@@ -563,6 +574,7 @@ def availability():
                 f"{result['slots']['window_days']} days.",
                 "success",
             )
+            _flash_skipped(result["slots"].get("skipped_overlapping") or [])
 
             return redirect(
                 url_for("doctor.availability")

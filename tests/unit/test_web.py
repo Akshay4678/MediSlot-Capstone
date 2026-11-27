@@ -1203,6 +1203,8 @@ def test_the_slots_page_has_a_consultation_type_filter_that_is_sent_to_the_api(c
     login(client, "patient")
     html = client.get("/patient/slots/d9?date=2026-11-13&consultation_type=Quick+Consult").get_data(as_text=True)
     assert 'name="consultation_type"' in html and "Standard Consult" in html
+    for kind in ("Quick Consult", "Standard Consult", "Detailed Consult", "Health Camp Session"):
+        assert f'value="{kind}"' in html, kind
     assert 'value="Quick Consult" selected' in html
     params = [c[4] for c in api.calls if c[1] == "/doctors/d9/slots"][-1]
     assert params["consultation_type"] == "Quick Consult"

@@ -18,7 +18,7 @@
     <label>Consultation type
       <select name="consultation_type">
         <option value="">Any type</option>
-        {% for t in data.consultation_types or [] %}
+        {% for t in type_options %}
         <option value="{{ t }}" {{ 'selected' if kind == t else '' }}>{{ t }}</option>
         {% endfor %}
       </select>

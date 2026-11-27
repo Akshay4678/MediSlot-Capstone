@@ -70,6 +70,10 @@ def home():
     )
 
 
+# Every kind of consultation is offered in the filter, even when the doctor has no open slot of that kind right now.
+TYPE_OPTIONS = ("Quick Consult", "Standard Consult", "Detailed Consult", "Health Camp Session")
+
+
 @bp.route("/slots/<doctor_id>", endpoint="slots")
 @role_required("patient")
 def slots(doctor_id):
@@ -105,6 +109,7 @@ def slots(doctor_id):
         date=chosen,
         until=until,
         kind=kind,
+        type_options=list(TYPE_OPTIONS) + [t for t in data.get("consultation_types") or [] if t not in TYPE_OPTIONS],
         booking_key=uuid.uuid4().hex,  # one key per page view: a double click or a resubmit books only once
     )
 

@@ -86,6 +86,21 @@ def _fetch_patterns(cur, doctor_id):
     return cur.fetchall()
 
 
+def _held_slots(cur, doctor_id, first, last, now_utc):
+    """Future slots of the window that still hold seats: they must keep their time exactly as it was booked."""
+    cur.execute(
+        "SELECT s.slot_id, s.start_time, s.end_time, s.start_utc, s.end_utc, ct.type_name FROM materialised_slots s "
+        "LEFT JOIN consultation_types ct ON ct.consultation_type_id = s.consultation_type_id "
+        "WHERE s.doctor_id = %s AND s.booked_count > 0 AND s.status <> 'CLOSED' AND s.end_utc > %s "
+        "AND s.`date` BETWEEN %s AND %s", (doctor_id, now_utc.replace(tzinfo=None), first, last))
+    held = []
+    for r in cur.fetchall():
+        held.append({"slot_id": r["slot_id"], "start_utc": _naive_utc(r["start_utc"]), "end_utc": _naive_utc(r["end_utc"]),
+                     "start_time": str(r["start_time"])[:5], "end_time": str(r["end_time"])[:5],
+                     "type_name": r.get("type_name") if hasattr(r, "get") else r["type_name"]})
+    return held
+
+
 def materialise_doctor(conn, doctor_id, tz_name, now_utc=None, window_days=None):
     """Create any missing slots for one doctor across the rolling window. Idempotent."""
     now_utc = now_utc or datetime.now(UTC)
@@ -100,13 +115,28 @@ def materialise_doctor(conn, doctor_id, tz_name, now_utc=None, window_days=None)
         )
         blackouts = {as_date(row["blackout_date"]) for row in cur.fetchall()}
 
-        slots = []
+        candidates = []
         for local_date in dates:
             if local_date in blackouts:
                 continue
             for pattern in patterns:
                 if int(pattern["day_of_week"]) == local_date.isoweekday():
-                    slots.extend(build_slots(doctor_id, pattern, local_date, tz_name, now_utc))
+                    candidates.extend(build_slots(doctor_id, pattern, local_date, tz_name, now_utc))
+
+        # A slot that already holds a booking (or a waitlist hold) is never touched. A new slot that would overlap
+        # one is not created: it is reported instead, so the doctor can see which times were skipped and why.
+        held = _held_slots(cur, doctor_id, dates[0], dates[-1], now_utc)
+        slots, skipped = [], []
+        for cand in candidates:
+            clash = next((h for h in held if h["slot_id"] != cand["slot_id"]
+                          and cand["start_utc"] < h["end_utc"] and h["start_utc"] < cand["end_utc"]), None)
+            if clash is None:
+                slots.append(cand)
+            else:
+                skipped.append({"date": cand["date"].isoformat(), "start_time": cand["start_time"].strftime("%H:%M"),
+                                "end_time": cand["end_time"].strftime("%H:%M"), "type_id": cand["consultation_type_id"],
+                                "overlaps_slot_id": clash["slot_id"], "overlaps_start": clash["start_time"],
+                                "overlaps_end": clash["end_time"], "overlaps_type": clash["type_name"]})
 
         inserted = 0
         if slots:
@@ -117,7 +147,7 @@ def materialise_doctor(conn, doctor_id, tz_name, now_utc=None, window_days=None)
             ])
             inserted = max(0, cur.rowcount or 0)
     return {"doctor_id": doctor_id, "window_days": days, "candidate_slots": len(slots),
-            "inserted": inserted, "already_existing": len(slots) - inserted}
+            "inserted": inserted, "already_existing": len(slots) - inserted, "skipped_overlapping": skipped}
 
 
 def _naive_utc(value):
@@ -144,33 +174,6 @@ def expected_slots(conn, doctor_id, tz_name, now_utc=None, days=None):
                 for slot in build_slots(doctor_id, pattern, local_date, tz_name, now_utc):
                     wanted[slot["slot_id"]] = slot
     return wanted, window[0], window[-1]
-
-
-def stale_booked_slots(conn, doctor_id, tz_name, now_utc=None):
-    """Future slots that hold bookings (or a waitlist hold) but no longer match the weekly patterns.
-
-    A booked slot is STALE when the new patterns do not produce the very same slot any more: its id is
-    gone (different start time, pattern removed or switched off), or the consultation type or end time
-    differs (a 15 minute Quick Consult turned into a 60 minute Detailed Consult), or the new capacity is
-    smaller than the number of seats already taken. Such a slot must be cancelled (patients refunded in
-    full): leaving it would show the old booking next to the new slots, overlapping them.
-    """
-    now_utc = now_utc or datetime.now(UTC)
-    wanted, first, last = expected_slots(conn, doctor_id, tz_name, now_utc)
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT slot_id, consultation_type_id, end_utc, capacity, booked_count FROM materialised_slots "
-            "WHERE doctor_id = %s AND start_utc > %s AND booked_count > 0 AND status IN ('OPEN', 'FULL', 'BLOCKED') "
-            "AND `date` BETWEEN %s AND %s ORDER BY start_utc",
-            (doctor_id, now_utc.replace(tzinfo=None), first, last))
-        rows = cur.fetchall()
-    stale = []
-    for row in rows:
-        new = wanted.get(row["slot_id"])
-        if (new is None or new["consultation_type_id"] != row["consultation_type_id"]
-                or new["end_utc"] != _naive_utc(row["end_utc"]) or int(new["capacity"]) < int(row["booked_count"])):
-            stale.append(row["slot_id"])
-    return stale
 
 
 def sync_kept_slots(conn, doctor_id, tz_name, now_utc=None):

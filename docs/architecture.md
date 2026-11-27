@@ -34,8 +34,8 @@ Browser -> EC2 (Flask web: patient + doctor portals)
 * **Reschedule**: Step Functions saga with compensation (`docs/milestone-6.md`). At most 2 attempts, not within 6 hours of the start.
 * **Waitlist**: max 5 per slot; a freed seat is *held* for the first patient (real seat, invisible to others) for a limited
   time; accept converts the hold, expiry offers the next patient.
-* **Availability change**: the doctor's new patterns are reconciled with existing slots; booked slots that the new pattern
-  no longer produces are cancelled with a 100% refund and notifications; CLOSED slots are never regenerated.
+* **Availability change**: booked slots are never touched. Unbooked slots are regenerated from the new patterns, and a new
+  slot that would overlap a booked one is skipped and reported to the doctor. CLOSED slots are never regenerated.
 * **No-show**: the doctor marks NO_SHOW (fee kept) or COMPLETED; a sweeper marks overdue CONFIRMED appointments.
 
 ## Security

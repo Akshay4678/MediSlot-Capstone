@@ -4,7 +4,7 @@
 Browser -> EC2 (Flask web: patient + doctor portals)
               |  HTTPS/JSON + JWT
               v
-        API Gateway (REST, X-Ray)  -- Lambda authorizer (role + route rules)
+        API Gateway (REST)  -- Lambda authorizer (role + route rules)
               |
    +----------+-----------+------------------+
    v                      v                  v
@@ -19,7 +19,7 @@ Browser -> EC2 (Flask web: patient + doctor portals)
         EventBridge bus --rule--> SQS notifications (+DLQ) --> notification-consumer Lambda --> SNS patient/doctor topics
                         --rule--> SQS waitlist (+DLQ)      --> jobs Lambda (offer the freed seat to the next patient)
         EventBridge Scheduler --> jobs Lambda: expire_offers (1 min), reminders (5 min), attendance (1 min)
-        CloudWatch: dashboard medislot-operations, 17 alarms -> SNS alarm topic, AWS Budget, X-Ray traces
+        CloudWatch: dashboard medislot-operations, 17 alarms -> SNS alarm topic, AWS Budget
 ```
 
 ## Why two data stores

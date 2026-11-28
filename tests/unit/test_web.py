@@ -1372,4 +1372,19 @@ def test_a_confirmed_appointment_that_has_not_started_shows_locked_attendance_bu
         html = client.get("/doctor/").get_data(as_text=True)
     finally:
         FAKE_CAN_MARK["value"] = True
-    assert "Active only while this slot is running. If you do not choose before it ends, the patient is marked as attended." in html and "disabled" in html
+    assert 'data-tip="Available only while this slot is running."' in html and "disabled" in html
+    assert "Active only while this slot is running" not in html          # the explanation is a hover tip, not page text
+
+
+def test_a_slot_that_is_over_is_not_shown_as_open(client):
+    template = client.application.jinja_env.from_string(
+        "{% from '_slot_card.html' import slot_card %}{% call slot_card(s, show_booked=True) %}{% endcall %}")
+    base = {"slot_id": "x", "start_time": "14:45", "end_time": "15:00", "type_name": "Quick Consult", "duration_minutes": 15,
+            "fee": 450, "capacity": 1, "available_seats": 1, "status": "OPEN", "booked_count": 0}
+    with client.application.test_request_context():
+        unbooked = template.render(s=dict(base, ended=True))
+        booked = template.render(s=dict(base, ended=True, booked_count=1, available_seats=0, status="FULL"))
+        live = template.render(s=dict(base, ended=False))
+    assert "Slot over" in unbooked and "NOT BOOKED" in unbooked and "OPEN" not in unbooked and "seat" not in unbooked
+    assert "COMPLETED" in booked and "FULL" not in booked
+    assert "1 of 1 seat free" in live and "OPEN" in live

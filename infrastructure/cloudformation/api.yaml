@@ -1415,7 +1415,6 @@ Resources:
       RestApiId: !Ref MediSlotRestApi
       DeploymentId: !Ref ApiDeployment
       StageName: !Ref EnvironmentName
-      TracingEnabled: true
       MethodSettings:
         - ResourcePath: '/*'
           HttpMethod: '*'

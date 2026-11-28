@@ -195,7 +195,6 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
       Policies:
         - PolicyName: NotificationConsumerAccess
           PolicyDocument:
@@ -244,8 +243,6 @@ Resources:
       Role: !GetAtt NotificationConsumerRole.Arn
       Timeout: 30
       MemorySize: 256
-      TracingConfig:
-        Mode: Active
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
@@ -346,7 +343,6 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
       Policies:
         - PolicyName: JobsAccess
           PolicyDocument:
@@ -415,8 +411,6 @@ Resources:
       Role: !GetAtt JobsRole.Arn
       Timeout: 30
       MemorySize: 512
-      TracingConfig:
-        Mode: Active
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key

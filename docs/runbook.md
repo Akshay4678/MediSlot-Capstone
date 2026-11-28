@@ -6,11 +6,11 @@ Open CloudWatch -> Dashboards -> `medislot-operations`. Both DLQ tiles must read
 ## Alarm -> first action
 | Alarm | Look at | Usual cause / fix |
 |---|---|---|
-| api-5xx, lambda-errors-* | CloudWatch Logs of that function, X-Ray trace | recent deploy; roll forward with a fix, re-run pipeline |
+| api-5xx, lambda-errors-* | CloudWatch Logs of that function | recent deploy; roll forward with a fix, re-run pipeline |
 | dlq-notifications | `aws sqs receive-message` on the DLQ | SNS publish failure or malformed event. Fix, then redrive from the SQS console (Start DLQ redrive) |
 | dlq-waitlist | same | `offer_next` failed repeatedly; check jobs Lambda logs; the 1-minute sweeper also recovers offers |
 | rds-* | RDS console, Performance Insights | connection leak (Lambda concurrency) or storage; scale class/storage in `rds.yaml` |
-| business-reschedule-compensated | Step Functions execution history (X-Ray trace) | a downstream step failed; the saga already restored state, no manual repair needed |
+| business-reschedule-compensated | Step Functions execution history | a downstream step failed; the saga already restored state, no manual repair needed |
 | business-conflict-retries | hot slot | normal during a rush; if constant, check for a retry storm in a client |
 | workflow-failed, dynamodb-seat-throttles | state machine / table metrics | switch table to higher capacity or investigate loops |
 

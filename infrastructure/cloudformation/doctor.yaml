@@ -68,7 +68,6 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
       Policies:
         - PolicyName: DoctorApiAccess
           PolicyDocument:
@@ -138,8 +137,6 @@ Resources:
         S3Key: !Ref LambdaCodeS3Key
       Timeout: 29
       MemorySize: 512
-      TracingConfig:
-        Mode: Active
       Environment:
         Variables:
           ENVIRONMENT_NAME: !Ref EnvironmentName
@@ -180,7 +177,6 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
       Policies:
         - PolicyName: MaterialiserAccess
           PolicyDocument:
@@ -211,8 +207,6 @@ Resources:
         S3Key: !Ref LambdaCodeS3Key
       Timeout: 300
       MemorySize: 512
-      TracingConfig:
-        Mode: Active
       Environment:
         Variables:
           ENVIRONMENT_NAME: !Ref EnvironmentName

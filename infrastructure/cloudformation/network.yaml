@@ -560,7 +560,7 @@ Resources:
         - Key: Environment
           Value: !Ref EnvironmentName
 
-  # Milestone 6/7: the patient Lambda starts the reschedule saga synchronously; all Lambdas send X-Ray traces.
+  # Milestone 6/7: the patient Lambda starts the reschedule saga synchronously.
   SyncStatesInterfaceEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -576,26 +576,6 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${EnvironmentName}-sync-states-endpoint'
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  XRayInterfaceEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref MediSlotVPC
-      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.xray'
-      VpcEndpointType: Interface
-      PrivateDnsEnabled: true
-      SubnetIds:
-        - !Ref PrivateAppSubnet1
-        - !Ref PrivateAppSubnet2
-      SecurityGroupIds:
-        - !Ref AwsServiceEndpointSecurityGroup
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${EnvironmentName}-xray-endpoint'
         - Key: Project
           Value: !Ref ProjectName
         - Key: Environment

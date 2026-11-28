@@ -176,15 +176,11 @@ Schedule - MediSlot
           <form class="attendance" method="post" action="{{ url_for('doctor.attendance', appointment_id=a.appointment_id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="date" value="{{ day.date }}">
-            <button name="outcome" value="complete" class="secondary" type="submit">Attended</button>
-            <button name="outcome" value="no-show" class="danger" type="submit"
-                    onclick="return confirm('Mark this patient as a no-show? The fee is kept and the slot is closed.');">No-show &ndash; close slot</button>
+            <span class="tip" data-tip="Patient came. This is also the default: if you choose nothing before this slot ends, the patient is marked as attended."><button name="outcome" value="complete" class="secondary" type="submit">Attended</button></span>
+            <span class="tip" data-tip="Patient did not come. The fee is kept and the slot is closed."><button name="outcome" value="no-show" class="danger" type="submit" onclick="return confirm('Mark this patient as a no-show? The fee is kept and the slot is closed.');">No-show &ndash; close slot</button></span>
           </form>
           {% elif a.status == 'CONFIRMED' %}
-          <span class="attendance muted small" title="Attended / No-show unlock when the appointment starts">
-            <button class="secondary" type="button" disabled>Attended</button>
-            <button class="danger" type="button" disabled>No-show &ndash; close slot</button>
-            <br>Active only while this slot is running. If you do not choose before it ends, the patient is marked as attended.</span>
+          <span class="attendance"><span class="tip" data-tip="Available only while this slot is running."><button class="secondary" type="button" disabled>Attended</button></span> <span class="tip" data-tip="Available only while this slot is running."><button class="danger" type="button" disabled>No-show &ndash; close slot</button></span></span>
           {% endif %}
         </div>
         {% endfor %}

@@ -30,8 +30,7 @@ ACTIVE = ["auth", "doctor", "patient", "api", "workflow", "notifications", "book
 
 # Resource "*" is unavoidable for these actions (AWS does not support resource-level permissions for them).
 STAR_RESOURCE_OK = {
-    "cloudwatch:PutMetricData", "kms:Decrypt", "xray:PutTraceSegments", "xray:PutTelemetryRecords",
-    "xray:GetSamplingRules", "xray:GetSamplingTargets", "logs:CreateLogDelivery", "logs:GetLogDelivery",
+    "cloudwatch:PutMetricData", "kms:Decrypt", "logs:CreateLogDelivery", "logs:GetLogDelivery",
     "logs:UpdateLogDelivery", "logs:DeleteLogDelivery", "logs:ListLogDeliveries", "logs:PutResourcePolicy",
     "logs:DescribeResourcePolicies", "logs:DescribeLogGroups",
 }
@@ -100,7 +99,6 @@ def test_percentile_alarm_statistics_use_extended_statistic():
 def test_workflow_template_embeds_valid_state_machine_json():
     text = (CFN / "workflow.yaml").read_text()
     assert "AWS::StepFunctions::StateMachine" in text and "StateMachineType: EXPRESS" in text
-    assert "TracingConfiguration" in text
 
 
 def test_notification_queues_each_have_a_dead_letter_queue_with_a_redrive_policy():
@@ -147,8 +145,7 @@ def test_schema_bootstrap_package_contains_everything_the_connection_module_impo
     text = DEPLOY.read_text()
     step = text[text.index("application/database/schema.sql was not found"):]
     step = step[:step.index("zip -qr")]
-    for needed in ("application/common/__init__.py", "application/common/tracing.py", "application/database/connection.py",
-                   "application/database/init_schema.py"):
+    for needed in ("application/database/connection.py", "application/database/init_schema.py"):
         assert needed.rsplit("/", 1)[1] in step and needed.rsplit("/", 1)[0] in step, needed
 
 

@@ -56,7 +56,6 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
       Policies:
         - PolicyName: RescheduleStepAccess
           PolicyDocument:
@@ -111,8 +110,6 @@ Resources:
       Role: !GetAtt RescheduleStepRole.Arn
       Timeout: 25
       MemorySize: 512
-      TracingConfig:
-        Mode: Active
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
@@ -168,7 +165,7 @@ Resources:
                 Effect: Allow
                 Action: lambda:InvokeFunction
                 Resource: !GetAtt RescheduleStepFunction.Arn
-              # AWS requires Resource '*' for these log-delivery and X-Ray actions (no resource-level support).
+              # AWS requires Resource '*' for these log-delivery actions (no resource-level support).
               - Sid: DeliverLogs
                 Effect: Allow
                 Action:
@@ -180,14 +177,6 @@ Resources:
                   - logs:PutResourcePolicy
                   - logs:DescribeResourcePolicies
                   - logs:DescribeLogGroups
-                Resource: '*'
-              - Sid: TraceWithXRay
-                Effect: Allow
-                Action:
-                  - xray:PutTraceSegments
-                  - xray:PutTelemetryRecords
-                  - xray:GetSamplingRules
-                  - xray:GetSamplingTargets
                 Resource: '*'
       Tags:
         - Key: Project
@@ -201,8 +190,6 @@ Resources:
       StateMachineName: !Sub '${ProjectName}-${EnvironmentName}-reschedule'
       StateMachineType: EXPRESS
       RoleArn: !GetAtt StateMachineRole.Arn
-      TracingConfiguration:
-        Enabled: true
       LoggingConfiguration:
         Level: ERROR
         IncludeExecutionData: false

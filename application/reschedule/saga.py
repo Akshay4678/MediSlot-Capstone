@@ -37,7 +37,7 @@ from application.booking import events
 from application.booking.errors import ContentionExceeded, SlotFull
 from application.booking.service import (_count, _dt, _fetch_view, _free_slot_row, _load_slot,
                                          _patient_id, _safe)
-from application.common import rules, tracing
+from application.common import rules
 from application.common.api import ApiError, fmt_utc
 
 log = logging.getLogger()
@@ -229,7 +229,6 @@ def compensate(conn, deps, state):
         deps.slots.release(target_id)
     if state.get("original_released"):  # cannot happen in the current order; kept so a reordering stays safe
         deps.slots.reserve(original, int(state.get("original_capacity", 1)))
-    tracing.annotate("reschedule_compensated", True)
     deps.metrics.put("ReschedulesCompensated", 1)
     log.warning("reschedule of %s compensated (moved_back=%s)", appointment_id, moved_back)
     return dict(state, compensated=True, moved_back=moved_back)

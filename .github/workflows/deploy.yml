@@ -1041,9 +1041,7 @@ jobs:
           rm -rf "${PACKAGE_DIR}"
           mkdir -p "${PACKAGE_DIR}/application/database"
           python -m pip install --requirement requirements-auth.txt --target "${PACKAGE_DIR}"
-          mkdir -p "${PACKAGE_DIR}/application/common"
           cp application/__init__.py "${PACKAGE_DIR}/application/__init__.py"
-          cp application/common/__init__.py application/common/tracing.py "${PACKAGE_DIR}/application/common/"
           cp application/database/__init__.py application/database/connection.py "${PACKAGE_DIR}/application/database/"
           cp application/database/schema.sql "${PACKAGE_DIR}/application/database/schema.sql"
           cp application/database/init_schema.py "${PACKAGE_DIR}/application/database/init_schema.py"
@@ -1153,6 +1151,15 @@ jobs:
               "MonthlyBudgetUsd=${MONTHLY_BUDGET_INPUT:-50}" \
             --no-fail-on-empty-changeset \
             --region "${AWS_REGION}"
+
+      # Activate the Project cost allocation tag so the AWS Budget can filter by it (needs ce:UpdateCostAllocationTagsStatus;
+      # a tag can only be activated after the first tagged resource exists, so a failure here is reported, not fatal).
+      - name: Activate cost allocation tag
+        shell: bash
+        run: |
+          aws ce update-cost-allocation-tags-status --region us-east-1 \
+            --cost-allocation-tags-status TagKey=Project,Status=Active TagKey=Environment,Status=Active \
+            || echo "::warning::Could not activate the cost allocation tags automatically; activate Project in Billing -> Cost allocation tags."
 
       # ==========================================
       # STEP 13D: Verify the booking tables really exist and the Lambdas point at them
